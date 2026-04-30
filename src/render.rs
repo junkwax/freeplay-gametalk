@@ -248,11 +248,11 @@ pub fn draw_fight_overlay(
         canvas, right_x, bar_y, half_w, bar_h, slant, true, fill, accent,
     )?;
 
-    let p1 = fit_overlay_text(font, p1_name, name_scale, name_max_w);
-    let p2 = fit_overlay_text(font, p2_name, name_scale, name_max_w);
+    let p1 = fit_overlay_text(font, &p1_name.to_uppercase(), name_scale, name_max_w);
+    let p2 = fit_overlay_text(font, &p2_name.to_uppercase(), name_scale, name_max_w);
 
     let p2_w = font.text_width_overlay(&p2, name_scale);
-    let name_y = bar_y + 2;
+    let name_y = bar_y + 9;
     font.draw_overlay(canvas, &p1, left.name_x, name_y, name_scale, white)?;
     font.draw_overlay(canvas, &p2, right.name_x - p2_w, name_y, name_scale, white)?;
 
