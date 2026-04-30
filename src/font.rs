@@ -153,6 +153,7 @@ struct TtfBackend<'ttf, 'tc> {
     fonts: HashMap<u32, sdl2::ttf::Font<'ttf, 'static>>,
     cache: HashMap<CacheKey, (Texture<'tc>, u32, u32)>,
     font_path: String,
+    base_pt: u32,
 }
 
 impl<'ttf, 'tc> TtfBackend<'ttf, 'tc> {
@@ -160,7 +161,7 @@ impl<'ttf, 'tc> TtfBackend<'ttf, 'tc> {
         if self.fonts.contains_key(&scale) {
             return Ok(());
         }
-        let pt = (16 * scale) as u16;
+        let pt = (self.base_pt * scale) as u16;
         let font = self
             .ctx
             .load_font(&self.font_path, pt)
@@ -257,11 +258,15 @@ impl<'ttf, 'tc> Font<'ttf, 'tc> {
             ttf_ctx,
             &["media/mk2.ttf", "src/media/mk2.ttf", "mk2.ttf"],
             "mk2.ttf",
+            16,
         );
         let overlay_ttf = load_ttf_backend(
             tc,
             ttf_ctx,
             &[
+                "media/semibold.TTF",
+                "src/media/semibold.TTF",
+                "semibold.TTF",
                 "media/swiftedstrokes.ttf",
                 "src/media/swiftedstrokes.ttf",
                 "swiftedstrokes.ttf",
@@ -270,6 +275,7 @@ impl<'ttf, 'tc> Font<'ttf, 'tc> {
                 "mk2.ttf",
             ],
             "overlay font",
+            24,
         );
         Ok(Self {
             bitmap,
@@ -365,20 +371,22 @@ fn load_ttf_backend<'ttf, 'tc>(
     ttf_ctx: Option<&'ttf Sdl2TtfContext>,
     candidates: &[&str],
     name: &str,
+    base_pt: u32,
 ) -> Option<TtfBackend<'ttf, 'tc>> {
     let ctx = ttf_ctx?;
     let path = resolve_font(candidates)?;
-    match ctx.load_font(&path, 16) {
+    match ctx.load_font(&path, base_pt as u16) {
         Ok(font) => {
             let mut fonts = HashMap::new();
             fonts.insert(1, font);
-            println!("Loaded {name}: {path}");
+            println!("Loaded {name}: {path} ({}pt base)", base_pt);
             Some(TtfBackend {
                 ctx,
                 tc,
                 fonts,
                 cache: HashMap::new(),
                 font_path: path.to_string(),
+                base_pt,
             })
         }
         Err(e) => {

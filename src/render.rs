@@ -331,7 +331,11 @@ fn draw_scoreplate(
         } else {
             main_x + 30
         },
-        score_x: tab_x + tab_w / 2,
+        score_x: if mirror {
+            tab_x + tab_w / 2 - 4
+        } else {
+            tab_x + tab_w / 2 + 4
+        },
     })
 }
 
