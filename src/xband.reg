@@ -1,0 +1,19 @@
+Windows Registry Editor Version 5.00
+
+; xband:// custom URI scheme for freeplay-gametalk
+; Install: double-click this file, or run via the installer / build script.
+; Uninstall: delete HKEY_CLASSES_ROOT\xband
+
+[HKEY_CLASSES_ROOT\xband]
+@="Freeplay xband Protocol"
+"URL Protocol"=""
+
+[HKEY_CLASSES_ROOT\xband\DefaultIcon]
+@="%ProgramFiles%\\freeplay-gametalk\\freeplay.exe,0"
+
+[HKEY_CLASSES_ROOT\xband\shell]
+
+[HKEY_CLASSES_ROOT\xband\shell\open]
+
+[HKEY_CLASSES_ROOT\xband\shell\open\command]
+@="\"C:\\Program Files\\freeplay-gametalk\\freeplay.exe\" \"%1\""

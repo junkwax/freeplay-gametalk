@@ -1,0 +1,35 @@
+[package]
+name = "freeplay-gametalk"
+version = "0.4.1"
+edition = "2021"
+
+[[bin]]
+name = "freeplay"
+path = "src/main.rs"
+
+[dependencies]
+sdl2 = { version = "0.35", features = ["ttf"] }
+libloading = "0.8"
+libc = "0.2"
+bincode = "1.3"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+ggrs = "0.10"
+bytemuck = { version = "1", features = ["derive"] }
+native-tls = "0.2"
+open = "5"
+winreg = "0.52"
+discord-presence = "0.5"
+flate2 = "1"
+# Matchbox socket will be enabled once we switch from direct-UDP ggrs to
+# WebRTC-over-signaling for NAT traversal (Phase 3 of the Freeplay plan).
+# Kept commented until then so the client doesn't pull ~150 transitive
+# crates (tokio runtime, ring, webrtc stack, etc.) it doesn't yet use.
+# matchbox_socket = "0.10"
+
+# Release optimisation. LTO + single codegen unit yields ~5-10% faster
+# savestate memcpys and input-poll hot paths at the cost of ~2x longer
+# `cargo build --release`. Build speed is already <10s so the trade is fine.
+[profile.release]
+lto = "thin"
+codegen-units = 1

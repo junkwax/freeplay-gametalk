@@ -1,0 +1,98 @@
+# Rust build output
+target/
+
+# Distributable zips and staged dirs
+dist/
+
+
+# Runtime artifacts
+netcab/*.bin
+netcab/ghost.bin
+netcab/ghosts/
+netcab/*.ncgh
+netcab/ghost_library.json
+netcab/debug_local.log
+netcab/netcab_net.log
+netcab/ram_*.bin
+
+# Side-project files that happen to live in this tree
+netcab/usenet_import.py
+netcab/progress.txt
+netcab/threads.json
+netcab/filtered.txt
+netcab/alt.games.mk.mbox/
+netcab/__pycache__/
+**/__pycache__/
+*.pyc
+
+# Unused media (not loaded by the code; bloats the repo)
+netcab/media/01 Song 1.flac
+netcab/media/02 Song 2.flac
+netcab/media/03 Song 3.flac
+netcab/media/04 Song 4.flac
+netcab/media/bg.jpg
+netcab/media/hqdefault.jpg
+netcab/media/Jersey10-Regular.ttf
+.zip
+mk2.zip
+mk2.zip.bak
+
+# Only mk2.ttf is tracked; all other font dumps stay local.
+src/media/*.ttf
+src/media/*.TTF
+src/media/*.otf
+src/media/*.OTF
+!src/media/mk2.ttf
+
+# Claude / editor metadata
+.claude/
+memory/
+.github/
+**/.github/copilot-instructions.md
+
+# Local docs/agent notes; keep the public README tracked
+*.md
+!README.md
+
+# OS junk
+Thumbs.db
+Desktop.ini
+*.swp
+node_modules
+
+# User-specific config — contains the Discord webhook URL (a secret) and
+# personal key bindings. Never commit.
+config.toml
+.env
+.env.*
+!.env.example
+
+# Local development scratch files
+Cargo.lock
+ram_diff.py
+
+# Runtime diagnostic logs written by log.rs
+debug_*.log
+
+# Other runtime logs at the project root
+freeplay-net.log
+console.log
+ghost.bin
+
+# Per-session ghost recordings + library index, written next to the exe
+ghosts/
+ghost_library.json
+*.ncgh
+*.state
+
+# Pre-sync savestate dumps for desync diagnosis
+presync_*.state
+
+# Cached OAuth token (paranoia — only written under %APPDATA% normally,
+# but if anyone runs from CWD with a relative path this catches it).
+token
+
+# Tracked-then-evicted runtime binaries (see 2026-04-28 hygiene pass).
+# Contributors fetch SDL2 separately; FBNeo lives next to freeplay.exe.
+src/*.dll
+src/lib/*.lib
