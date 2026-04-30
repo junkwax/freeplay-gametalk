@@ -1,5 +1,8 @@
 # freeplay-gametalk
 
+
+![freeplay-image](https://raw.githubusercontent.com/junkwax/freeplay-gametalk/main/screenshot.png)
+
 freeplay-gametalk is the Freeplay client package: a Rust/SDL2 arcade rollback
 client with Discord login, matchmaking, ghost recording, profile stats, and a
 compact in-game overlay. It wraps an FBNeo libretro core, drives the emulator
