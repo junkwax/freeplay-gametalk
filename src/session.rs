@@ -26,7 +26,10 @@ pub fn push_spectator_frame(session_id: &str, p1_wins: u16, p2_wins: u16, frame:
 }
 
 fn signaling_url() -> Option<String> {
-    crate::config::env_value("FREEPLAY_SIGNALING_URL").map(|v| v.trim_end_matches('/').to_string())
+    if let Some(v) = crate::config::env_value("FREEPLAY_SIGNALING_URL") {
+        return Some(v.trim_end_matches('/').to_string());
+    }
+    crate::config::signaling_url()
 }
 
 fn http_post_fire(url: &str, body: &str) -> Result<(), String> {

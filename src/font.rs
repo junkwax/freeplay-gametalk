@@ -260,20 +260,9 @@ impl<'ttf, 'tc> Font<'ttf, 'tc> {
             "mk2.ttf",
             16,
         );
-        let overlay_ttf = load_ttf_backend(
-            tc,
-            ttf_ctx,
-            &[
-                "media/strong.ttf",
-                "src/media/strong.ttf",
-                "strong.ttf",
-                "media/mk2.ttf",
-                "src/media/mk2.ttf",
-                "mk2.ttf",
-            ],
-            "overlay font",
-            24,
-        );
+        let overlay_candidates = overlay_font_candidates();
+        let overlay_refs: Vec<&str> = overlay_candidates.iter().map(String::as_str).collect();
+        let overlay_ttf = load_ttf_backend(tc, ttf_ctx, &overlay_refs, "overlay font", 24);
         Ok(Self {
             bitmap,
             ttf,
@@ -402,4 +391,32 @@ fn resolve_font(candidates: &[&str]) -> Option<String> {
         .iter()
         .find(|path| Path::new(path).exists())
         .map(|path| path.to_string())
+}
+
+fn overlay_font_candidates() -> Vec<String> {
+    let mut candidates = Vec::new();
+    if let Some(path) = crate::config::env_value("FREEPLAY_SCOREBOARD_FONT") {
+        candidates.push(path);
+    }
+    candidates.extend(
+        [
+            "media/N27-Regular.ttf",
+            "src/media/N27-Regular.ttf",
+            "N27-Regular.ttf",
+            "media/N27-Regular.otf",
+            "src/media/N27-Regular.otf",
+            "N27-Regular.otf",
+            "media/regular.ttf",
+            "src/media/regular.ttf",
+            "regular.ttf",
+            "C:/Windows/Fonts/segoeuib.ttf",
+            "C:/Windows/Fonts/segoeui.ttf",
+            "media/mk2.ttf",
+            "src/media/mk2.ttf",
+            "mk2.ttf",
+        ]
+        .into_iter()
+        .map(String::from),
+    );
+    candidates
 }

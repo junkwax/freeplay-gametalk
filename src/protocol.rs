@@ -3,6 +3,7 @@
 //! ## URI scheme
 //!
 //!   xband://join/<room_id>          Deep link from Discord "click to join" webhook
+//!   xband://watch/<session_id>      Deep link from Discord "spectate" webhook
 //!   xband://auth/callback#token=… OAuth redirect target (caught by local HTTP
 //!                                   server in matchmaking.rs, not the exe directly)
 //!
@@ -30,6 +31,13 @@ pub fn parse_uri(arg: &str) -> Option<XbandUri> {
             });
         }
     }
+    if let Some(session_id) = rest.strip_prefix("watch/") {
+        if !session_id.is_empty() {
+            return Some(XbandUri::Watch {
+                session_id: session_id.trim_end_matches('/').to_string(),
+            });
+        }
+    }
     None
 }
 
@@ -37,6 +45,8 @@ pub fn parse_uri(arg: &str) -> Option<XbandUri> {
 pub enum XbandUri {
     /// xband://join/<room_id> — connect directly to an in-progress match lobby
     Join { room_id: String },
+    /// xband://watch/<session_id> — request spectating an active match
+    Watch { session_id: String },
 }
 
 // ── Windows registry registration ─────────────────────────────────────────────

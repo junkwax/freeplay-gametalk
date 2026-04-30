@@ -62,8 +62,6 @@ fn embed_windows_icon() {
 
     if matches!(rc, Ok(status) if status.success()) {
         println!("cargo:rustc-link-arg-bins={}", res_path.display());
-    } else {
-        println!("cargo:warning=rc.exe not available; Windows app icon was not embedded");
     }
 }
 

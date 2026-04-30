@@ -13,6 +13,10 @@ pub enum NetMode {
     },
 }
 
+pub fn doctor_requested() -> bool {
+    std::env::args().skip(1).any(|arg| arg == "--doctor")
+}
+
 pub fn parse_args() -> NetMode {
     let args: Vec<String> = std::env::args().collect();
     let mut player: Option<usize> = None;
@@ -45,6 +49,9 @@ pub fn parse_args() -> NetMode {
                     .expect("--peer requires IP:PORT, e.g. --peer 127.0.0.1:7001");
                 peer = Some(p);
                 i += 2;
+            }
+            "--doctor" => {
+                i += 1;
             }
             other => {
                 println!("Unknown argument: {other}");

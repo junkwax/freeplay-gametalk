@@ -672,7 +672,7 @@ fn draw_about(canvas: &mut Canvas<Window>, font: &mut Font, w: i32, h: i32) -> R
         Color::RGB(90, 90, 120),
     )?;
 
-    let libs = "Built on FBNeo libretro core, ggrs rollback";
+    let libs = about_status_line();
     let tw = font.text_width_exact(libs, small);
     font.draw(
         canvas,
@@ -695,6 +695,44 @@ fn draw_about(canvas: &mut Canvas<Window>, font: &mut Font, w: i32, h: i32) -> R
         Color::RGB(100, 100, 100),
     )?;
     Ok(())
+}
+
+fn about_status_line() -> &'static str {
+    if crate::rom::find_rom_zip().is_some()
+        && platform_core_exists()
+        && crate::config::signaling_url()
+            .or_else(|| crate::config::env_value("FREEPLAY_SIGNALING_URL"))
+            .is_some()
+        && crate::config::env_value("FREEPLAY_DISCORD_CLIENT_ID").is_some()
+    {
+        "Ready: ROM, core, matchmaking, and Discord are configured"
+    } else {
+        "Run freeplay --doctor for setup diagnostics"
+    }
+}
+
+fn platform_core_exists() -> bool {
+    let core = platform_core_name();
+    std::path::Path::new(core).exists() || std::path::Path::new("cores").join(core).exists()
+}
+
+fn platform_core_name() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        "fbneo_libretro.dll"
+    }
+    #[cfg(target_os = "linux")]
+    {
+        "fbneo_libretro.so"
+    }
+    #[cfg(target_os = "macos")]
+    {
+        "fbneo_libretro.dylib"
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+    {
+        "fbneo_libretro"
+    }
 }
 
 fn draw_controls(

@@ -1,0 +1,97 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to create, for example v0.4.1"
+        required: true
+        default: "v0.4.1"
+      prerelease:
+        description: "Mark as prerelease"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Windows release package
+    runs-on: windows-latest
+    env:
+      VCPKG_DEFAULT_TRIPLET: x64-windows
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install SDL2 runtime/link dependencies
+        shell: pwsh
+        run: |
+          vcpkg install sdl2:x64-windows sdl2-ttf:x64-windows
+          $prefix = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows"
+          "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "LIB=$prefix\lib;$env:LIB" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "INCLUDE=$prefix\include;$env:INCLUDE" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "$prefix\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Build
+        shell: pwsh
+        run: cargo build --release
+
+      - name: Stage SDL DLLs
+        shell: pwsh
+        run: |
+          $bin = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows\bin"
+          Copy-Item "$bin\SDL2.dll" "target\release\SDL2.dll" -Force
+          Copy-Item "$bin\SDL2_ttf.dll" "target\release\SDL2_ttf.dll" -Force
+
+      - name: Package
+        shell: pwsh
+        run: .\package.ps1
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: freeplay-gametalk-windows
+          path: dist/freeplay-gametalk-v*.zip
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          $tag = if ($env:EVENT_NAME -eq "push") { $env:REF_NAME } else { $env:INPUT_TAG }
+          $asset = Get-ChildItem "dist/freeplay-gametalk-v*.zip" | Select-Object -First 1
+          if (-not $asset) {
+            throw "Release zip not found"
+          }
+          $notes = "Automated freeplay-gametalk client release. ROM files are not included."
+          gh release view $tag --repo $env:GH_REPO *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $asset.FullName --repo $env:GH_REPO --clobber
+          } else {
+            $args = @(
+              "release", "create", $tag,
+              $asset.FullName,
+              "--repo", $env:GH_REPO,
+              "--title", $tag,
+              "--notes", $notes
+            )
+            if ($env:INPUT_PRERELEASE -eq "true") {
+              $args += "--prerelease"
+            }
+            gh @args
+          }

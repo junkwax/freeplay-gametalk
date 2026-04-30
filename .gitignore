@@ -4,6 +4,13 @@ target/
 # Distributable zips and staged dirs
 dist/
 
+# Locally built third-party cores. Build from source with tools/build-fbneo-*.
+vendor/
+cores/
+fbneo_libretro.dll
+fbneo_libretro.so
+fbneo_libretro.dylib
+
 
 # Runtime artifacts
 netcab/*.bin
@@ -48,11 +55,18 @@ src/media/*.OTF
 .claude/
 memory/
 .github/
+!.github/
+!.github/workflows/
+!.github/workflows/*.yml
+!.github/FUNDING.yml
+!.github/funding.yml
 **/.github/copilot-instructions.md
 
 # Local docs/agent notes; keep the public README tracked
 *.md
 !README.md
+!NOTICE.md
+!tools/README.md
 
 # OS junk
 Thumbs.db

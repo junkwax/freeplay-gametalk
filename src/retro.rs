@@ -314,7 +314,7 @@ impl Core {
     }
 }
 
-/// Load fbneo_libretro.dll, wire callbacks, init the core, and load the ROM.
+/// Load the FBNeo libretro core, wire callbacks, init the core, and load the ROM.
 /// Returns a `Core` whose `run` is callable once per frame.
 pub unsafe fn load(dll_path: &str, rom_path: &str) -> Result<Core, Box<dyn std::error::Error>> {
     println!("Loading FBNeo Libretro Core...");

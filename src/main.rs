@@ -3,6 +3,7 @@ mod config;
 mod controllers;
 mod diag;
 mod discord_webhook;
+mod doctor;
 mod drone;
 mod font;
 mod ghost;
@@ -53,6 +54,12 @@ use std::time::{Duration, Instant};
 
 #[allow(static_mut_refs)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if cli::doctor_requested() {
+        let cfg = config::load();
+        config::set_signaling_url(cfg.signaling_url.clone());
+        std::process::exit(doctor::run());
+    }
+
     let net_mode = parse_args();
     let log_tag = match &net_mode {
         NetMode::Local => "local".to_string(),
@@ -65,9 +72,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     protocol::register_uri_scheme();
 
     for arg in std::env::args().skip(1) {
-        if let Some(protocol::XbandUri::Join { room_id }) = protocol::parse_uri(&arg) {
-            println!("[main] xband:// deep link: join room {room_id}");
-            rpc::post_join_request(room_id);
+        if let Some(uri) = protocol::parse_uri(&arg) {
+            match uri {
+                protocol::XbandUri::Join { room_id } => {
+                    println!("[main] xband:// deep link: join room {room_id}");
+                    rpc::post_join_request(room_id);
+                }
+                protocol::XbandUri::Watch { session_id } => {
+                    println!("[main] xband:// deep link: watch session {session_id}");
+                    rpc::post_spectate_request(session_id);
+                }
+            }
             break;
         }
     }
@@ -108,6 +123,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut event_pump = sdl_context.event_pump()?;
 
     let mut cfg = config::load();
+    config::set_signaling_url(cfg.signaling_url.clone());
+    crate::rpc::set_discord_client_id(cfg.discord_client_id.clone());
     let mut state = AppState::default();
     let rom_present = || rom::find_rom_zip().is_some();
 
@@ -235,6 +252,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     status: "Joining spar room...".into(),
                 });
             }
+        }
+        if let Some(session_id) = rpc::take_spectate_request() {
+            println!("[main] Spectate request received: session_id={session_id}");
+            state = AppState::Menu(MenuScreen::TestResult {
+                lines: vec![
+                    "Spectate request received".into(),
+                    format!("session_id={session_id}"),
+                    String::new(),
+                    "Spectator playback UI is not implemented yet.".into(),
+                    "The Discord spectate secret is now routed separately.".into(),
+                ],
+            });
         }
 
         for event in event_pump.poll_iter() {
@@ -1651,7 +1680,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 rpc::RpcState::Menu
             };
             let party = if net_session.is_some() {
-                Some((1, 2))
+                Some((2, 2))
             } else {
                 None
             };
@@ -1669,10 +1698,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ghost_playback: ghost_playback.is_some(),
                 join_key: spar_room_id.clone(),
                 spectate_key: if net_session.is_some() {
-                    Some(format!(
-                        "xband://watch/{}",
-                        mm_session_id.as_deref().unwrap_or("")
-                    ))
+                    mm_session_id
+                        .as_deref()
+                        .filter(|sid| !sid.is_empty())
+                        .map(|sid| format!("xband://watch/{sid}"))
                 } else {
                     None
                 },

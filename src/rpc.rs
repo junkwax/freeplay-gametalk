@@ -9,7 +9,7 @@
 //!   - "Join" button on the profile card when in Training mode (spar invite)
 //!   - Party info during netplay (1/2 or 2/2)
 //!   - Elapsed-time timestamps during active play
-//!   - "freeplay" large image asset, "training" small image asset
+//!   - State-specific Rich Presence art assets
 //!   - Listens for `ACTIVITY_JOIN` events from Discord
 //!
 //! ## Discord Developer Portal setup
@@ -18,22 +18,23 @@
 //! 2. **Rich Presence → Art Assets** (upload these images):
 //!    - Key `freeplay` — Freeplay app art
 //!    - Key `training` — training mode icon (small, ~128×128)
+//!    - Key `netplay` — online match icon
+//!    - Key `matchmaking` — searching/queue icon
+//!    - Key `ghost` — ghost playback/recording icon
+//!    - Key `spectate` — watch/spectate icon
 //! 3. **Rich Presence** — enable "Rich Presence" feature
 //! 4. **OAuth2** — add Redirect `http://localhost:19420` for token callback
 //! 5. **Installation** — set "Discord Public Key" if using Activity Join
 //!
-//! ## Join-to-spar flow (WIP)
+//! ## Join-to-spar flow
 //!
 //! When a player enters training mode, a unique `xband://join/<room>` URL is
 //! advertised via the Discord "Join" button. If a friend clicks it:
 //!
 //!   1. Discord delivers the join secret to this app via IPC
 //!   2. `on_activity_join` parses the room ID
-//!   3. *(TODO)* The room ID is routed into the matchmaking flow so both
-//!      players connect through the GGRS session
-//!
-//! The signaling server currently has no `/room/create` or `/room/join`
-//! endpoint — the join flow is client-side only until server support is added.
+//!   3. The room ID is routed into the matchmaking flow so both players connect
+//!      through the GGRS session.
 //!
 //! The discord-presence crate runs its own background thread for the IPC
 //! connection. State updates are fire-and-forget — if Discord isn't running
@@ -46,15 +47,32 @@ use std::sync::{Mutex, OnceLock};
 /// Set by the on_activity_join callback when a friend clicks "Join".
 /// The main loop reads this each frame and routes into matchmaking.
 static JOIN_REQUEST: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+static SPECTATE_REQUEST: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+static DISCORD_CLIENT_ID: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+
+pub fn set_discord_client_id(id: String) {
+    let cell = DISCORD_CLIENT_ID.get_or_init(|| Mutex::new(None));
+    *cell.lock().unwrap() = Some(id);
+}
 
 fn join_slot() -> &'static Mutex<Option<String>> {
     JOIN_REQUEST.get_or_init(|| Mutex::new(None))
+}
+
+fn spectate_slot() -> &'static Mutex<Option<String>> {
+    SPECTATE_REQUEST.get_or_init(|| Mutex::new(None))
 }
 
 /// Called from the main loop to check if a join request is pending.
 /// Returns and consumes the room ID if one was received from Discord.
 pub fn take_join_request() -> Option<String> {
     join_slot().lock().ok()?.take()
+}
+
+/// Called from the main loop to check if a spectate request is pending.
+/// Returns and consumes the session ID if one was received from Discord.
+pub fn take_spectate_request() -> Option<String> {
+    spectate_slot().lock().ok()?.take()
 }
 
 /// Seed the join slot from a non-IPC source (currently: an `xband://join/<id>`
@@ -67,11 +85,19 @@ pub fn post_join_request(room_id: String) {
     }
 }
 
+pub fn post_spectate_request(session_id: String) {
+    if let Ok(mut slot) = spectate_slot().lock() {
+        *slot = Some(session_id);
+    }
+}
+
 /// Wraps the discord-presence Client and its background thread.
 pub struct RpcClient {
     client: DiscordClient,
     thread: Option<ClientThread>,
     last_update: Option<RpcUpdate>,
+    timer_key: Option<String>,
+    timer_started_at: Option<u64>,
 }
 
 /// What kind of activity the user is engaged in.
@@ -146,7 +172,7 @@ impl RpcClient {
             println!("[rpc] Activity join requested — secret: {secret}");
             if let Some(room_id) = secret.strip_prefix("xband://join/") {
                 println!("[rpc] → Spar room join: room_id={room_id}");
-                if let Ok(mut slot) = join_slot().lock() {
+                if let Ok(mut slot) = spectate_slot().lock() {
                     *slot = Some(room_id.to_string());
                 }
             }
@@ -172,6 +198,8 @@ impl RpcClient {
             client,
             thread: Some(thread),
             last_update: None,
+            timer_key: None,
+            timer_started_at: None,
         })
     }
 
@@ -188,6 +216,7 @@ impl RpcClient {
         }
         let (details, state_str) = self.details_for(&u);
         let timestamps = self.timestamps_for(&u);
+        let small_asset = self.small_asset_for(&u);
         let join_key = u.join_key.clone();
         let spectate_key = u.spectate_key.clone();
         let party_id = u.party_id.clone();
@@ -210,12 +239,13 @@ impl RpcClient {
                 act = act.timestamps(|t| t.start(start));
             }
 
-            if is_training {
+            if is_training || small_asset.is_some() {
                 act = act.assets(|a| {
-                    a.large_image("freeplay")
-                        .large_text("Freeplay")
-                        .small_image("training")
-                        .small_text("Training Mode")
+                    let mut a = a.large_image("freeplay").large_text("Freeplay");
+                    if let Some((key, text)) = small_asset {
+                        a = a.small_image(key).small_text(text);
+                    }
+                    a
                 });
             } else {
                 act = act.assets(|a| a.large_image("freeplay").large_text("Freeplay"));
@@ -257,27 +287,33 @@ impl RpcClient {
         let state = &u.state;
 
         let details = match state {
-            RpcState::Menu => "In Main Menu",
-            RpcState::Playing => "Playing MK2",
-            RpcState::Training => "Playing MK2",
-            RpcState::Matchmaking => "Searching for a match",
+            RpcState::Menu => "In Lobby",
+            RpcState::Playing => "Practice Mode",
+            RpcState::Training => "Practice Mode",
+            RpcState::Matchmaking => "Searching for opponent",
             RpcState::Hosting => "Hosting a match",
             RpcState::Joining => "Joining a match",
-            RpcState::Netplay => "MK2",
-            RpcState::NetplayVs(_) => "MK2",
+            RpcState::Netplay => "Netplay Match",
+            RpcState::NetplayVs(_) => "Netplay Match",
         };
 
         let mut state_str = match state {
             RpcState::Menu => String::new(),
-            RpcState::Playing => String::new(),
-            RpcState::Training => "Training".into(),
-            RpcState::Matchmaking => "Find Match".into(),
+            RpcState::Playing => "Offline practice".into(),
+            RpcState::Training => "Ghost training".into(),
+            RpcState::Matchmaking => "In queue".into(),
             RpcState::Hosting => "Waiting for opponent".into(),
             RpcState::Joining => "Connecting...".into(),
-            RpcState::Netplay => "Netplay match".into(),
+            RpcState::Netplay => {
+                if let Some((p1, p2)) = u.score {
+                    format!("Online | {p1}-{p2}")
+                } else {
+                    "Online".into()
+                }
+            }
             RpcState::NetplayVs(n) => {
                 if let Some((p1, p2)) = u.score {
-                    format!("vs {n} ({p1}-{p2})")
+                    format!("vs {n} | {p1}-{p2}")
                 } else {
                     format!("vs {n}")
                 }
@@ -286,31 +322,75 @@ impl RpcClient {
 
         // Append ghost status for training log
         if u.ghost_recording {
-            state_str.push_str(" • Recording");
+            state_str.push_str(" | Recording");
         }
         if u.ghost_playback {
-            state_str.push_str(" • Ghost playback");
+            state_str.push_str(" | Ghost playback");
         }
 
         (details.to_string(), state_str)
     }
 
-    fn timestamps_for(&self, u: &RpcUpdate) -> Option<(u64, u64)> {
+    fn timestamps_for(&mut self, u: &RpcUpdate) -> Option<(u64, u64)> {
         match &u.state {
             RpcState::Playing | RpcState::Training | RpcState::Netplay | RpcState::NetplayVs(_) => {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
-                Some((now, 0))
+                let key = timer_key(u);
+                if self.timer_key.as_deref() != Some(key.as_str()) {
+                    self.timer_key = Some(key);
+                    self.timer_started_at = Some(now_secs());
+                }
+                self.timer_started_at.map(|start| (start, 0))
             }
+            _ => {
+                self.timer_key = None;
+                self.timer_started_at = None;
+                None
+            }
+        }
+    }
+
+    fn small_asset_for(&self, u: &RpcUpdate) -> Option<(&'static str, &'static str)> {
+        if u.ghost_playback || u.ghost_recording {
+            return Some(("ghost", "Ghost Training"));
+        }
+        match &u.state {
+            RpcState::Training => Some(("training", "Training Mode")),
+            RpcState::Matchmaking => Some(("matchmaking", "Finding Match")),
+            RpcState::Netplay | RpcState::NetplayVs(_) => Some(("netplay", "Online Match")),
+            RpcState::Joining => Some(("matchmaking", "Connecting")),
             _ => None,
         }
     }
 }
 
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn timer_key(u: &RpcUpdate) -> String {
+    match &u.state {
+        RpcState::NetplayVs(name) => {
+            format!("netplay:{name}:{}", u.party_id.as_deref().unwrap_or(""))
+        }
+        RpcState::Netplay => format!("netplay:{}", u.party_id.as_deref().unwrap_or("")),
+        RpcState::Training => format!("training:{}", u.join_key.as_deref().unwrap_or("")),
+        RpcState::Playing => "playing".into(),
+        RpcState::Matchmaking => "matchmaking".into(),
+        RpcState::Hosting => "hosting".into(),
+        RpcState::Joining => "joining".into(),
+        RpcState::Menu => "menu".into(),
+    }
+}
+
 fn client_id() -> Option<u64> {
-    crate::config::env_value("FREEPLAY_DISCORD_CLIENT_ID").and_then(|v| v.parse::<u64>().ok())
+    if let Some(v) = crate::config::env_value("FREEPLAY_DISCORD_CLIENT_ID") {
+        return v.parse::<u64>().ok();
+    }
+    let cell = DISCORD_CLIENT_ID.get()?;
+    cell.lock().ok()?.as_ref()?.parse::<u64>().ok()
 }
 
 impl Drop for RpcClient {

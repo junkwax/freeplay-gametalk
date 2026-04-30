@@ -162,7 +162,10 @@ pub fn ensure_core_loaded(
     unsafe {
         let rom_path = crate::rom::find_rom_zip_string()
             .ok_or_else(|| "ROM zip not found next to the executable or in roms\\".to_string())?;
-        let c = retro::load("fbneo_libretro.dll", &rom_path)?;
+        let core_path = fbneo_core_path().ok_or_else(|| {
+            "FBNeo core not found next to the executable or in cores\\".to_string()
+        })?;
+        let c = retro::load(&core_path, &rom_path)?;
         let rate = c.av_info.timing.sample_rate.round() as i32;
         let desired = AudioSpecDesired {
             freq: Some(if rate > 0 { rate } else { 48000 }),
@@ -179,6 +182,46 @@ pub fn ensure_core_loaded(
         *core = Some(c);
     }
     Ok(())
+}
+
+fn fbneo_core_path() -> Option<String> {
+    let name = platform_core_name();
+    let mut candidates = vec![name.to_string(), format!("cores/{name}")];
+    if let Some(exe_dir) = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
+    {
+        candidates.push(exe_dir.join(name).to_string_lossy().into_owned());
+        candidates.push(
+            exe_dir
+                .join("cores")
+                .join(name)
+                .to_string_lossy()
+                .into_owned(),
+        );
+    }
+    candidates
+        .into_iter()
+        .find(|p| std::path::Path::new(p).exists())
+}
+
+fn platform_core_name() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        "fbneo_libretro.dll"
+    }
+    #[cfg(target_os = "linux")]
+    {
+        "fbneo_libretro.so"
+    }
+    #[cfg(target_os = "macos")]
+    {
+        "fbneo_libretro.dylib"
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+    {
+        "fbneo_libretro"
+    }
 }
 
 /// Blit the current emulator frame into the canvas. Does NOT call `present()` —
@@ -226,8 +269,8 @@ pub fn draw_fight_overlay(
     let name_scale: u32 = 1;
     let score_scale: u32 = name_scale;
     let white = sdl2::pixels::Color::RGBA(248, 248, 250, 230);
-    let accent = sdl2::pixels::Color::RGBA(248, 248, 250, 102);
-    let fill = sdl2::pixels::Color::RGBA(248, 248, 250, 102);
+    let accent = sdl2::pixels::Color::RGBA(45, 20, 55, 200);
+    let fill = sdl2::pixels::Color::RGBA(20, 10, 30, 220);
 
     let center_x = window_w / 2;
     let gap = ((window_w as f32) * 0.18) as i32;

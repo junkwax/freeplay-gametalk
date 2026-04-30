@@ -32,8 +32,11 @@ const PUNCH_PAYLOAD: &[u8] = b"MK2PUNCH";
 static CURRENT_TOKEN: Mutex<Option<String>> = Mutex::new(None);
 
 fn signaling_url() -> Result<String, String> {
-    crate::config::env_value("FREEPLAY_SIGNALING_URL")
-        .map(|v| v.trim_end_matches('/').to_string())
+    let from_env = crate::config::env_value("FREEPLAY_SIGNALING_URL");
+    if let Some(ref url) = from_env {
+        return Ok(url.trim_end_matches('/').to_string());
+    }
+    crate::config::signaling_url()
         .ok_or_else(|| "FREEPLAY_SIGNALING_URL is not configured".to_string())
 }
 

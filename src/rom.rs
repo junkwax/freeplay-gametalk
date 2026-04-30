@@ -8,6 +8,8 @@ pub fn find_rom_zip() -> Option<PathBuf> {
         .find(|p| p.exists())
         .or_else(|| first_zip_in("roms"))
         .or_else(|| first_zip_in("."))
+        .or_else(|| exe_dir().and_then(|dir| first_zip_in_path(&dir.join("roms"))))
+        .or_else(|| exe_dir().and_then(|dir| first_zip_in_path(&dir)))
 }
 
 pub fn find_rom_zip_string() -> Option<String> {
@@ -20,13 +22,25 @@ pub fn read_rom_zip() -> Option<Vec<u8>> {
 }
 
 fn rom_candidates() -> Vec<PathBuf> {
-    vec![
+    let mut candidates = vec![
         Path::new(ROM_NAME).to_path_buf(),
         Path::new("roms").join(ROM_NAME),
-    ]
+    ];
+    if let Some(exe_dir) = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf))
+    {
+        candidates.push(exe_dir.join(ROM_NAME));
+        candidates.push(exe_dir.join("roms").join(ROM_NAME));
+    }
+    candidates
 }
 
 fn first_zip_in(dir: &str) -> Option<PathBuf> {
+    first_zip_in_path(Path::new(dir))
+}
+
+fn first_zip_in_path(dir: &Path) -> Option<PathBuf> {
     let mut zips: Vec<PathBuf> = std::fs::read_dir(dir)
         .ok()?
         .filter_map(|entry| entry.ok().map(|e| e.path()))
@@ -40,4 +54,10 @@ fn first_zip_in(dir: &str) -> Option<PathBuf> {
         .collect();
     zips.sort();
     zips.into_iter().next()
+}
+
+fn exe_dir() -> Option<PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf))
 }

@@ -41,8 +41,8 @@ Get-ChildItem "target\release\*.dll" -ErrorAction SilentlyContinue | ForEach-Obj
 # ── Ensure FBNeo core ─────────────────────────────────────────────────────────
 if (-not (Test-Path "$OUT_DIR\fbneo_libretro.dll")) {
     $fbneo_candidates = @(
-        "fbneo_libretro.dll",
         "cores\fbneo_libretro.dll",
+        "fbneo_libretro.dll",
         "$env:USERPROFILE\AppData\Roaming\RetroArch\cores\fbneo_libretro.dll"
     )
     foreach ($path in $fbneo_candidates) {
@@ -73,11 +73,39 @@ foreach ($dll in $sdl_needed) {
 if (Test-Path "config.toml") {
     Copy-Item "config.toml" $OUT_DIR
     Write-Host "  ✓ Copied config.toml"
-    # Scrub Discord webhook URL from the distributed config
     $cfgPath = "$OUT_DIR\config.toml"
     if (Test-Path $cfgPath) {
         $cfg = Get-Content $cfgPath -Raw
+        
+        # Scrub webhook
         $cfg = $cfg -replace '(discord_webhook_url\s*=\s*")[^"]*(")', '${1}https://discord.com/api/webhooks/your-webhook-url-here${2}'
+        
+        # Inject values from .env
+        if (Test-Path ".env") {
+            $envLines = Get-Content ".env" | Where-Object { $_ -match '^\s*\w+\s*=' -and -not $_.Trim().StartsWith('#') }
+            foreach ($line in $envLines) {
+                if ($line -match '^\s*FREEPLAY_SIGNALING_URL\s*=\s*(.+)$') {
+                    $url = $Matches[1].Trim().Trim('"').Trim("'")
+                    if ($cfg -notmatch 'signaling_url\s*=') {
+                        $cfg += "`r`nsignaling_url = `"$url`""
+                    } else {
+                        $cfg = $cfg -replace '(signaling_url\s*=\s*")[^"]*(")', "`${1}$url`${2}"
+                    }
+                }
+                if ($line -match '^\s*FREEPLAY_DISCORD_CLIENT_ID\s*=\s*(.+)$') {
+                    $id = $Matches[1].Trim().Trim('"').Trim("'")
+                    if ($cfg -notmatch 'discord_client_id\s*=') {
+                        $cfg += "`r`ndiscord_client_id = `"$id`""
+                    } else {
+                        $cfg = $cfg -replace '(discord_client_id\s*=\s*")[^"]*(")', "`${1}$id`${2}"
+                    }
+                }
+            }
+            if ($cfg -match 'signaling_url' -or $cfg -match 'discord_client_id') {
+                Write-Host "  ✓ Injected env values into config.toml"
+            }
+        }
+        
         Set-Content $cfgPath $cfg -NoNewline
         Write-Host "  ✓ Scrubbed webhook URL from config.toml"
     }
@@ -85,6 +113,12 @@ if (Test-Path "config.toml") {
 if (Test-Path ".env.example") {
     Copy-Item ".env.example" $OUT_DIR
     Write-Host "  ✓ Copied .env.example"
+}
+foreach ($doc in @("LICENSE", "NOTICE.md")) {
+    if (Test-Path $doc) {
+        Copy-Item $doc $OUT_DIR
+        Write-Host "  ✓ Copied $doc"
+    }
 }
 
 # ── Copy media folder (tracked runtime font only) ─────────────────────────────
@@ -152,7 +186,8 @@ INSTALL:
   1. Extract this zip anywhere (e.g. C:\Games\Freeplay)
   2. Put your legally-obtained ROM zip in the roms\ folder
   3. Copy .env.example to .env and fill in online service values
-  4. Double-click freeplay.exe
+  4. Run freeplay.exe --doctor to verify setup
+  5. Double-click freeplay.exe
 
 MATCHMAKING:
   Click "Find Match" in the main menu. You'll log in with Discord once,

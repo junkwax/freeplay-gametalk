@@ -18,7 +18,6 @@ ggrs = "0.10"
 bytemuck = { version = "1", features = ["derive"] }
 native-tls = "0.2"
 open = "5"
-winreg = "0.52"
 discord-presence = "0.5"
 flate2 = "1"
 # Matchbox socket will be enabled once we switch from direct-UDP ggrs to
@@ -26,6 +25,9 @@ flate2 = "1"
 # Kept commented until then so the client doesn't pull ~150 transitive
 # crates (tokio runtime, ring, webrtc stack, etc.) it doesn't yet use.
 # matchbox_socket = "0.10"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"
 
 # Release optimisation. LTO + single codegen unit yields ~5-10% faster
 # savestate memcpys and input-poll hot paths at the cost of ~2x longer

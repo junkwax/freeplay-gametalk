@@ -1,0 +1,20 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  cargo-check:
+    name: cargo check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install SDL2 dependencies
+        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev libsdl2-ttf-dev pkg-config
+      - name: Check
+        run: cargo check
+      - name: Doctor
+        run: cargo run -- --doctor
+        continue-on-error: true
