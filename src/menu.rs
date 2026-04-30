@@ -642,6 +642,36 @@ fn draw_about(canvas: &mut Canvas<Window>, font: &mut Font, w: i32, h: i32) -> R
         y += line_h;
     }
 
+    let gh = "github.com/junkwax/freeplay-gametalk";
+    let ghw = font.text_width_exact(gh, content_scale);
+    let btn_x = (w - ghw) / 2 - 14;
+    let btn_y = y + 100;
+    let btn_w = ghw + 28;
+    let btn_h = (24 * content_scale) as i32;
+    canvas.set_draw_color(Color::RGBA(25, 30, 55, 220));
+    canvas.fill_rect(Rect::new(btn_x, btn_y, btn_w as u32, btn_h as u32))?;
+    canvas.set_draw_color(Color::RGB(80, 140, 220));
+    canvas.draw_rect(Rect::new(btn_x, btn_y, btn_w as u32, btn_h as u32))?;
+    font.draw(
+        canvas,
+        gh,
+        btn_x + 14,
+        btn_y + 4,
+        content_scale,
+        Color::RGB(160, 200, 255),
+    )?;
+
+    let hint = "Press ENTER to open in browser";
+    let hw = font.text_width_exact(hint, small);
+    font.draw(
+        canvas,
+        hint,
+        (w - hw) / 2,
+        btn_y + btn_h + 6,
+        small,
+        Color::RGB(90, 90, 120),
+    )?;
+
     let libs = "Built on FBNeo libretro core, ggrs rollback";
     let tw = font.text_width_exact(libs, small);
     font.draw(

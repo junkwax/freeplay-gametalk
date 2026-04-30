@@ -333,6 +333,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
 
+                // Open GitHub on Enter from About screen
+                Event::KeyDown {
+                    keycode: Some(Keycode::Return),
+                    ..
+                } if matches!(state, AppState::Menu(MenuScreen::About)) => {
+                    let _ = open::that("https://github.com/junkwax/freeplay-gametalk");
+                }
+
                 _ if matches!(state, AppState::Menu(_)) => {
                     if let Some(nav) = event_to_menu_nav(&event) {
                         match nav {
