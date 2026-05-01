@@ -321,7 +321,7 @@ impl<'ttf, 'tc> Font<'ttf, 'tc> {
         }
     }
 
-    /// Draw text using a clean UI overlay font. Falls back to mk2.ttf/bitmap.
+    /// Draw text using the mk2 scoreboard font. Falls back to bitmap.
     pub fn draw_overlay(
         &mut self,
         canvas: &mut Canvas<Window>,
@@ -394,29 +394,8 @@ fn resolve_font(candidates: &[&str]) -> Option<String> {
 }
 
 fn overlay_font_candidates() -> Vec<String> {
-    let mut candidates = Vec::new();
-    if let Some(path) = crate::config::env_value("FREEPLAY_SCOREBOARD_FONT") {
-        candidates.push(path);
-    }
-    candidates.extend(
-        [
-            "media/N27-Regular.ttf",
-            "src/media/N27-Regular.ttf",
-            "N27-Regular.ttf",
-            "media/N27-Regular.otf",
-            "src/media/N27-Regular.otf",
-            "N27-Regular.otf",
-            "media/regular.ttf",
-            "src/media/regular.ttf",
-            "regular.ttf",
-            "C:/Windows/Fonts/segoeuib.ttf",
-            "C:/Windows/Fonts/segoeui.ttf",
-            "media/mk2.ttf",
-            "src/media/mk2.ttf",
-            "mk2.ttf",
-        ]
+    ["media/mk2.ttf", "src/media/mk2.ttf", "mk2.ttf"]
         .into_iter()
-        .map(String::from),
-    );
-    candidates
+        .map(String::from)
+        .collect()
 }

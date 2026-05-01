@@ -19,6 +19,35 @@ pub enum Update {
 }
 
 #[derive(Debug, Clone)]
+pub struct SpectateState {
+    pub frame: Option<u32>,
+    pub p1_score: u32,
+    pub p2_score: u32,
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug)]
+pub enum SpectateUpdate {
+    State(SpectateState),
+    Error(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveMatch {
+    pub session_id: String,
+    pub p1_name: String,
+    pub p2_name: String,
+    pub p1_score: u32,
+    pub p2_score: u32,
+}
+
+#[derive(Debug)]
+pub enum LiveMatchesUpdate {
+    Loaded(Vec<LiveMatch>),
+    Error(String),
+}
+
+#[derive(Debug, Clone)]
 pub struct TurnConnectInfo {
     pub uri: String,
     pub username: String,
@@ -804,6 +833,20 @@ pub enum ProfileUpdate {
     Error(String),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeaderboardRow {
+    pub username: String,
+    pub rating: i32,
+    pub wins: u64,
+    pub losses: u64,
+}
+
+#[derive(Debug)]
+pub enum LeaderboardUpdate {
+    Loaded(Vec<LeaderboardRow>),
+    Error(String),
+}
+
 /// Fire-and-forget profile fetcher. Spawns a thread, GETs both
 /// `/player/:id` and `/player/:id/history`, and pushes a `ProfileUpdate`
 /// down `tx`. The main loop polls `tx` like it does for matchmaking.
@@ -961,6 +1004,30 @@ fn parse_history_row(chunk: &str) -> Option<HistoryRow> {
     })
 }
 
+fn parse_leaderboard(json: &str) -> Option<Vec<LeaderboardRow>> {
+    let body = json_array_body(json, "players")
+        .or_else(|| json_array_body(json, "leaderboard"))
+        .or_else(|| json_array_body(json, "rows"))?;
+    let mut rows = Vec::new();
+    for chunk in json_object_chunks(body) {
+        if let Some(row) = parse_leaderboard_row(chunk) {
+            rows.push(row);
+        }
+    }
+    Some(rows)
+}
+
+fn parse_leaderboard_row(chunk: &str) -> Option<LeaderboardRow> {
+    Some(LeaderboardRow {
+        username: json_str(chunk, "username")
+            .or_else(|| json_str(chunk, "name"))
+            .unwrap_or_else(|| "Unknown".into()),
+        rating: json_f64(chunk, "rating")? as i32,
+        wins: json_u64(chunk, "wins").unwrap_or(0),
+        losses: json_u64(chunk, "losses").unwrap_or(0),
+    })
+}
+
 // ── freeplay-stats: ghost browse + download ───────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1021,12 +1088,184 @@ pub fn fetch_ghost_list(stats_url: String, rom_hash: String, tx: Sender<GhostLis
     });
 }
 
+pub fn watch_spectate_state(session_id: String, tx: Sender<SpectateUpdate>) {
+    std::thread::spawn(move || {
+        let base_url = match signaling_url() {
+            Ok(url) => url,
+            Err(e) => {
+                let _ = tx.send(SpectateUpdate::Error(e));
+                return;
+            }
+        };
+        let url = format!("{base_url}/spectate/state/{session_id}");
+        loop {
+            match http_get_no_auth(&url) {
+                Ok(body) => match parse_spectate_state(&body) {
+                    Some(state) => {
+                        if tx.send(SpectateUpdate::State(state)).is_err() {
+                            break;
+                        }
+                    }
+                    None => {
+                        if tx
+                            .send(SpectateUpdate::Error(format!(
+                                "Couldn't parse spectator state: {body}"
+                            )))
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                },
+                Err(e) => {
+                    if tx.send(SpectateUpdate::Error(e)).is_err() {
+                        break;
+                    }
+                }
+            }
+            std::thread::sleep(Duration::from_millis(1500));
+        }
+    });
+}
+
+pub fn fetch_leaderboard(stats_url: String, tx: Sender<LeaderboardUpdate>) {
+    std::thread::spawn(move || {
+        if stats_url.is_empty() {
+            let _ = tx.send(LeaderboardUpdate::Error("stats_url not configured".into()));
+            return;
+        }
+
+        let url = format!("{stats_url}/leaderboard?limit=20");
+        match http_get_no_auth(&url) {
+            Ok(body) => match parse_leaderboard(&body) {
+                Some(rows) => {
+                    let _ = tx.send(LeaderboardUpdate::Loaded(rows));
+                }
+                None => {
+                    let _ = tx.send(LeaderboardUpdate::Error(format!(
+                        "Couldn't parse leaderboard: {body}"
+                    )));
+                }
+            },
+            Err(e) => {
+                let _ = tx.send(LeaderboardUpdate::Error(format!(
+                    "Leaderboard fetch failed: {e}"
+                )));
+            }
+        }
+    });
+}
+
+pub fn fetch_live_matches(tx: Sender<LiveMatchesUpdate>) {
+    std::thread::spawn(move || {
+        let base_url = match signaling_url() {
+            Ok(url) => url,
+            Err(e) => {
+                let _ = tx.send(LiveMatchesUpdate::Error(e));
+                return;
+            }
+        };
+        let url = format!("{base_url}/matches/live");
+        match http_get_no_auth(&url) {
+            Ok(body) => match parse_live_matches(&body) {
+                Some(matches) => {
+                    let _ = tx.send(LiveMatchesUpdate::Loaded(matches));
+                }
+                None => {
+                    let _ = tx.send(LiveMatchesUpdate::Error(format!(
+                        "Couldn't parse live matches: {body}"
+                    )));
+                }
+            },
+            Err(e) => {
+                let _ = tx.send(LiveMatchesUpdate::Error(e));
+            }
+        }
+    });
+}
+
+fn parse_spectate_state(json: &str) -> Option<SpectateState> {
+    let frame = json_last_u64(json, "frame").map(|v| v as u32);
+    let p1_score = json_last_u64(json, "score_p1")
+        .or_else(|| json_last_u64(json, "p1_score"))
+        .unwrap_or(0) as u32;
+    let p2_score = json_last_u64(json, "score_p2")
+        .or_else(|| json_last_u64(json, "p2_score"))
+        .unwrap_or(0) as u32;
+    let updated_at = json_last_str(json, "updated_at")
+        .or_else(|| json_last_str(json, "updatedAt"))
+        .or_else(|| json_last_str(json, "timestamp"));
+
+    if frame.is_none() && !json.contains("score_p1") && !json.contains("p1_score") {
+        return None;
+    }
+
+    Some(SpectateState {
+        frame,
+        p1_score,
+        p2_score,
+        updated_at,
+    })
+}
+
+fn parse_live_matches(json: &str) -> Option<Vec<LiveMatch>> {
+    let body = json_array_body(json, "matches").or_else(|| json_array_body(json, "live"))?;
+    let mut out = Vec::new();
+    for chunk in json_object_chunks(body) {
+        if let Some(m) = parse_live_match(chunk) {
+            out.push(m);
+        }
+    }
+    Some(out)
+}
+
+fn parse_live_match(chunk: &str) -> Option<LiveMatch> {
+    let session_id = json_str(chunk, "session_id")
+        .or_else(|| json_str(chunk, "room_id"))
+        .or_else(|| json_str(chunk, "id"))?;
+    let p1_name = json_str(chunk, "p1_name")
+        .or_else(|| json_str(chunk, "player1"))
+        .or_else(|| json_str(chunk, "host_username"))
+        .unwrap_or_else(|| "P1".into());
+    let p2_name = json_str(chunk, "p2_name")
+        .or_else(|| json_str(chunk, "player2"))
+        .or_else(|| json_str(chunk, "join_username"))
+        .unwrap_or_else(|| "P2".into());
+    let p1_score = json_u64(chunk, "p1_score")
+        .or_else(|| json_u64(chunk, "score_p1"))
+        .unwrap_or(0) as u32;
+    let p2_score = json_u64(chunk, "p2_score")
+        .or_else(|| json_u64(chunk, "score_p2"))
+        .unwrap_or(0) as u32;
+
+    Some(LiveMatch {
+        session_id,
+        p1_name,
+        p2_name,
+        p1_score,
+        p2_score,
+    })
+}
+
 fn parse_ghost_list(json: &str) -> Option<Vec<RemoteGhostMeta>> {
-    let arr_start = json.find("\"ghosts\"")? + "\"ghosts\"".len();
+    let body = json_array_body(json, "ghosts")?;
+    let mut out = Vec::new();
+    for chunk in json_object_chunks(body) {
+        if let Some(g) = parse_ghost_meta(chunk) {
+            out.push(g);
+        }
+    }
+    Some(out)
+}
+
+fn json_array_body<'a>(json: &'a str, key: &str) -> Option<&'a str> {
+    let arr_start = json.find(&format!("\"{key}\""))? + key.len() + 2;
     let after_colon = json[arr_start..].find('[')? + arr_start + 1;
     let arr_end = json[after_colon..].rfind(']')? + after_colon;
-    let body = &json[after_colon..arr_end];
+    Some(&json[after_colon..arr_end])
+}
 
+fn json_object_chunks(body: &str) -> Vec<&str> {
     let mut out = Vec::new();
     let mut depth = 0i32;
     let mut start: Option<usize> = None;
@@ -1042,10 +1281,7 @@ fn parse_ghost_list(json: &str) -> Option<Vec<RemoteGhostMeta>> {
                 depth -= 1;
                 if depth == 0 {
                     if let Some(s) = start {
-                        let chunk = &body[s..=i];
-                        if let Some(g) = parse_ghost_meta(chunk) {
-                            out.push(g);
-                        }
+                        out.push(&body[s..=i]);
                     }
                     start = None;
                 }
@@ -1053,7 +1289,7 @@ fn parse_ghost_list(json: &str) -> Option<Vec<RemoteGhostMeta>> {
             _ => {}
         }
     }
-    Some(out)
+    out
 }
 
 fn parse_ghost_meta(chunk: &str) -> Option<RemoteGhostMeta> {
@@ -1231,6 +1467,13 @@ fn json_str(json: &str, key: &str) -> Option<String> {
     Some(json[start..start + end].to_string())
 }
 
+fn json_last_str(json: &str, key: &str) -> Option<String> {
+    let pat = format!("\"{key}\":\"");
+    let start = json.rfind(&pat)? + pat.len();
+    let end = json[start..].find('"')?;
+    Some(json[start..start + end].to_string())
+}
+
 fn json_nested_str(json: &str, outer: &str, inner: &str) -> Option<String> {
     let pat = format!("\"{outer}\":{{");
     let start = json.find(&pat)? + pat.len() - 1;
@@ -1264,6 +1507,16 @@ fn json_i64(json: &str, key: &str) -> Option<i64> {
 fn json_u64(json: &str, key: &str) -> Option<u64> {
     let pat = format!("\"{key}\":");
     let start = json.find(&pat)? + pat.len();
+    let rest = json[start..].trim_start();
+    let end = rest
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(rest.len());
+    rest[..end].parse().ok()
+}
+
+fn json_last_u64(json: &str, key: &str) -> Option<u64> {
+    let pat = format!("\"{key}\":");
+    let start = json.rfind(&pat)? + pat.len();
     let rest = json[start..].trim_start();
     let end = rest
         .find(|c: char| !c.is_ascii_digit())

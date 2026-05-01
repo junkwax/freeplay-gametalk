@@ -40,6 +40,15 @@ pub struct Config {
     /// Discord Rich Presence application ID.
     #[serde(default)]
     pub discord_client_id: String,
+    /// Whether Discord Rich Presence should start when configured.
+    #[serde(default = "default_true")]
+    pub discord_rpc_enabled: bool,
+    /// Start in desktop fullscreen and keep that preference when toggled.
+    #[serde(default)]
+    pub fullscreen: bool,
+    /// Audio output level as a percentage.
+    #[serde(default = "default_volume_percent")]
+    pub volume_percent: u8,
     /// Optional Discord webhook URL. When non-empty, Freeplay posts round/match
     /// results here during netplay sessions. Get one from any Discord channel
     /// via Edit Channel → Integrations → Webhooks → New Webhook → Copy URL.
@@ -48,6 +57,14 @@ pub struct Config {
     /// Optional stats service URL for ghost uploads and leaderboards.
     #[serde(default)]
     pub stats_url: String,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_volume_percent() -> u8 {
+    100
 }
 
 pub fn path() -> PathBuf {
@@ -73,6 +90,7 @@ pub fn load() -> Config {
         }
     };
     apply_env_overrides(&mut cfg);
+    cfg.volume_percent = cfg.volume_percent.min(100);
     cfg
 }
 

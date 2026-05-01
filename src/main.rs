@@ -1,3 +1,8 @@
+#![cfg_attr(
+    all(target_os = "windows", not(debug_assertions)),
+    windows_subsystem = "windows"
+)]
+
 mod cli;
 mod config;
 mod controllers;
@@ -46,11 +51,59 @@ use crate::session::{
 
 use sdl2::audio::AudioQueue;
 use sdl2::event::Event;
-use sdl2::keyboard::Keycode;
+use sdl2::keyboard::{Keycode, Mod};
 use sdl2::pixels::PixelFormatEnum;
 use sdl2::render::BlendMode;
 use sdl2::surface::Surface;
+use sdl2::video::FullscreenType;
 use std::time::{Duration, Instant};
+
+#[cfg(target_os = "windows")]
+fn launch_debugger() -> std::io::Result<()> {
+    let exe = std::env::current_exe()?;
+    std::process::Command::new("cmd")
+        .args([
+            "/C",
+            "start",
+            "Freeplay Doctor",
+            "cmd",
+            "/K",
+            &format!("\"{}\" --doctor", exe.display()),
+        ])
+        .spawn()
+        .map(|_| ())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn launch_debugger() -> std::io::Result<()> {
+    let exe = std::env::current_exe()?;
+    std::process::Command::new(exe)
+        .arg("--doctor")
+        .spawn()
+        .map(|_| ())
+}
+
+fn toast_payload(toast: &Option<(String, Instant)>) -> Option<menu::Toast<'_>> {
+    let (message, until) = toast.as_ref()?;
+    if Instant::now() >= *until {
+        return None;
+    }
+    Some(menu::Toast {
+        message,
+        remaining_ms: until.saturating_duration_since(Instant::now()).as_millis(),
+    })
+}
+
+fn apply_volume(samples: &[i16], volume_percent: u8) -> Vec<i16> {
+    if volume_percent >= 100 {
+        return samples.to_vec();
+    }
+    let volume = volume_percent as i32;
+    samples
+        .iter()
+        .map(|s| ((*s as i32 * volume) / 100).clamp(i16::MIN as i32, i16::MAX as i32) as i16)
+        .collect()
+}
 
 #[allow(static_mut_refs)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -123,6 +176,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut event_pump = sdl_context.event_pump()?;
 
     let mut cfg = config::load();
+    if cfg.fullscreen {
+        let _ = canvas.window_mut().set_fullscreen(FullscreenType::Desktop);
+    }
     config::set_signaling_url(cfg.signaling_url.clone());
     crate::rpc::set_discord_client_id(cfg.discord_client_id.clone());
     let mut state = AppState::default();
@@ -217,17 +273,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut mm_rx: Option<std::sync::mpsc::Receiver<matchmaking::Update>> = None;
     let mut mm_session_id: Option<String> = None;
-    let mut rpc_client = rpc::RpcClient::init();
+    let mut rpc_client = if cfg.discord_rpc_enabled {
+        rpc::RpcClient::init()
+    } else {
+        None
+    };
     if let Some(ref mut rc) = rpc_client {
         rc.update(rpc::RpcUpdate::default());
     }
     let mut spar_room_id: Option<String> = None;
     let mut peer_name: Option<String> = None;
     let mut profile_rx: Option<std::sync::mpsc::Receiver<matchmaking::ProfileUpdate>> = None;
+    let mut leaderboard_rx: Option<std::sync::mpsc::Receiver<matchmaking::LeaderboardUpdate>> =
+        None;
     let mut avatar_rx: Option<std::sync::mpsc::Receiver<Vec<u8>>> = None;
     let mut ghost_list_rx: Option<std::sync::mpsc::Receiver<matchmaking::GhostListUpdate>> = None;
     let mut ghost_download_rx: Option<std::sync::mpsc::Receiver<matchmaking::GhostDownloadUpdate>> =
         None;
+    let mut spectate_rx: Option<std::sync::mpsc::Receiver<matchmaking::SpectateUpdate>> = None;
+    let mut spectate_last_update: Option<Instant> = None;
+    let mut live_matches_rx: Option<std::sync::mpsc::Receiver<matchmaking::LiveMatchesUpdate>> =
+        None;
+    let mut live_matches_next_refresh = Instant::now();
+    let mut toast: Option<(String, Instant)> = None;
     let frame_duration = Duration::from_micros(18281);
 
     ghost::drain_upload_queue(&cfg.stats_url);
@@ -255,14 +323,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         if let Some(session_id) = rpc::take_spectate_request() {
             println!("[main] Spectate request received: session_id={session_id}");
-            state = AppState::Menu(MenuScreen::TestResult {
-                lines: vec![
-                    "Spectate request received".into(),
-                    format!("session_id={session_id}"),
-                    String::new(),
-                    "Spectator playback UI is not implemented yet.".into(),
-                    "The Discord spectate secret is now routed separately.".into(),
-                ],
+            let (tx, rx) = std::sync::mpsc::channel();
+            spectate_rx = Some(rx);
+            spectate_last_update = Some(Instant::now());
+            matchmaking::watch_spectate_state(session_id.clone(), tx);
+            state = AppState::Menu(MenuScreen::Spectate {
+                session_id,
+                status: menu::SpectateStatus::waiting(),
             });
         }
 
@@ -272,7 +339,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 Event::ControllerDeviceAdded { which, .. } => {
                     match controller_subsystem.open(which) {
-                        Ok(c) => assign_pad(&mut pads, c),
+                        Ok(c) => {
+                            let name = c.name();
+                            assign_pad(&mut pads, c);
+                            toast = Some((
+                                format!("Controller connected: {name}"),
+                                Instant::now() + Duration::from_millis(2200),
+                            ));
+                        }
                         Err(e) => println!("Failed to open controller {which}: {e}"),
                     }
                 }
@@ -283,6 +357,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 println!("P{} controller disconnected", i + 1);
                                 *slot = None;
                                 input::clear_all_inputs();
+                                toast = Some((
+                                    format!("P{} controller disconnected", i + 1),
+                                    Instant::now() + Duration::from_millis(2200),
+                                ));
                             }
                         }
                     }
@@ -316,6 +394,123 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     cfg.bindings = Bindings::default();
                     config::save(&cfg);
                     println!("Bindings reset to defaults");
+                    toast = Some((
+                        "Bindings reset to defaults".into(),
+                        Instant::now() + Duration::from_millis(2200),
+                    ));
+                }
+
+                Event::KeyDown {
+                    keycode: Some(Keycode::R),
+                    repeat: false,
+                    ..
+                } if matches!(state, AppState::Menu(MenuScreen::LiveMatches { .. })) => {
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    live_matches_rx = Some(rx);
+                    matchmaking::fetch_live_matches(tx);
+                    live_matches_next_refresh = Instant::now() + Duration::from_secs(7);
+                    if let AppState::Menu(MenuScreen::LiveMatches { ref mut status, .. }) = state {
+                        *status = "Refreshing active matches...".into();
+                    }
+                    toast = Some((
+                        "Refreshing active matches".into(),
+                        Instant::now() + Duration::from_millis(1800),
+                    ));
+                }
+
+                Event::KeyDown {
+                    keycode: Some(Keycode::R),
+                    repeat: false,
+                    ..
+                } if matches!(state, AppState::Menu(MenuScreen::Leaderboard { .. })) => {
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    leaderboard_rx = Some(rx);
+                    matchmaking::fetch_leaderboard(cfg.stats_url.clone(), tx);
+                    if let AppState::Menu(MenuScreen::Leaderboard { ref mut state }) = state {
+                        *state = menu::LeaderboardState::Loading;
+                    }
+                    toast = Some((
+                        "Refreshing leaderboard".into(),
+                        Instant::now() + Duration::from_millis(1800),
+                    ));
+                }
+
+                Event::KeyDown {
+                    keycode: Some(Keycode::C),
+                    repeat: false,
+                    ..
+                } if matches!(state, AppState::Menu(MenuScreen::Spectate { .. })) => {
+                    if let AppState::Menu(MenuScreen::Spectate {
+                        ref session_id,
+                        ref mut status,
+                    }) = state
+                    {
+                        let link = format!("xband://watch/{session_id}");
+                        match video_subsystem.clipboard().set_clipboard_text(&link) {
+                            Ok(()) => {
+                                status.message = "Watch link copied to clipboard.".into();
+                                toast = Some((
+                                    "Watch link copied".into(),
+                                    Instant::now() + Duration::from_millis(2200),
+                                ));
+                            }
+                            Err(e) => {
+                                status.message = format!("Copy failed: {e}");
+                                toast = Some((
+                                    "Copy failed".into(),
+                                    Instant::now() + Duration::from_millis(2200),
+                                ));
+                            }
+                        }
+                    }
+                }
+
+                Event::KeyDown {
+                    keycode: Some(Keycode::Left),
+                    repeat: false,
+                    ..
+                } if matches!(
+                    state,
+                    AppState::Menu(MenuScreen::Settings { cursor: 2, .. })
+                ) =>
+                {
+                    cfg.volume_percent = cfg.volume_percent.saturating_sub(10);
+                    config::save(&cfg);
+                    if let AppState::Menu(MenuScreen::Settings {
+                        ref mut volume_percent,
+                        ..
+                    }) = state
+                    {
+                        *volume_percent = cfg.volume_percent;
+                    }
+                    toast = Some((
+                        format!("Volume {}%", cfg.volume_percent),
+                        Instant::now() + Duration::from_millis(1800),
+                    ));
+                }
+
+                Event::KeyDown {
+                    keycode: Some(Keycode::Right),
+                    repeat: false,
+                    ..
+                } if matches!(
+                    state,
+                    AppState::Menu(MenuScreen::Settings { cursor: 2, .. })
+                ) =>
+                {
+                    cfg.volume_percent = cfg.volume_percent.saturating_add(10).min(100);
+                    config::save(&cfg);
+                    if let AppState::Menu(MenuScreen::Settings {
+                        ref mut volume_percent,
+                        ..
+                    }) = state
+                    {
+                        *volume_percent = cfg.volume_percent;
+                    }
+                    toast = Some((
+                        format!("Volume {}%", cfg.volume_percent),
+                        Instant::now() + Duration::from_millis(1800),
+                    ));
                 }
 
                 Event::TextInput { text, .. }
@@ -359,6 +554,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         discord_user = None;
                         discord_id = None;
                         println!("[auth] Signed out");
+                    }
+                }
+
+                // Launch diagnostics on demand from menu screens.
+                Event::KeyDown {
+                    keycode: Some(Keycode::D),
+                    keymod,
+                    repeat: false,
+                    ..
+                } if matches!(state, AppState::Menu(_))
+                    && keymod.intersects(Mod::LSHIFTMOD | Mod::RSHIFTMOD) =>
+                {
+                    if let Err(e) = launch_debugger() {
+                        println!("[doctor] failed to launch: {e}");
                     }
                 }
 
@@ -457,11 +666,203 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         });
                                     }
                                 }
+                                NavResult::OpenLiveMatches => {
+                                    let (tx, rx) = std::sync::mpsc::channel();
+                                    live_matches_rx = Some(rx);
+                                    matchmaking::fetch_live_matches(tx);
+                                    live_matches_next_refresh =
+                                        Instant::now() + Duration::from_secs(7);
+                                }
+                                NavResult::OpenLeaderboard => {
+                                    let (tx, rx) = std::sync::mpsc::channel();
+                                    leaderboard_rx = Some(rx);
+                                    matchmaking::fetch_leaderboard(cfg.stats_url.clone(), tx);
+                                }
+                                NavResult::OpenSettings => {
+                                    state = AppState::Menu(MenuScreen::Settings {
+                                        cursor: 0,
+                                        discord_rpc_enabled: cfg.discord_rpc_enabled,
+                                        fullscreen: cfg.fullscreen,
+                                        volume_percent: cfg.volume_percent,
+                                    });
+                                }
+                                NavResult::OpenTraining => {
+                                    state = AppState::Menu(MenuScreen::Training {
+                                        cursor: 0,
+                                        hitboxes: trainer.is_enabled("hitboxes"),
+                                        infinite_health: trainer.is_enabled("p1_health"),
+                                        freeze_timer: trainer.is_enabled("freeze_timer"),
+                                    });
+                                }
+                                NavResult::WatchSession(session_id) => {
+                                    let (tx, rx) = std::sync::mpsc::channel();
+                                    spectate_rx = Some(rx);
+                                    spectate_last_update = Some(Instant::now());
+                                    matchmaking::watch_spectate_state(session_id, tx);
+                                }
                                 NavResult::SignOut => {
                                     matchmaking::clear_cached_token();
                                     discord_user = None;
                                     discord_id = None;
                                     println!("[auth] Signed out");
+                                }
+                                NavResult::ToggleDiscordRpc => {
+                                    cfg.discord_rpc_enabled = !cfg.discord_rpc_enabled;
+                                    config::save(&cfg);
+                                    if cfg.discord_rpc_enabled {
+                                        crate::rpc::set_discord_client_id(
+                                            cfg.discord_client_id.clone(),
+                                        );
+                                        rpc_client = rpc::RpcClient::init();
+                                    } else {
+                                        rpc_client = None;
+                                    }
+                                    if let AppState::Menu(MenuScreen::Settings {
+                                        ref mut discord_rpc_enabled,
+                                        ..
+                                    }) = state
+                                    {
+                                        *discord_rpc_enabled = cfg.discord_rpc_enabled;
+                                    }
+                                    toast = Some((
+                                        format!(
+                                            "Discord Rich Presence {}",
+                                            if cfg.discord_rpc_enabled {
+                                                "enabled"
+                                            } else {
+                                                "disabled"
+                                            }
+                                        ),
+                                        Instant::now() + Duration::from_millis(2200),
+                                    ));
+                                }
+                                NavResult::ToggleFullscreen => {
+                                    cfg.fullscreen = !cfg.fullscreen;
+                                    config::save(&cfg);
+                                    let result = if cfg.fullscreen {
+                                        canvas.window_mut().set_fullscreen(FullscreenType::Desktop)
+                                    } else {
+                                        canvas.window_mut().set_fullscreen(FullscreenType::Off)
+                                    };
+                                    if let AppState::Menu(MenuScreen::Settings {
+                                        ref mut fullscreen,
+                                        ..
+                                    }) = state
+                                    {
+                                        *fullscreen = cfg.fullscreen;
+                                    }
+                                    toast = Some((
+                                        match result {
+                                            Ok(()) => format!(
+                                                "Fullscreen {}",
+                                                if cfg.fullscreen {
+                                                    "enabled"
+                                                } else {
+                                                    "disabled"
+                                                }
+                                            ),
+                                            Err(e) => format!("Fullscreen failed: {e}"),
+                                        },
+                                        Instant::now() + Duration::from_millis(2200),
+                                    ));
+                                }
+                                NavResult::AdjustVolume(delta) => {
+                                    if delta < 0 {
+                                        cfg.volume_percent =
+                                            cfg.volume_percent.saturating_sub(delta.unsigned_abs());
+                                    } else {
+                                        cfg.volume_percent =
+                                            cfg.volume_percent.saturating_add(delta as u8).min(100);
+                                    }
+                                    config::save(&cfg);
+                                    if let AppState::Menu(MenuScreen::Settings {
+                                        ref mut volume_percent,
+                                        ..
+                                    }) = state
+                                    {
+                                        *volume_percent = cfg.volume_percent;
+                                    }
+                                    toast = Some((
+                                        format!("Volume {}%", cfg.volume_percent),
+                                        Instant::now() + Duration::from_millis(1800),
+                                    ));
+                                }
+                                NavResult::ToggleTraining(kind) => {
+                                    match kind {
+                                        "hitboxes" => {
+                                            let on = !trainer.is_enabled("hitboxes");
+                                            trainer.set_enabled("hitboxes", on);
+                                        }
+                                        "health" => {
+                                            let on = !trainer.is_enabled("p1_health");
+                                            trainer.set_enabled("p1_health", on);
+                                            trainer.set_enabled("p2_health", on);
+                                        }
+                                        "timer" => {
+                                            let on = !trainer.is_enabled("freeze_timer");
+                                            trainer.set_enabled("freeze_timer", on);
+                                        }
+                                        _ => {}
+                                    }
+                                    if let AppState::Menu(MenuScreen::Training {
+                                        ref mut hitboxes,
+                                        ref mut infinite_health,
+                                        ref mut freeze_timer,
+                                        ..
+                                    }) = state
+                                    {
+                                        *hitboxes = trainer.is_enabled("hitboxes");
+                                        *infinite_health = trainer.is_enabled("p1_health");
+                                        *freeze_timer = trainer.is_enabled("freeze_timer");
+                                    }
+                                    let label = match kind {
+                                        "hitboxes" => "Hitbox view",
+                                        "health" => "Infinite health",
+                                        "timer" => "Freeze timer",
+                                        _ => "Training helper",
+                                    };
+                                    let on = match kind {
+                                        "hitboxes" => trainer.is_enabled("hitboxes"),
+                                        "health" => trainer.is_enabled("p1_health"),
+                                        "timer" => trainer.is_enabled("freeze_timer"),
+                                        _ => false,
+                                    };
+                                    toast = Some((
+                                        format!("{label} {}", if on { "ON" } else { "OFF" }),
+                                        Instant::now() + Duration::from_millis(1800),
+                                    ));
+                                }
+                                NavResult::LaunchDoctor => match launch_debugger() {
+                                    Ok(()) => {
+                                        toast = Some((
+                                            "Doctor launched".into(),
+                                            Instant::now() + Duration::from_millis(2200),
+                                        ));
+                                    }
+                                    Err(e) => {
+                                        toast = Some((
+                                            format!("Doctor failed: {e}"),
+                                            Instant::now() + Duration::from_millis(2600),
+                                        ));
+                                    }
+                                },
+                                NavResult::OpenLogsFolder => {
+                                    let target = std::env::current_dir()
+                                        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+                                    match open::that(&target) {
+                                        Ok(()) => {
+                                            toast = Some((
+                                                "Logs folder opened".into(),
+                                                Instant::now() + Duration::from_millis(2200),
+                                            ));
+                                        }
+                                        Err(e) => {
+                                            toast = Some((
+                                                format!("Open failed: {e}"),
+                                                Instant::now() + Duration::from_millis(2600),
+                                            ));
+                                        }
+                                    }
                                 }
                                 NavResult::RunProbe { peer } => {
                                     let (_rom_size, rom_hash_u64) = rom_fingerprint();
@@ -483,6 +884,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     cfg.bindings.get_mut(player).clear_all();
                                     config::save(&cfg);
                                     println!("Cleared all bindings for {}", player.label());
+                                    toast = Some((
+                                        format!("Cleared bindings for {}", player.label()),
+                                        Instant::now() + Duration::from_millis(2200),
+                                    ));
                                 }
                                 NavResult::Stay => {}
                                 NavResult::LoadGhost(path) => {
@@ -534,10 +939,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Event::KeyDown {
                         keycode: Some(Keycode::F1),
                         ..
-                    }
-                    | Event::KeyDown {
-                        keycode: Some(Keycode::Escape),
-                        ..
                     } => {
                         if net_session.is_some() {
                             net_teardown_reason = Some("you quit the match".into());
@@ -545,6 +946,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             input::clear_all_inputs();
                             state = AppState::Menu(MenuScreen::Main { cursor: 0 });
                         }
+                    }
+                    Event::KeyDown {
+                        keycode: Some(Keycode::Escape),
+                        ..
+                    } if net_session.is_none() => {
+                        input::clear_all_inputs();
+                        state = AppState::Menu(MenuScreen::Main { cursor: 0 });
                     }
                     Event::KeyDown {
                         keycode: Some(Keycode::F5),
@@ -611,6 +1019,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let on = !trainer.is_enabled("hitboxes");
                         trainer.set_enabled("hitboxes", on);
                         println!("[trainer] Hitbox view: {}", if on { "ON" } else { "OFF" });
+                        toast = Some((
+                            format!("Hitbox view {}", if on { "ON" } else { "OFF" }),
+                            Instant::now() + Duration::from_millis(1800),
+                        ));
                     }
                     Event::KeyDown {
                         keycode: Some(Keycode::F3),
@@ -624,6 +1036,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             "[trainer] Infinite health: {}",
                             if on { "ON" } else { "OFF" }
                         );
+                        toast = Some((
+                            format!("Infinite health {}", if on { "ON" } else { "OFF" }),
+                            Instant::now() + Duration::from_millis(1800),
+                        ));
                     }
                     Event::KeyDown {
                         keycode: Some(Keycode::F4),
@@ -633,6 +1049,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let on = !trainer.is_enabled("freeze_timer");
                         trainer.set_enabled("freeze_timer", on);
                         println!("[trainer] Freeze timer: {}", if on { "ON" } else { "OFF" });
+                        toast = Some((
+                            format!("Freeze timer {}", if on { "ON" } else { "OFF" }),
+                            Instant::now() + Duration::from_millis(1800),
+                        ));
                     }
                     Event::KeyDown {
                         keycode: Some(Keycode::F6),
@@ -938,6 +1358,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
 
                         net_frame_counter = net_frame_counter.wrapping_add(1);
+                        if net_frame_counter >= net_spectate_next {
+                            net_spectate_next = net_frame_counter.wrapping_add(165);
+                            if let Some(ref sid) = mm_session_id {
+                                session::push_spectator_frame(
+                                    sid,
+                                    session_p1_wins.min(u16::MAX as u32) as u16,
+                                    session_p2_wins.min(u16::MAX as u32) as u16,
+                                    net_frame_counter,
+                                );
+                            }
+                        }
                         if net_frame_counter >= net_stats_next_frame {
                             net_stats_next_frame = net_frame_counter.wrapping_add(275);
                             let remote_handle = 1 - local_handle;
@@ -987,20 +1418,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         if (ghost_port_mask & 0b01) != 0 {
                                             INPUT_STATE[0][b] = (p1_input >> b) & 1 != 0;
                                         }
-                                    }
-                                }
-
-                                // Push spectator frame to signaling server every ~3s
-                                if net_frame_counter >= net_spectate_next {
-                                    net_spectate_next = net_frame_counter.wrapping_add(165);
-                                    if let Some(ref sid) = mm_session_id {
-                                        let now_score = score::Score::read(c);
-                                        session::push_spectator_frame(
-                                            sid,
-                                            now_score.p1_match_wins,
-                                            now_score.p2_match_wins,
-                                            net_frame_counter,
-                                        );
                                     }
                                 }
                             } else {
@@ -1080,7 +1497,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if !AUDIO_BUFFER.is_empty() {
                                 let max_queued_bytes = (q.spec().freq as u32) * 2 * 2 / 5;
                                 if q.size() < max_queued_bytes {
-                                    let _ = q.queue_audio(&AUDIO_BUFFER);
+                                    if cfg.volume_percent >= 100 {
+                                        let _ = q.queue_audio(&AUDIO_BUFFER);
+                                    } else {
+                                        let scaled =
+                                            apply_volume(&AUDIO_BUFFER, cfg.volume_percent);
+                                        let _ = q.queue_audio(&scaled);
+                                    }
                                 }
                                 AUDIO_BUFFER.clear();
                             }
@@ -1094,13 +1517,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             use std::io::Write;
                             let _ = writeln!(f, "{line}");
                         }
-                        let user_quit = reason == "you quit the match"
-                            || reason.starts_with("match limit reached");
-                        let teardown_lines: Vec<String> = if user_quit {
-                            Vec::new()
-                        } else {
+                        let intentional_quit = reason == "you quit the match";
+                        let completed_set = reason.starts_with("match limit reached");
+                        let player_role = if local_handle == 0 { "P1" } else { "P2" };
+                        let opponent = peer_name.as_deref().unwrap_or("Opponent");
+                        let final_score =
+                            format!("Final score: P1 {session_p1_wins} - {session_p2_wins} P2");
+                        let duration = format!(
+                            "Duration: {} frames (~{:.1}s)",
+                            net_frame_counter,
+                            net_frame_counter as f32 / 55.0
+                        );
+                        let teardown_lines: Vec<String> = if completed_set {
                             vec![
-                                format!("Reason: {reason}"),
+                                "OK Set complete.".into(),
+                                final_score,
+                                format!("You were {player_role} vs {opponent}."),
+                                duration,
+                                format!("Matches completed: {}", net_match_count),
+                                String::new(),
+                                "Results and ghosts finalized where available.".into(),
+                                "ENTER returns to the main menu.".into(),
+                            ]
+                        } else if intentional_quit {
+                            vec![
+                                "You left the match.".into(),
+                                final_score,
+                                format!("You were {player_role} vs {opponent}."),
+                                duration,
+                                format!("Matches completed: {}", net_match_count),
+                                String::new(),
+                                "Partial match data was saved where possible.".into(),
+                                "ENTER returns to the main menu.".into(),
+                            ]
+                        } else {
+                            let headline = if reason.contains("disconnected") {
+                                "Your opponent disconnected."
+                            } else if reason.contains("timed out") {
+                                "The connection stopped responding."
+                            } else {
+                                "The online match ended early."
+                            };
+                            vec![
+                                headline.into(),
+                                String::new(),
+                                format!("Details: {reason}"),
                                 format!(
                                     "Session ran for {} frames (~{:.1}s)",
                                     net_frame_counter,
@@ -1108,14 +1569,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 ),
                                 format!("Matches completed: {}", net_match_count),
                                 String::new(),
-                                "FAIL Session dropped unexpectedly.".into(),
-                                "".into(),
-                                "Common causes:".into(),
-                                "  - peer closed Freeplay / lost network".into(),
-                                "  - ROM or Freeplay build mismatch between peers".into(),
-                                "  - desync detected (check log for DESYNC line)".into(),
-                                "".into(),
-                                "Full trace: freeplay-net.log".into(),
+                                "WARN Match data was saved where possible.".into(),
+                                "You can return to the menu and queue again.".into(),
+                                "Log: freeplay-net.log".into(),
                             ]
                         };
                         let (_rom_size, rom_hash_u64) = rom_fingerprint();
@@ -1132,6 +1588,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         net_in_fight = false;
                         net_frames_since_progress = 0;
                         net_stats_next_frame = 0;
+                        net_spectate_next = 165;
                         net_frame_counter = 0;
                         net_runtime = NetRuntime::default();
                         net_log = None;
@@ -1152,13 +1609,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         trainer.set_enabled("p2_health", false);
                         trainer.set_enabled("freeze_timer", false);
                         input::clear_all_inputs();
-                        state = if teardown_lines.is_empty() {
-                            AppState::Menu(MenuScreen::Main { cursor: 0 })
-                        } else {
-                            AppState::Menu(MenuScreen::TestResult {
-                                lines: teardown_lines,
-                            })
-                        };
+                        state = AppState::Menu(MenuScreen::SessionEnded {
+                            lines: teardown_lines,
+                        });
                     }
                 }
                 draw_emu_frame(&mut canvas, &mut emu_texture, &texture_creator)?;
@@ -1418,6 +1871,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     win_h as i32,
                     rom_present(),
                     discord_user.as_deref(),
+                    toast_payload(&toast),
                 )
                 .map_err(|e| format!("menu draw: {e}"))?;
                 canvas.present();
@@ -1432,6 +1886,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     video_subsystem.text_input().start();
                 } else {
                     video_subsystem.text_input().stop();
+                }
+
+                if matches!(state, AppState::Menu(menu::MenuScreen::LiveMatches { .. }))
+                    && live_matches_rx.is_none()
+                    && Instant::now() >= live_matches_next_refresh
+                {
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    live_matches_rx = Some(rx);
+                    matchmaking::fetch_live_matches(tx);
+                    live_matches_next_refresh = Instant::now() + Duration::from_secs(7);
                 }
 
                 // Populate GhostSelect entries when entering the screen.
@@ -1524,6 +1988,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
 
+                // Drain the leaderboard fetcher channel.
+                if let Some(rx) = &leaderboard_rx {
+                    if let AppState::Menu(menu::MenuScreen::Leaderboard { ref mut state }) = state {
+                        match rx.try_recv() {
+                            Ok(matchmaking::LeaderboardUpdate::Loaded(rows)) => {
+                                *state = menu::LeaderboardState::Loaded(rows);
+                                leaderboard_rx = None;
+                            }
+                            Ok(matchmaking::LeaderboardUpdate::Error(message)) => {
+                                *state = menu::LeaderboardState::Error(message);
+                                leaderboard_rx = None;
+                            }
+                            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                                leaderboard_rx = None;
+                            }
+                        }
+                    } else {
+                        leaderboard_rx = None;
+                    }
+                }
+
                 // Drain the avatar download channel — decode and cache.
                 if let Some(rx) = &avatar_rx {
                     if let AppState::Menu(menu::MenuScreen::Profile {
@@ -1549,6 +2035,80 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     } else {
                         avatar_rx = None;
+                    }
+                }
+
+                // Drain the spectator relay poller.
+                if let Some(rx) = &spectate_rx {
+                    if let AppState::Menu(menu::MenuScreen::Spectate { ref mut status, .. }) = state
+                    {
+                        loop {
+                            match rx.try_recv() {
+                                Ok(matchmaking::SpectateUpdate::State(update)) => {
+                                    spectate_last_update = Some(Instant::now());
+                                    status.message = "Live spectator relay connected".into();
+                                    status.frame = update.frame;
+                                    status.p1_score = update.p1_score;
+                                    status.p2_score = update.p2_score;
+                                    status.updated_at = update.updated_at;
+                                }
+                                Ok(matchmaking::SpectateUpdate::Error(message)) => {
+                                    status.message = format!("Relay error: {message}");
+                                }
+                                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                                    spectate_rx = None;
+                                    break;
+                                }
+                            }
+                        }
+                    } else {
+                        spectate_rx = None;
+                        spectate_last_update = None;
+                    }
+                }
+
+                if let AppState::Menu(menu::MenuScreen::Spectate { ref mut status, .. }) = state {
+                    if let Some(last) = spectate_last_update {
+                        if last.elapsed() > Duration::from_secs(15) {
+                            status.message =
+                                "No live updates recently. Match may have ended.".into();
+                        }
+                    }
+                }
+
+                // Drain the live-match browser fetcher.
+                if let Some(rx) = &live_matches_rx {
+                    if let AppState::Menu(menu::MenuScreen::LiveMatches {
+                        ref mut cursor,
+                        ref mut matches,
+                        ref mut status,
+                    }) = state
+                    {
+                        match rx.try_recv() {
+                            Ok(matchmaking::LiveMatchesUpdate::Loaded(list)) => {
+                                *matches = list;
+                                *cursor = 0;
+                                *status = if matches.is_empty() {
+                                    "No active matches right now".into()
+                                } else {
+                                    "Select a match to watch".into()
+                                };
+                                live_matches_rx = None;
+                            }
+                            Ok(matchmaking::LiveMatchesUpdate::Error(message)) => {
+                                matches.clear();
+                                *cursor = 0;
+                                *status = format!("Error: {message}");
+                                live_matches_rx = None;
+                            }
+                            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                                live_matches_rx = None;
+                            }
+                        }
+                    } else {
+                        live_matches_rx = None;
                     }
                 }
 
@@ -1647,6 +2207,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     win_h as i32,
                     rom_present(),
                     discord_user.as_deref(),
+                    toast_payload(&toast),
                 )
                 .map_err(|e| format!("menu draw: {e}"))?;
                 canvas.present();

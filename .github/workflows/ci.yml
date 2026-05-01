@@ -18,3 +18,45 @@ jobs:
       - name: Doctor
         run: cargo run -- --doctor
         continue-on-error: true
+
+  windows-package:
+    name: Windows package
+    runs-on: windows-latest
+    env:
+      VCPKG_DEFAULT_TRIPLET: x64-windows
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install SDL2 runtime/link dependencies
+        shell: pwsh
+        run: |
+          vcpkg install sdl2:x64-windows sdl2-ttf:x64-windows
+          $prefix = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows"
+          "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "LIB=$prefix\lib;$env:LIB" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "INCLUDE=$prefix\include;$env:INCLUDE" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "$prefix\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Build
+        shell: pwsh
+        run: cargo build --release
+
+      - name: Stage SDL DLLs
+        shell: pwsh
+        run: |
+          $bin = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows\bin"
+          Copy-Item "$bin\SDL2.dll" "target\release\SDL2.dll" -Force
+          Copy-Item "$bin\SDL2_ttf.dll" "target\release\SDL2_ttf.dll" -Force
+
+      - name: Package
+        shell: pwsh
+        run: .\package.ps1
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: freeplay-gametalk-windows-${{ github.sha }}
+          path: dist/freeplay-gametalk-v*.zip
+          if-no-files-found: error

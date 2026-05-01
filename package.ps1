@@ -133,32 +133,6 @@ if ($ttf_path) {
     Write-Host "  ⚠ mk2.ttf not found — app will use bitmap fallback" -ForegroundColor Yellow
 }
 
-$regular_ttf_path = @("src\media\regular.ttf", "media\regular.ttf", "regular.ttf") |
-    Where-Object { Test-Path $_ } |
-    Select-Object -First 1
-if ($regular_ttf_path) {
-    New-Item -ItemType Directory -Force -Path "$OUT_DIR\media" | Out-Null
-    Copy-Item $regular_ttf_path "$OUT_DIR\media\regular.ttf" -Force
-    Write-Host "  ✓ Copied regular.ttf → media\regular.ttf"
-}
-
-$n27_ttf_path = @(
-    "src\media\N27-Regular.ttf",
-    "media\N27-Regular.ttf",
-    "N27-Regular.ttf",
-    "src\media\N27-Regular.otf",
-    "media\N27-Regular.otf",
-    "N27-Regular.otf"
-) |
-    Where-Object { Test-Path $_ } |
-    Select-Object -First 1
-if ($n27_ttf_path) {
-    New-Item -ItemType Directory -Force -Path "$OUT_DIR\media" | Out-Null
-    $n27_ext = [IO.Path]::GetExtension($n27_ttf_path)
-    Copy-Item $n27_ttf_path "$OUT_DIR\media\N27-Regular$n27_ext" -Force
-    Write-Host "  ✓ Copied N27-Regular$n27_ext → media\N27-Regular$n27_ext"
-}
-
 if (Test-Path "src\app_icon.bmp") {
     Copy-Item "src\app_icon.bmp" "$OUT_DIR\app_icon.bmp" -Force
     Write-Host "  ✓ Copied app_icon.bmp"

@@ -48,9 +48,6 @@ FREEPLAY_SIGNALING_URL=https://your-signaling-service.example.com
 FREEPLAY_STATS_URL=https://your-stats-service.example.com
 FREEPLAY_DISCORD_CLIENT_ID=your-discord-application-id
 FREEPLAY_DISCORD_WEBHOOK_URL=
-
-# Optional scoreboard font override. Relative paths are resolved from the app cwd.
-FREEPLAY_SCOREBOARD_FONT=media/N27-Regular.otf
 ```
 
 `.env` is ignored by git. Keep real service URLs, Discord IDs, and webhook URLs
@@ -123,11 +120,15 @@ executable, runtime DLLs, media assets, app icon, registry helper, and an empty
 
 GitHub Actions includes `.github/workflows/release.yml`.
 
+Regular pushes and pull requests also run CI and upload a Windows package
+artifact from the **CI** workflow. Use a version tag when you want that build
+published as a GitHub Release.
+
 Create and publish a release by pushing a version tag:
 
 ```powershell
-git tag v0.4.1
-git push origin v0.4.1
+git tag v0.4.2
+git push origin v0.4.2
 ```
 
 You can also run the **Release** workflow manually from GitHub Actions and
@@ -231,7 +232,7 @@ git ls-files
 ```
 
 `freeplay --doctor` checks local setup without opening the SDL window: `.env`,
-backend values, ROM zip, FBNeo core, and scoreboard font.
+backend values, ROM zip, FBNeo core, and the mk2 scoreboard font.
 
 ## Notes For Contributors
 

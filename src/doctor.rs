@@ -73,23 +73,9 @@ pub fn run() -> i32 {
         true,
     );
 
-    let scoreboard_font = crate::config::env_value("FREEPLAY_SCOREBOARD_FONT")
-        .and_then(|p| path_if_exists(&p))
-        .or_else(|| {
-            first_existing(&[
-                "media/N27-Regular.ttf",
-                "src/media/N27-Regular.ttf",
-                "N27-Regular.ttf",
-                "media/N27-Regular.otf",
-                "src/media/N27-Regular.otf",
-                "N27-Regular.otf",
-                "media/regular.ttf",
-                "src/media/regular.ttf",
-                "regular.ttf",
-            ])
-        });
+    let scoreboard_font = first_existing(&["media/mk2.ttf", "src/media/mk2.ttf", "mk2.ttf"]);
     check_path(
-        "scoreboard font",
+        "mk2 scoreboard font",
         scoreboard_font.as_deref(),
         "optional; falls back if missing",
         &mut ok,

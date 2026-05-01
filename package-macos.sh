@@ -26,9 +26,6 @@ fi
 [ -f "LICENSE" ] && cp "LICENSE" "$OUT_DIR/LICENSE"
 [ -f "NOTICE.md" ] && cp "NOTICE.md" "$OUT_DIR/NOTICE.md"
 [ -f "src/media/mk2.ttf" ] && cp "src/media/mk2.ttf" "$OUT_DIR/media/mk2.ttf"
-for font in "src/media/N27-Regular.otf" "src/media/N27-Regular.ttf" "src/media/regular.ttf"; do
-  [ -f "$font" ] && cp "$font" "$OUT_DIR/media/"
-done
 
 cat > "$OUT_DIR/roms/README.txt" <<'EOF'
 Place your legally-obtained ROM zip here.

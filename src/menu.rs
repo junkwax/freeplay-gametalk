@@ -1,7 +1,7 @@
 //! In-engine menu: list-based screens, pad/keyboard navigation, rebind flow.
 use crate::font::Font;
 use crate::input::{is_action_active, Action, Binding, Bindings, Player, PlayerBindings};
-use crate::matchmaking::{HistoryRow, ProfileData, RemoteGhostMeta};
+use crate::matchmaking::{HistoryRow, LeaderboardRow, LiveMatch, ProfileData, RemoteGhostMeta};
 use crate::version;
 use sdl2::pixels::Color;
 use sdl2::rect::Rect;
@@ -51,6 +51,11 @@ pub enum MenuScreen {
     TestResult {
         lines: Vec<String>,
     },
+    /// Netplay session exit summary. Used for disconnects/timeouts so the user
+    /// gets a calm end screen instead of a diagnostics-style failure panel.
+    SessionEnded {
+        lines: Vec<String>,
+    },
     /// Automated matchmaking via the signaling server. `status` is a
     /// human-readable progress string updated by the background thread.
     Matchmaking {
@@ -69,6 +74,37 @@ pub enum MenuScreen {
     /// asynchronously — main.rs swaps the inner state as the fetch completes.
     Profile {
         state: ProfileScreenState,
+    },
+    /// Community rating leaderboard fetched from freeplay-stats.
+    Leaderboard {
+        state: LeaderboardState,
+    },
+    /// Small utility/settings panel for runtime toggles and diagnostics.
+    Settings {
+        cursor: usize,
+        discord_rpc_enabled: bool,
+        fullscreen: bool,
+        volume_percent: u8,
+    },
+    /// Practice/training helpers backed by RAM pokes already used by F-keys.
+    Training {
+        cursor: usize,
+        hitboxes: bool,
+        infinite_health: bool,
+        freeze_timer: bool,
+    },
+    /// Active online matches fetched from the signaling server.
+    LiveMatches {
+        cursor: usize,
+        matches: Vec<LiveMatch>,
+        status: String,
+    },
+    /// Live spectator view for a remote match. The signaling server currently
+    /// exposes score/frame status, so this screen updates those values while
+    /// full video playback is still future work.
+    Spectate {
+        session_id: String,
+        status: SpectateStatus,
     },
 }
 
@@ -98,6 +134,43 @@ pub enum ProfileScreenState {
     },
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LeaderboardState {
+    Loading,
+    Error(String),
+    Loaded(Vec<LeaderboardRow>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SpectateStatus {
+    pub message: String,
+    pub p1_name: String,
+    pub p2_name: String,
+    pub frame: Option<u32>,
+    pub p1_score: u32,
+    pub p2_score: u32,
+    pub updated_at: Option<String>,
+}
+
+pub struct Toast<'a> {
+    pub message: &'a str,
+    pub remaining_ms: u128,
+}
+
+impl SpectateStatus {
+    pub fn waiting() -> Self {
+        Self {
+            message: "Connecting to spectator relay...".into(),
+            p1_name: "P1".into(),
+            p2_name: "P2".into(),
+            frame: None,
+            p1_score: 0,
+            p2_score: 0,
+            updated_at: None,
+        }
+    }
+}
+
 impl Default for AppState {
     fn default() -> Self {
         AppState::Menu(MenuScreen::Main { cursor: 0 })
@@ -105,15 +178,28 @@ impl Default for AppState {
 }
 
 /// Main menu items, in order.
-pub const MAIN_ITEMS: [&str; 7] = [
+pub const MAIN_ITEMS: [&str; 11] = [
     "Practice",
     "Find Match",
+    "Watch Live",
     "Profile",
+    "Leaderboard",
     "Load Ghosts",
     "Controls",
+    "Training",
+    "Settings",
     "About",
     "Quit",
 ];
+
+const SETTINGS_ITEMS: [&str; 5] = [
+    "Discord Rich Presence",
+    "Fullscreen",
+    "Volume",
+    "Run Doctor",
+    "Open Logs Folder",
+];
+const TRAINING_ITEMS: [&str; 3] = ["Hitbox View", "Infinite Health", "Freeze Timer"];
 
 pub enum NavResult {
     Stay,
@@ -123,6 +209,12 @@ pub enum NavResult {
     /// Open the Profile screen — main.rs kicks off a background fetch from
     /// freeplay-stats and updates the screen state as the response lands.
     OpenProfile,
+    /// Open the active match browser.
+    OpenLiveMatches,
+    /// Open community leaderboard.
+    OpenLeaderboard,
+    /// Open Settings screen.
+    OpenSettings,
     /// Entered GhostSelect — main.rs populates the local list and (if a stats
     /// URL is configured) spawns a background `/ghosts/list` fetch.
     OpenGhostSelect,
@@ -141,6 +233,22 @@ pub enum NavResult {
     /// Sign out of Discord and clear the cached token.
     #[allow(dead_code)]
     SignOut,
+    /// Open the spectator screen for a selected live session.
+    WatchSession(String),
+    /// Toggle Discord Rich Presence at runtime and persist config.
+    ToggleDiscordRpc,
+    /// Toggle desktop fullscreen and persist config.
+    ToggleFullscreen,
+    /// Adjust audio volume by signed percentage points.
+    AdjustVolume(i8),
+    /// Open Training helper menu.
+    OpenTraining,
+    /// Toggle named training helper.
+    ToggleTraining(&'static str),
+    /// Launch the external setup diagnostics window.
+    LaunchDoctor,
+    /// Open the folder where runtime logs are written.
+    OpenLogsFolder,
 }
 
 impl AppState {
@@ -153,6 +261,15 @@ impl AppState {
                 *cursor = cursor.saturating_sub(1);
             }
             AppState::Menu(MenuScreen::GhostSelect { cursor, .. }) => {
+                *cursor = cursor.saturating_sub(1);
+            }
+            AppState::Menu(MenuScreen::LiveMatches { cursor, .. }) => {
+                *cursor = cursor.saturating_sub(1);
+            }
+            AppState::Menu(MenuScreen::Settings { cursor, .. }) => {
+                *cursor = cursor.saturating_sub(1);
+            }
+            AppState::Menu(MenuScreen::Training { cursor, .. }) => {
                 *cursor = cursor.saturating_sub(1);
             }
             _ => {}
@@ -175,6 +292,23 @@ impl AppState {
                 cursor, entries, ..
             }) => {
                 if *cursor + 1 < entries.len() {
+                    *cursor += 1;
+                }
+            }
+            AppState::Menu(MenuScreen::LiveMatches {
+                cursor, matches, ..
+            }) => {
+                if *cursor + 1 < matches.len() {
+                    *cursor += 1;
+                }
+            }
+            AppState::Menu(MenuScreen::Settings { cursor, .. }) => {
+                if *cursor + 1 < SETTINGS_ITEMS.len() {
+                    *cursor += 1;
+                }
+            }
+            AppState::Menu(MenuScreen::Training { cursor, .. }) => {
+                if *cursor + 1 < TRAINING_ITEMS.len() {
                     *cursor += 1;
                 }
             }
@@ -210,13 +344,29 @@ impl AppState {
                     NavResult::StartMatchmaking
                 }
                 2 => {
+                    // Watch Live
+                    *self = AppState::Menu(MenuScreen::LiveMatches {
+                        cursor: 0,
+                        matches: vec![],
+                        status: "Loading active matches...".into(),
+                    });
+                    NavResult::OpenLiveMatches
+                }
+                3 => {
                     // Profile
                     *self = AppState::Menu(MenuScreen::Profile {
                         state: ProfileScreenState::Loading,
                     });
                     NavResult::OpenProfile
                 }
-                3 => {
+                4 => {
+                    // Leaderboard
+                    *self = AppState::Menu(MenuScreen::Leaderboard {
+                        state: LeaderboardState::Loading,
+                    });
+                    NavResult::OpenLeaderboard
+                }
+                5 => {
                     // Load Ghosts
                     *self = AppState::Menu(MenuScreen::GhostSelect {
                         cursor: 0,
@@ -225,7 +375,7 @@ impl AppState {
                     });
                     NavResult::OpenGhostSelect
                 }
-                4 => {
+                6 => {
                     // Controls
                     *self = AppState::Menu(MenuScreen::Controls {
                         cursor: 0,
@@ -233,12 +383,32 @@ impl AppState {
                     });
                     NavResult::Stay
                 }
-                5 => {
+                7 => {
+                    // Training
+                    *self = AppState::Menu(MenuScreen::Training {
+                        cursor: 0,
+                        hitboxes: false,
+                        infinite_health: false,
+                        freeze_timer: false,
+                    });
+                    NavResult::OpenTraining
+                }
+                8 => {
+                    // Settings
+                    *self = AppState::Menu(MenuScreen::Settings {
+                        cursor: 0,
+                        discord_rpc_enabled: false,
+                        fullscreen: false,
+                        volume_percent: 100,
+                    });
+                    NavResult::OpenSettings
+                }
+                9 => {
                     // About
                     *self = AppState::Menu(MenuScreen::About);
                     NavResult::Stay
                 }
-                6 => NavResult::Quit,
+                10 => NavResult::Quit,
                 _ => NavResult::Stay,
             },
             AppState::Menu(MenuScreen::Controls { cursor, player }) => {
@@ -269,6 +439,27 @@ impl AppState {
                     NavResult::Stay
                 }
             }
+            AppState::Menu(MenuScreen::LiveMatches {
+                cursor, matches, ..
+            }) => {
+                if let Some(m) = matches.get(cursor) {
+                    *self = AppState::Menu(MenuScreen::Spectate {
+                        session_id: m.session_id.clone(),
+                        status: SpectateStatus {
+                            message: "Opening spectator relay...".into(),
+                            p1_name: m.p1_name.clone(),
+                            p2_name: m.p2_name.clone(),
+                            frame: None,
+                            p1_score: m.p1_score,
+                            p2_score: m.p2_score,
+                            updated_at: None,
+                        },
+                    });
+                    NavResult::WatchSession(m.session_id.clone())
+                } else {
+                    NavResult::OpenLiveMatches
+                }
+            }
             AppState::Menu(MenuScreen::TestIp { ip_text, editing }) => {
                 if editing {
                     match parse_ip_port(&ip_text) {
@@ -287,6 +478,24 @@ impl AppState {
                 });
                 NavResult::Stay
             }
+            AppState::Menu(MenuScreen::Settings { cursor, .. }) => match cursor {
+                0 => NavResult::ToggleDiscordRpc,
+                1 => NavResult::ToggleFullscreen,
+                2 => NavResult::AdjustVolume(10),
+                3 => NavResult::LaunchDoctor,
+                4 => NavResult::OpenLogsFolder,
+                _ => NavResult::Stay,
+            },
+            AppState::Menu(MenuScreen::Training { cursor, .. }) => match cursor {
+                0 => NavResult::ToggleTraining("hitboxes"),
+                1 => NavResult::ToggleTraining("health"),
+                2 => NavResult::ToggleTraining("timer"),
+                _ => NavResult::Stay,
+            },
+            AppState::Menu(MenuScreen::SessionEnded { .. }) => {
+                *self = AppState::Menu(MenuScreen::Main { cursor: 0 });
+                NavResult::Stay
+            }
             _ => NavResult::Stay,
         }
     }
@@ -297,9 +506,15 @@ impl AppState {
             | AppState::Menu(MenuScreen::About)
             | AppState::Menu(MenuScreen::TestIp { .. })
             | AppState::Menu(MenuScreen::TestResult { .. })
+            | AppState::Menu(MenuScreen::SessionEnded { .. })
             | AppState::Menu(MenuScreen::Matchmaking { .. })
             | AppState::Menu(MenuScreen::GhostSelect { .. })
-            | AppState::Menu(MenuScreen::Profile { .. }) => {
+            | AppState::Menu(MenuScreen::Profile { .. })
+            | AppState::Menu(MenuScreen::Leaderboard { .. })
+            | AppState::Menu(MenuScreen::Settings { .. })
+            | AppState::Menu(MenuScreen::Training { .. })
+            | AppState::Menu(MenuScreen::LiveMatches { .. })
+            | AppState::Menu(MenuScreen::Spectate { .. }) => {
                 *self = AppState::Menu(MenuScreen::Main { cursor: 0 });
             }
             _ => {}
@@ -367,6 +582,7 @@ pub fn draw(
     h: i32,
     rom_present: bool,
     discord_user: Option<&str>,
+    toast: Option<Toast<'_>>,
 ) -> Result<(), String> {
     canvas.set_draw_color(Color::RGB(8, 8, 16));
     canvas.clear();
@@ -392,6 +608,9 @@ pub fn draw(
         AppState::Menu(MenuScreen::TestResult { lines }) => {
             draw_test_result(canvas, font, lines, w, h)?
         }
+        AppState::Menu(MenuScreen::SessionEnded { lines }) => {
+            draw_session_ended(canvas, font, lines, w, h)?
+        }
         AppState::Menu(MenuScreen::Matchmaking { status }) => {
             draw_matchmaking(canvas, font, status, w, h)?
         }
@@ -399,6 +618,47 @@ pub fn draw(
             cursor, entries, ..
         }) => draw_ghost_select(canvas, font, *cursor, entries, w, h)?,
         AppState::Menu(MenuScreen::Profile { state }) => draw_profile(canvas, font, state, w, h)?,
+        AppState::Menu(MenuScreen::Leaderboard { state }) => {
+            draw_leaderboard(canvas, font, state, w, h)?
+        }
+        AppState::Menu(MenuScreen::Settings {
+            cursor,
+            discord_rpc_enabled,
+            fullscreen,
+            volume_percent,
+        }) => draw_settings(
+            canvas,
+            font,
+            *cursor,
+            *discord_rpc_enabled,
+            *fullscreen,
+            *volume_percent,
+            w,
+            h,
+        )?,
+        AppState::Menu(MenuScreen::Training {
+            cursor,
+            hitboxes,
+            infinite_health,
+            freeze_timer,
+        }) => draw_training(
+            canvas,
+            font,
+            *cursor,
+            *hitboxes,
+            *infinite_health,
+            *freeze_timer,
+            w,
+            h,
+        )?,
+        AppState::Menu(MenuScreen::LiveMatches {
+            cursor,
+            matches,
+            status,
+        }) => draw_live_matches(canvas, font, *cursor, matches, status, w, h)?,
+        AppState::Menu(MenuScreen::Spectate { session_id, status }) => {
+            draw_spectate(canvas, font, session_id, status, w, h)?
+        }
         AppState::Rebinding {
             action,
             player,
@@ -423,7 +683,267 @@ pub fn draw(
     }
 
     draw_version_footer(canvas, font, w, h)?;
+    if let Some(toast) = toast {
+        draw_toast(canvas, font, &toast, w, h)?;
+    }
     Ok(())
+}
+
+fn draw_toast(
+    canvas: &mut Canvas<Window>,
+    font: &mut Font,
+    toast: &Toast<'_>,
+    w: i32,
+    h: i32,
+) -> Result<(), String> {
+    let small = small_scale(h);
+    let alpha = toast.remaining_ms.min(1800) as u8 / 10 + 70;
+    let text_w = font.text_width_exact(toast.message, small);
+    let pad_x = 14;
+    let box_w = text_w + pad_x * 2;
+    let box_h = 28;
+    let x = (w - box_w) / 2;
+    let y = h - 70;
+
+    canvas.set_draw_color(Color::RGBA(20, 24, 36, alpha));
+    canvas.fill_rect(Rect::new(x, y, box_w as u32, box_h as u32))?;
+    canvas.set_draw_color(Color::RGBA(90, 130, 210, alpha));
+    canvas.draw_rect(Rect::new(x, y, box_w as u32, box_h as u32))?;
+    font.draw(
+        canvas,
+        toast.message,
+        x + pad_x,
+        y + 7,
+        small,
+        Color::RGB(225, 235, 255),
+    )?;
+    Ok(())
+}
+
+fn draw_session_ended(
+    canvas: &mut Canvas<Window>,
+    font: &mut Font,
+    lines: &[String],
+    w: i32,
+    h: i32,
+) -> Result<(), String> {
+    draw_title(canvas, font, "MATCH ENDED", w, h)?;
+    let scale = body_scale(h).saturating_sub(1).max(1);
+    let small = small_scale(h);
+    let x = w / 8;
+    let mut y = 34 + 28 * title_scale(h) as i32;
+
+    for line in lines {
+        let colour = if line.starts_with("OK ") {
+            Color::RGB(120, 230, 120)
+        } else if line.starts_with("WARN ") {
+            Color::RGB(240, 200, 100)
+        } else {
+            Color::RGB(205, 210, 225)
+        };
+        font.draw(canvas, line, x, y, scale, colour)?;
+        y += 22 * scale as i32 + 4;
+    }
+
+    let footer = "ENTER Main Menu   ESC Main Menu";
+    let fw = font.text_width_exact(footer, small);
+    font.draw(
+        canvas,
+        footer,
+        (w - fw) / 2,
+        h - 28,
+        small,
+        Color::RGB(100, 100, 100),
+    )?;
+    Ok(())
+}
+
+fn draw_spectate(
+    canvas: &mut Canvas<Window>,
+    font: &mut Font,
+    session_id: &str,
+    status: &SpectateStatus,
+    w: i32,
+    h: i32,
+) -> Result<(), String> {
+    draw_title(canvas, font, "WATCH MATCH", w, h)?;
+    let scale = body_scale(h);
+    let small = small_scale(h);
+    let cx = w / 2;
+    let mut y = 42 + 26 * title_scale(h) as i32;
+
+    let score = format!(
+        "{} {}  -  {} {}",
+        status.p1_name, status.p1_score, status.p2_score, status.p2_name
+    );
+    let score_w = font.text_width_exact(&score, scale);
+    font.draw(
+        canvas,
+        &score,
+        cx - score_w / 2,
+        y,
+        scale,
+        Color::RGB(255, 210, 90),
+    )?;
+    y += 42 * scale as i32;
+
+    let frame = status
+        .frame
+        .map(|f| format!("Frame {f}"))
+        .unwrap_or_else(|| "Waiting for first frame".into());
+    let frame_w = font.text_width_exact(&frame, small);
+    font.draw(
+        canvas,
+        &frame,
+        cx - frame_w / 2,
+        y,
+        small,
+        Color::RGB(205, 215, 235),
+    )?;
+    y += 24 * small as i32;
+
+    let msg_w = font.text_width_exact(&status.message, small);
+    font.draw(
+        canvas,
+        &status.message,
+        cx - msg_w / 2,
+        y,
+        small,
+        Color::RGB(155, 175, 210),
+    )?;
+    y += 24 * small as i32;
+
+    if let Some(updated_at) = &status.updated_at {
+        let updated = format!("Updated {updated_at}");
+        let updated_w = font.text_width_exact(&updated, small);
+        font.draw(
+            canvas,
+            &updated,
+            cx - updated_w / 2,
+            y,
+            small,
+            Color::RGB(120, 130, 155),
+        )?;
+    }
+
+    let short_id = if session_id.len() > 18 {
+        format!("{}...", &session_id[..18])
+    } else {
+        session_id.to_string()
+    };
+    let id_line = format!("Session {short_id}");
+    let id_w = font.text_width_exact(&id_line, small);
+    font.draw(
+        canvas,
+        &id_line,
+        cx - id_w / 2,
+        h - 54,
+        small,
+        Color::RGB(95, 105, 130),
+    )?;
+
+    let footer = "C Copy Link   ESC Back";
+    let fw = font.text_width_exact(footer, small);
+    font.draw(
+        canvas,
+        footer,
+        (w - fw) / 2,
+        h - 28,
+        small,
+        Color::RGB(100, 100, 100),
+    )?;
+    Ok(())
+}
+
+fn draw_live_matches(
+    canvas: &mut Canvas<Window>,
+    font: &mut Font,
+    cursor: usize,
+    matches: &[LiveMatch],
+    status: &str,
+    w: i32,
+    h: i32,
+) -> Result<(), String> {
+    draw_title(canvas, font, "WATCH LIVE", w, h)?;
+    let scale = body_scale(h).saturating_sub(1).max(1);
+    let small = small_scale(h);
+    let x = (w / 10).max(34);
+    let y = 34 + 26 * title_scale(h) as i32;
+
+    if matches.is_empty() {
+        let tw = font.text_width_exact(status, scale);
+        font.draw(
+            canvas,
+            status,
+            (w - tw) / 2,
+            y + 30,
+            scale,
+            Color::RGB(180, 190, 210),
+        )?;
+    } else {
+        let max_rows = ((h - y - 54) / 34).max(1) as usize;
+        for (i, m) in matches.iter().take(max_rows).enumerate() {
+            let selected = i == cursor;
+            let row_y = y + i as i32 * 34;
+            if selected {
+                canvas.set_draw_color(Color::RGBA(32, 38, 62, 220));
+                canvas.fill_rect(Rect::new(x - 12, row_y - 5, (w - 2 * x + 24) as u32, 28))?;
+                font.draw(canvas, ">", x - 28, row_y, scale, Color::RGB(255, 235, 180))?;
+            }
+
+            let names = format!("{} vs {}", m.p1_name, m.p2_name);
+            let score = format!("{}-{}", m.p1_score, m.p2_score);
+            let score_w = font.text_width_exact(&score, scale);
+            let names = fit_line(font, &names, scale, w - 2 * x - score_w - 28);
+            font.draw(
+                canvas,
+                &names,
+                x,
+                row_y,
+                scale,
+                if selected {
+                    Color::RGB(245, 245, 250)
+                } else {
+                    Color::RGB(175, 180, 198)
+                },
+            )?;
+            font.draw(
+                canvas,
+                &score,
+                w - x - score_w,
+                row_y,
+                scale,
+                Color::RGB(255, 210, 90),
+            )?;
+        }
+    }
+
+    let footer = "ENTER Watch   R Refresh   ESC Back";
+    let fw = font.text_width_exact(footer, small);
+    font.draw(
+        canvas,
+        footer,
+        (w - fw) / 2,
+        h - 28,
+        small,
+        Color::RGB(100, 100, 100),
+    )?;
+    Ok(())
+}
+
+fn fit_line(font: &mut Font, text: &str, scale: u32, max_w: i32) -> String {
+    if font.text_width_exact(text, scale) <= max_w {
+        return text.to_string();
+    }
+    let mut out = String::new();
+    for ch in text.chars() {
+        let candidate = format!("{out}{ch}...");
+        if font.text_width_exact(&candidate, scale) > max_w {
+            break;
+        }
+        out.push(ch);
+    }
+    format!("{out}...")
 }
 
 fn title_scale(h: i32) -> u32 {
@@ -683,7 +1203,7 @@ fn draw_about(canvas: &mut Canvas<Window>, font: &mut Font, w: i32, h: i32) -> R
         Color::RGB(140, 140, 160),
     )?;
 
-    let footer = "ESC Back";
+    let footer = "R Refresh   ESC Back";
     let fs = small;
     let fw = font.text_width_exact(footer, fs);
     font.draw(
@@ -1108,6 +1628,278 @@ fn draw_matchmaking(
     )?;
 
     let footer = "ESC Cancel";
+    let fw = font.text_width_exact(footer, small);
+    font.draw(
+        canvas,
+        footer,
+        (w - fw) / 2,
+        h - 28,
+        small,
+        Color::RGB(100, 100, 100),
+    )?;
+    Ok(())
+}
+
+fn draw_leaderboard(
+    canvas: &mut Canvas<Window>,
+    font: &mut Font,
+    state: &LeaderboardState,
+    w: i32,
+    h: i32,
+) -> Result<(), String> {
+    draw_title(canvas, font, "LEADERBOARD", w, h)?;
+    let scale = body_scale(h).saturating_sub(1).max(1);
+    let small = small_scale(h);
+    let x = (w / 10).max(34);
+    let mut y = 34 + 26 * title_scale(h) as i32;
+
+    match state {
+        LeaderboardState::Loading => {
+            let dots = match (std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+                / 500)
+                % 4
+            {
+                0 => "",
+                1 => ".",
+                2 => "..",
+                _ => "...",
+            };
+            let msg = format!("Loading{dots}");
+            let tw = font.text_width_exact(&msg, scale);
+            font.draw(
+                canvas,
+                &msg,
+                (w - tw) / 2,
+                y + 30,
+                scale,
+                Color::RGB(255, 220, 120),
+            )?;
+        }
+        LeaderboardState::Error(message) => {
+            let line = fit_line(font, message, small, w - 2 * x);
+            let tw = font.text_width_exact(&line, small);
+            font.draw(
+                canvas,
+                &line,
+                (w - tw) / 2,
+                y + 30,
+                small,
+                Color::RGB(220, 180, 180),
+            )?;
+        }
+        LeaderboardState::Loaded(rows) => {
+            if rows.is_empty() {
+                let msg = "No ranked matches yet";
+                let tw = font.text_width_exact(msg, scale);
+                font.draw(
+                    canvas,
+                    msg,
+                    (w - tw) / 2,
+                    y + 30,
+                    scale,
+                    Color::RGB(180, 190, 210),
+                )?;
+            } else {
+                let header = "RANK PLAYER                 RATING  W-L";
+                font.draw(canvas, header, x, y, small, Color::RGB(120, 130, 155))?;
+                y += 24 * small as i32;
+
+                let max_rows = ((h - y - 44) / 26).max(1) as usize;
+                for (i, row) in rows.iter().take(max_rows).enumerate() {
+                    let rank = format!("#{}", i + 1);
+                    let rating = row.rating.to_string();
+                    let record = format!("{}-{}", row.wins, row.losses);
+                    let rank_w = font.text_width_exact(&rank, scale);
+                    let rating_w = font.text_width_exact(&rating, scale);
+                    let record_w = font.text_width_exact(&record, scale);
+                    let name_x = x + 54;
+                    let rating_x = w - x - record_w - 98;
+                    let row_y = y + i as i32 * 26;
+                    let name_max = rating_x - name_x - 18;
+                    let name = fit_line(font, &row.username, scale, name_max);
+                    let colour = if i == 0 {
+                        Color::RGB(255, 220, 120)
+                    } else {
+                        Color::RGB(205, 210, 225)
+                    };
+
+                    font.draw(canvas, &rank, x + 40 - rank_w, row_y, scale, colour)?;
+                    font.draw(canvas, &name, name_x, row_y, scale, colour)?;
+                    font.draw(
+                        canvas,
+                        &rating,
+                        rating_x + 58 - rating_w,
+                        row_y,
+                        scale,
+                        Color::RGB(180, 205, 255),
+                    )?;
+                    font.draw(
+                        canvas,
+                        &record,
+                        w - x - record_w,
+                        row_y,
+                        scale,
+                        Color::RGB(160, 180, 170),
+                    )?;
+                }
+            }
+        }
+    }
+
+    let footer = "ESC Back";
+    let fw = font.text_width_exact(footer, small);
+    font.draw(
+        canvas,
+        footer,
+        (w - fw) / 2,
+        h - 28,
+        small,
+        Color::RGB(100, 100, 100),
+    )?;
+    Ok(())
+}
+
+fn draw_settings(
+    canvas: &mut Canvas<Window>,
+    font: &mut Font,
+    cursor: usize,
+    discord_rpc_enabled: bool,
+    fullscreen: bool,
+    volume_percent: u8,
+    w: i32,
+    h: i32,
+) -> Result<(), String> {
+    draw_title(canvas, font, "SETTINGS", w, h)?;
+    let scale = body_scale(h).saturating_sub(1).max(1);
+    let small = small_scale(h);
+    let x = (w / 8).max(42);
+    let mut y = 38 + 28 * title_scale(h) as i32;
+    let row_h = 32;
+
+    for (i, label) in SETTINGS_ITEMS.iter().enumerate() {
+        let selected = i == cursor;
+        let row_y = y + i as i32 * row_h;
+        if selected {
+            canvas.set_draw_color(Color::RGBA(32, 38, 62, 220));
+            canvas.fill_rect(Rect::new(x - 12, row_y - 5, (w - 2 * x + 24) as u32, 28))?;
+            font.draw(canvas, ">", x - 28, row_y, scale, Color::RGB(255, 235, 180))?;
+        }
+        let colour = if selected {
+            Color::RGB(245, 245, 250)
+        } else {
+            Color::RGB(175, 180, 198)
+        };
+        font.draw(canvas, label, x, row_y, scale, colour)?;
+
+        let value = match i {
+            0 => Some(if discord_rpc_enabled { "ON" } else { "OFF" }.to_string()),
+            1 => Some(if fullscreen { "ON" } else { "OFF" }.to_string()),
+            2 => Some(format!("{volume_percent}%")),
+            _ => None,
+        };
+        if let Some(value) = value {
+            let vw = font.text_width_exact(&value, scale);
+            let enabled_colour = match i {
+                2 => Color::RGB(180, 205, 255),
+                _ if value == "ON" => Color::RGB(120, 230, 150),
+                _ => Color::RGB(210, 140, 140),
+            };
+            font.draw(canvas, &value, w - x - vw, row_y, scale, enabled_colour)?;
+        }
+    }
+
+    y += SETTINGS_ITEMS.len() as i32 * row_h + 20;
+    let notes = [
+        "Doctor checks local setup in a separate window.",
+        "Use LEFT/RIGHT on Volume.",
+        "Logs are written next to the app while Freeplay runs.",
+    ];
+    for note in notes {
+        font.draw(canvas, note, x, y, small, Color::RGB(130, 140, 165))?;
+        y += 20 * small as i32;
+    }
+
+    let footer = "ENTER Select   ESC Back";
+    let fw = font.text_width_exact(footer, small);
+    font.draw(
+        canvas,
+        footer,
+        (w - fw) / 2,
+        h - 28,
+        small,
+        Color::RGB(100, 100, 100),
+    )?;
+    Ok(())
+}
+
+fn draw_training(
+    canvas: &mut Canvas<Window>,
+    font: &mut Font,
+    cursor: usize,
+    hitboxes: bool,
+    infinite_health: bool,
+    freeze_timer: bool,
+    w: i32,
+    h: i32,
+) -> Result<(), String> {
+    draw_title(canvas, font, "TRAINING", w, h)?;
+    let scale = body_scale(h).saturating_sub(1).max(1);
+    let small = small_scale(h);
+    let x = (w / 8).max(42);
+    let mut y = 38 + 28 * title_scale(h) as i32;
+    let row_h = 32;
+
+    for (i, label) in TRAINING_ITEMS.iter().enumerate() {
+        let selected = i == cursor;
+        let row_y = y + i as i32 * row_h;
+        if selected {
+            canvas.set_draw_color(Color::RGBA(32, 38, 62, 220));
+            canvas.fill_rect(Rect::new(x - 12, row_y - 5, (w - 2 * x + 24) as u32, 28))?;
+            font.draw(canvas, ">", x - 28, row_y, scale, Color::RGB(255, 235, 180))?;
+        }
+        let enabled = match i {
+            0 => hitboxes,
+            1 => infinite_health,
+            2 => freeze_timer,
+            _ => false,
+        };
+        let colour = if selected {
+            Color::RGB(245, 245, 250)
+        } else {
+            Color::RGB(175, 180, 198)
+        };
+        font.draw(canvas, label, x, row_y, scale, colour)?;
+
+        let value = if enabled { "ON" } else { "OFF" };
+        let vw = font.text_width_exact(value, scale);
+        font.draw(
+            canvas,
+            value,
+            w - x - vw,
+            row_y,
+            scale,
+            if enabled {
+                Color::RGB(120, 230, 150)
+            } else {
+                Color::RGB(210, 140, 140)
+            },
+        )?;
+    }
+
+    y += TRAINING_ITEMS.len() as i32 * row_h + 20;
+    let notes = [
+        "These helpers are disabled during online matches.",
+        "F2/F3/F4 still toggle them while playing.",
+    ];
+    for note in notes {
+        font.draw(canvas, note, x, y, small, Color::RGB(130, 140, 165))?;
+        y += 20 * small as i32;
+    }
+
+    let footer = "ENTER Toggle   ESC Back";
     let fw = font.text_width_exact(footer, small);
     font.draw(
         canvas,
