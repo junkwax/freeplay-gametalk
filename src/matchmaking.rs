@@ -1007,7 +1007,9 @@ fn parse_history_row(chunk: &str) -> Option<HistoryRow> {
 fn parse_leaderboard(json: &str) -> Option<Vec<LeaderboardRow>> {
     let body = json_array_body(json, "players")
         .or_else(|| json_array_body(json, "leaderboard"))
-        .or_else(|| json_array_body(json, "rows"))?;
+        .or_else(|| json_array_body(json, "rows"))
+        .or_else(|| json_array_body(json, "entries"))
+        .or_else(|| json.trim().strip_prefix('[')?.strip_suffix(']'))?;
     let mut rows = Vec::new();
     for chunk in json_object_chunks(body) {
         if let Some(row) = parse_leaderboard_row(chunk) {
@@ -1021,8 +1023,11 @@ fn parse_leaderboard_row(chunk: &str) -> Option<LeaderboardRow> {
     Some(LeaderboardRow {
         username: json_str(chunk, "username")
             .or_else(|| json_str(chunk, "name"))
+            .or_else(|| json_str(chunk, "display_name"))
             .unwrap_or_else(|| "Unknown".into()),
-        rating: json_f64(chunk, "rating")? as i32,
+        rating: json_f64(chunk, "rating")
+            .or_else(|| json_f64(chunk, "mu"))?
+            .round() as i32,
         wins: json_u64(chunk, "wins").unwrap_or(0),
         losses: json_u64(chunk, "losses").unwrap_or(0),
     })

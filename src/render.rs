@@ -17,7 +17,8 @@ use crate::retro::{
 use crate::version;
 
 use sdl2::audio::{AudioQueue, AudioSpecDesired};
-use sdl2::pixels::PixelFormatEnum;
+use sdl2::pixels::{Color, PixelFormatEnum};
+use sdl2::rect::Rect;
 
 /// Choose which set of input bindings to apply this frame. In netplay,
 /// each peer ALWAYS controls the local handle (P1 if local_handle=0,
@@ -231,6 +232,7 @@ pub fn draw_emu_frame<'a>(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     texture: &mut sdl2::render::Texture<'a>,
     tc: &'a sdl2::render::TextureCreator<sdl2::video::WindowContext>,
+    filter: crate::config::VideoFilter,
 ) -> Result<(), Box<dyn std::error::Error>> {
     unsafe {
         if FRAME_WIDTH == 0 || FRAME_HEIGHT == 0 || FRAME_BUFFER.is_empty() {
@@ -248,9 +250,75 @@ pub fn draw_emu_frame<'a>(
         let size = (FRAME_HEIGHT as usize) * FRAME_PITCH;
         if FRAME_BUFFER.len() >= size {
             texture.update(None, &FRAME_BUFFER[..size], FRAME_PITCH)?;
+            apply_scale_quality(filter);
             canvas.copy(texture, None, None)?;
+            draw_video_filter_overlay(canvas, filter, FRAME_WIDTH, FRAME_HEIGHT)?;
         }
     }
+    Ok(())
+}
+
+fn apply_scale_quality(filter: crate::config::VideoFilter) {
+    let quality = match filter {
+        crate::config::VideoFilter::Smooth => "linear",
+        _ => "nearest",
+    };
+    let _ = sdl2::hint::set("SDL_RENDER_SCALE_QUALITY", quality);
+}
+
+fn draw_video_filter_overlay(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    filter: crate::config::VideoFilter,
+    frame_w: u32,
+    frame_h: u32,
+) -> Result<(), String> {
+    match filter {
+        crate::config::VideoFilter::Sharp | crate::config::VideoFilter::Smooth => {}
+        crate::config::VideoFilter::Scanlines => {
+            draw_scanlines(canvas, frame_w, frame_h, 58)?;
+        }
+        crate::config::VideoFilter::CrtLite => {
+            canvas.set_draw_color(Color::RGBA(255, 220, 150, 12));
+            canvas.fill_rect(Rect::new(0, 0, frame_w, frame_h))?;
+            draw_scanlines(canvas, frame_w, frame_h, 46)?;
+            draw_crt_vignette(canvas, frame_w, frame_h)?;
+        }
+    }
+    Ok(())
+}
+
+fn draw_scanlines(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    frame_w: u32,
+    frame_h: u32,
+    alpha: u8,
+) -> Result<(), String> {
+    canvas.set_draw_color(Color::RGBA(0, 0, 0, alpha));
+    for y in (1..frame_h as i32).step_by(2) {
+        canvas.fill_rect(Rect::new(0, y, frame_w, 1))?;
+    }
+    Ok(())
+}
+
+fn draw_crt_vignette(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    frame_w: u32,
+    frame_h: u32,
+) -> Result<(), String> {
+    let fw = frame_w as i32;
+    let fh = frame_h as i32;
+    let edge = 20;
+    canvas.set_draw_color(Color::RGBA(0, 0, 0, 34));
+    canvas.fill_rect(Rect::new(0, 0, frame_w, 8))?;
+    canvas.fill_rect(Rect::new(0, fh - 8, frame_w, 8))?;
+    canvas.fill_rect(Rect::new(0, 0, 8, frame_h))?;
+    canvas.fill_rect(Rect::new(fw - 8, 0, 8, frame_h))?;
+
+    canvas.set_draw_color(Color::RGBA(0, 0, 0, 18));
+    canvas.fill_rect(Rect::new(0, 0, frame_w, edge as u32))?;
+    canvas.fill_rect(Rect::new(0, fh - edge, frame_w, edge as u32))?;
+    canvas.fill_rect(Rect::new(0, 0, edge as u32, frame_h))?;
+    canvas.fill_rect(Rect::new(fw - edge, 0, edge as u32, frame_h))?;
     Ok(())
 }
 

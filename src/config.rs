@@ -49,6 +49,9 @@ pub struct Config {
     /// Audio output level as a percentage.
     #[serde(default = "default_volume_percent")]
     pub volume_percent: u8,
+    /// Gameplay frame presentation filter.
+    #[serde(default)]
+    pub video_filter: VideoFilter,
     /// Optional Discord webhook URL. When non-empty, Freeplay posts round/match
     /// results here during netplay sessions. Get one from any Discord channel
     /// via Edit Channel → Integrations → Webhooks → New Webhook → Copy URL.
@@ -57,6 +60,39 @@ pub struct Config {
     /// Optional stats service URL for ghost uploads and leaderboards.
     #[serde(default)]
     pub stats_url: String,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoFilter {
+    #[default]
+    Sharp,
+    Smooth,
+    Scanlines,
+    CrtLite,
+}
+
+impl VideoFilter {
+    pub fn label(self) -> &'static str {
+        match self {
+            VideoFilter::Sharp => "SHARP",
+            VideoFilter::Smooth => "SMOOTH",
+            VideoFilter::Scanlines => "SCANLINES",
+            VideoFilter::CrtLite => "CRT LITE",
+        }
+    }
+
+    pub fn cycle(self, delta: i8) -> Self {
+        let all = [
+            VideoFilter::Sharp,
+            VideoFilter::Smooth,
+            VideoFilter::Scanlines,
+            VideoFilter::CrtLite,
+        ];
+        let idx = all.iter().position(|v| *v == self).unwrap_or(0) as i8;
+        let next = (idx + delta).rem_euclid(all.len() as i8) as usize;
+        all[next]
+    }
 }
 
 fn default_true() -> bool {

@@ -286,6 +286,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut profile_rx: Option<std::sync::mpsc::Receiver<matchmaking::ProfileUpdate>> = None;
     let mut leaderboard_rx: Option<std::sync::mpsc::Receiver<matchmaking::LeaderboardUpdate>> =
         None;
+    let mut main_leaderboard = if cfg.stats_url.is_empty() {
+        menu::LeaderboardState::Error("stats_url not configured".into())
+    } else {
+        let (tx, rx) = std::sync::mpsc::channel();
+        leaderboard_rx = Some(rx);
+        matchmaking::fetch_leaderboard(cfg.stats_url.clone(), tx);
+        menu::LeaderboardState::Loading
+    };
     let mut avatar_rx: Option<std::sync::mpsc::Receiver<Vec<u8>>> = None;
     let mut ghost_list_rx: Option<std::sync::mpsc::Receiver<matchmaking::GhostListUpdate>> = None;
     let mut ghost_download_rx: Option<std::sync::mpsc::Receiver<matchmaking::GhostDownloadUpdate>> =
@@ -426,6 +434,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let (tx, rx) = std::sync::mpsc::channel();
                     leaderboard_rx = Some(rx);
                     matchmaking::fetch_leaderboard(cfg.stats_url.clone(), tx);
+                    main_leaderboard = menu::LeaderboardState::Loading;
                     if let AppState::Menu(MenuScreen::Leaderboard { ref mut state }) = state {
                         *state = menu::LeaderboardState::Loading;
                     }
@@ -509,6 +518,54 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     toast = Some((
                         format!("Volume {}%", cfg.volume_percent),
+                        Instant::now() + Duration::from_millis(1800),
+                    ));
+                }
+
+                Event::KeyDown {
+                    keycode: Some(Keycode::Left),
+                    repeat: false,
+                    ..
+                } if matches!(
+                    state,
+                    AppState::Menu(MenuScreen::Settings { cursor: 3, .. })
+                ) =>
+                {
+                    cfg.video_filter = cfg.video_filter.cycle(-1);
+                    config::save(&cfg);
+                    if let AppState::Menu(MenuScreen::Settings {
+                        ref mut video_filter,
+                        ..
+                    }) = state
+                    {
+                        *video_filter = cfg.video_filter;
+                    }
+                    toast = Some((
+                        format!("Video Filter {}", cfg.video_filter.label()),
+                        Instant::now() + Duration::from_millis(1800),
+                    ));
+                }
+
+                Event::KeyDown {
+                    keycode: Some(Keycode::Right),
+                    repeat: false,
+                    ..
+                } if matches!(
+                    state,
+                    AppState::Menu(MenuScreen::Settings { cursor: 3, .. })
+                ) =>
+                {
+                    cfg.video_filter = cfg.video_filter.cycle(1);
+                    config::save(&cfg);
+                    if let AppState::Menu(MenuScreen::Settings {
+                        ref mut video_filter,
+                        ..
+                    }) = state
+                    {
+                        *video_filter = cfg.video_filter;
+                    }
+                    toast = Some((
+                        format!("Video Filter {}", cfg.video_filter.label()),
                         Instant::now() + Duration::from_millis(1800),
                     ));
                 }
@@ -684,6 +741,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         discord_rpc_enabled: cfg.discord_rpc_enabled,
                                         fullscreen: cfg.fullscreen,
                                         volume_percent: cfg.volume_percent,
+                                        video_filter: cfg.video_filter,
                                     });
                                 }
                                 NavResult::OpenTraining => {
@@ -784,6 +842,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     }
                                     toast = Some((
                                         format!("Volume {}%", cfg.volume_percent),
+                                        Instant::now() + Duration::from_millis(1800),
+                                    ));
+                                }
+                                NavResult::CycleVideoFilter(delta) => {
+                                    cfg.video_filter = cfg.video_filter.cycle(delta);
+                                    config::save(&cfg);
+                                    if let AppState::Menu(MenuScreen::Settings {
+                                        ref mut video_filter,
+                                        ..
+                                    }) = state
+                                    {
+                                        *video_filter = cfg.video_filter;
+                                    }
+                                    toast = Some((
+                                        format!("Video Filter {}", cfg.video_filter.label()),
                                         Instant::now() + Duration::from_millis(1800),
                                     ));
                                 }
@@ -1614,7 +1687,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         });
                     }
                 }
-                draw_emu_frame(&mut canvas, &mut emu_texture, &texture_creator)?;
+                draw_emu_frame(
+                    &mut canvas,
+                    &mut emu_texture,
+                    &texture_creator,
+                    cfg.video_filter,
+                )?;
                 // Draw modern fight overlay for all play modes
                 {
                     if discord_user.is_none() {
@@ -1871,6 +1949,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     win_h as i32,
                     rom_present(),
                     discord_user.as_deref(),
+                    &main_leaderboard,
                     toast_payload(&toast),
                 )
                 .map_err(|e| format!("menu draw: {e}"))?;
@@ -1990,23 +2069,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 // Drain the leaderboard fetcher channel.
                 if let Some(rx) = &leaderboard_rx {
-                    if let AppState::Menu(menu::MenuScreen::Leaderboard { ref mut state }) = state {
-                        match rx.try_recv() {
-                            Ok(matchmaking::LeaderboardUpdate::Loaded(rows)) => {
+                    match rx.try_recv() {
+                        Ok(matchmaking::LeaderboardUpdate::Loaded(rows)) => {
+                            main_leaderboard = menu::LeaderboardState::Loaded(rows.clone());
+                            if let AppState::Menu(menu::MenuScreen::Leaderboard { ref mut state }) =
+                                state
+                            {
                                 *state = menu::LeaderboardState::Loaded(rows);
-                                leaderboard_rx = None;
                             }
-                            Ok(matchmaking::LeaderboardUpdate::Error(message)) => {
-                                *state = menu::LeaderboardState::Error(message);
-                                leaderboard_rx = None;
-                            }
-                            Err(std::sync::mpsc::TryRecvError::Empty) => {}
-                            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                                leaderboard_rx = None;
-                            }
+                            leaderboard_rx = None;
                         }
-                    } else {
-                        leaderboard_rx = None;
+                        Ok(matchmaking::LeaderboardUpdate::Error(message)) => {
+                            main_leaderboard = menu::LeaderboardState::Error(message.clone());
+                            if let AppState::Menu(menu::MenuScreen::Leaderboard { ref mut state }) =
+                                state
+                            {
+                                *state = menu::LeaderboardState::Error(message);
+                            }
+                            leaderboard_rx = None;
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                            leaderboard_rx = None;
+                        }
                     }
                 }
 
@@ -2207,6 +2292,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     win_h as i32,
                     rom_present(),
                     discord_user.as_deref(),
+                    &main_leaderboard,
                     toast_payload(&toast),
                 )
                 .map_err(|e| format!("menu draw: {e}"))?;

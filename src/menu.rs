@@ -1,4 +1,5 @@
 //! In-engine menu: list-based screens, pad/keyboard navigation, rebind flow.
+use crate::config::VideoFilter;
 use crate::font::Font;
 use crate::input::{is_action_active, Action, Binding, Bindings, Player, PlayerBindings};
 use crate::matchmaking::{HistoryRow, LeaderboardRow, LiveMatch, ProfileData, RemoteGhostMeta};
@@ -76,6 +77,7 @@ pub enum MenuScreen {
         state: ProfileScreenState,
     },
     /// Community rating leaderboard fetched from freeplay-stats.
+    #[allow(dead_code)]
     Leaderboard {
         state: LeaderboardState,
     },
@@ -85,6 +87,7 @@ pub enum MenuScreen {
         discord_rpc_enabled: bool,
         fullscreen: bool,
         volume_percent: u8,
+        video_filter: VideoFilter,
     },
     /// Practice/training helpers backed by RAM pokes already used by F-keys.
     Training {
@@ -94,6 +97,7 @@ pub enum MenuScreen {
         freeze_timer: bool,
     },
     /// Active online matches fetched from the signaling server.
+    #[allow(dead_code)]
     LiveMatches {
         cursor: usize,
         matches: Vec<LiveMatch>,
@@ -178,24 +182,25 @@ impl Default for AppState {
 }
 
 /// Main menu items, in order.
-pub const MAIN_ITEMS: [&str; 11] = [
+///
+/// Watch Live, Leaderboard, and Training are still implemented, but are hidden
+/// from the public menu for now to keep the first-run footprint focused.
+pub const MAIN_ITEMS: [&str; 8] = [
     "Practice",
     "Find Match",
-    "Watch Live",
     "Profile",
-    "Leaderboard",
     "Load Ghosts",
     "Controls",
-    "Training",
     "Settings",
     "About",
     "Quit",
 ];
 
-const SETTINGS_ITEMS: [&str; 5] = [
+const SETTINGS_ITEMS: [&str; 6] = [
     "Discord Rich Presence",
     "Fullscreen",
     "Volume",
+    "Video Filter",
     "Run Doctor",
     "Open Logs Folder",
 ];
@@ -212,6 +217,7 @@ pub enum NavResult {
     /// Open the active match browser.
     OpenLiveMatches,
     /// Open community leaderboard.
+    #[allow(dead_code)]
     OpenLeaderboard,
     /// Open Settings screen.
     OpenSettings,
@@ -241,7 +247,10 @@ pub enum NavResult {
     ToggleFullscreen,
     /// Adjust audio volume by signed percentage points.
     AdjustVolume(i8),
+    /// Cycle gameplay video presentation filter.
+    CycleVideoFilter(i8),
     /// Open Training helper menu.
+    #[allow(dead_code)]
     OpenTraining,
     /// Toggle named training helper.
     ToggleTraining(&'static str),
@@ -344,29 +353,13 @@ impl AppState {
                     NavResult::StartMatchmaking
                 }
                 2 => {
-                    // Watch Live
-                    *self = AppState::Menu(MenuScreen::LiveMatches {
-                        cursor: 0,
-                        matches: vec![],
-                        status: "Loading active matches...".into(),
-                    });
-                    NavResult::OpenLiveMatches
-                }
-                3 => {
                     // Profile
                     *self = AppState::Menu(MenuScreen::Profile {
                         state: ProfileScreenState::Loading,
                     });
                     NavResult::OpenProfile
                 }
-                4 => {
-                    // Leaderboard
-                    *self = AppState::Menu(MenuScreen::Leaderboard {
-                        state: LeaderboardState::Loading,
-                    });
-                    NavResult::OpenLeaderboard
-                }
-                5 => {
+                3 => {
                     // Load Ghosts
                     *self = AppState::Menu(MenuScreen::GhostSelect {
                         cursor: 0,
@@ -375,7 +368,7 @@ impl AppState {
                     });
                     NavResult::OpenGhostSelect
                 }
-                6 => {
+                4 => {
                     // Controls
                     *self = AppState::Menu(MenuScreen::Controls {
                         cursor: 0,
@@ -383,32 +376,23 @@ impl AppState {
                     });
                     NavResult::Stay
                 }
-                7 => {
-                    // Training
-                    *self = AppState::Menu(MenuScreen::Training {
-                        cursor: 0,
-                        hitboxes: false,
-                        infinite_health: false,
-                        freeze_timer: false,
-                    });
-                    NavResult::OpenTraining
-                }
-                8 => {
+                5 => {
                     // Settings
                     *self = AppState::Menu(MenuScreen::Settings {
                         cursor: 0,
                         discord_rpc_enabled: false,
                         fullscreen: false,
                         volume_percent: 100,
+                        video_filter: VideoFilter::Sharp,
                     });
                     NavResult::OpenSettings
                 }
-                9 => {
+                6 => {
                     // About
                     *self = AppState::Menu(MenuScreen::About);
                     NavResult::Stay
                 }
-                10 => NavResult::Quit,
+                7 => NavResult::Quit,
                 _ => NavResult::Stay,
             },
             AppState::Menu(MenuScreen::Controls { cursor, player }) => {
@@ -482,8 +466,9 @@ impl AppState {
                 0 => NavResult::ToggleDiscordRpc,
                 1 => NavResult::ToggleFullscreen,
                 2 => NavResult::AdjustVolume(10),
-                3 => NavResult::LaunchDoctor,
-                4 => NavResult::OpenLogsFolder,
+                3 => NavResult::CycleVideoFilter(1),
+                4 => NavResult::LaunchDoctor,
+                5 => NavResult::OpenLogsFolder,
                 _ => NavResult::Stay,
             },
             AppState::Menu(MenuScreen::Training { cursor, .. }) => match cursor {
@@ -582,15 +567,23 @@ pub fn draw(
     h: i32,
     rom_present: bool,
     discord_user: Option<&str>,
+    main_leaderboard: &LeaderboardState,
     toast: Option<Toast<'_>>,
 ) -> Result<(), String> {
     canvas.set_draw_color(Color::RGB(8, 8, 16));
     canvas.clear();
 
     match state {
-        AppState::Menu(MenuScreen::Main { cursor }) => {
-            draw_main(canvas, font, *cursor, w, h, rom_present, discord_user)?
-        }
+        AppState::Menu(MenuScreen::Main { cursor }) => draw_main(
+            canvas,
+            font,
+            *cursor,
+            w,
+            h,
+            rom_present,
+            discord_user,
+            main_leaderboard,
+        )?,
         AppState::Menu(MenuScreen::Controls { cursor, player }) => draw_controls(
             canvas,
             font,
@@ -626,6 +619,7 @@ pub fn draw(
             discord_rpc_enabled,
             fullscreen,
             volume_percent,
+            video_filter,
         }) => draw_settings(
             canvas,
             font,
@@ -633,6 +627,7 @@ pub fn draw(
             *discord_rpc_enabled,
             *fullscreen,
             *volume_percent,
+            *video_filter,
             w,
             h,
         )?,
@@ -1003,6 +998,7 @@ fn draw_main(
     h: i32,
     rom_present: bool,
     discord_user: Option<&str>,
+    leaderboard: &LeaderboardState,
 ) -> Result<(), String> {
     draw_title(canvas, font, "Freeplay", w, h)?;
 
@@ -1010,13 +1006,30 @@ fn draw_main(
     let line_h = (44 * item_scale as i32) / 2;
     let block_h = MAIN_ITEMS.len() as i32 * line_h;
     let start_y = (h - block_h) / 2 + 10;
+    let show_sidebar = w >= 760;
+    let sidebar_w = if show_sidebar {
+        ((w * 42) / 100).clamp(320, 520)
+    } else {
+        0
+    };
+    let sidebar_gap = if show_sidebar { 42 } else { 0 };
+    let sidebar_x = if show_sidebar { w - sidebar_w - 56 } else { w };
+    let menu_area_w = if show_sidebar {
+        sidebar_x - sidebar_gap
+    } else {
+        w
+    };
 
     let widest = MAIN_ITEMS
         .iter()
         .map(|label| font.text_width_exact(label, item_scale))
         .max()
         .unwrap_or(0);
-    let menu_x = (w - widest) / 2;
+    let menu_x = if show_sidebar {
+        ((menu_area_w - widest) / 2).max(28)
+    } else {
+        ((w - widest) / 2).max(24)
+    };
     for (i, label) in MAIN_ITEMS.iter().enumerate() {
         let x = menu_x;
         let y = start_y + i as i32 * line_h;
@@ -1036,20 +1049,32 @@ fn draw_main(
     }
 
     if !rom_present {
-        let msg = "ROM zip not found next to the executable";
+        let ready_line = "Setup needs ROM zip - Shift+D opens Doctor";
         let s = small_scale(h);
-        let tw = font.text_width_exact(msg, s);
+        let ready_w = font.text_width_exact(ready_line, s);
+        let panel_w = (ready_w + 18).min(w - 56).max(ready_w + 8);
+        let panel_h = 18 * s as i32;
+        let panel_x = (w - panel_w) / 2;
+        let panel_y = (start_y + block_h + 12).min(h - 78);
+        draw_panel(
+            canvas,
+            panel_x,
+            panel_y,
+            panel_w,
+            panel_h,
+            Color::RGBA(14, 16, 24, 210),
+        )?;
         font.draw(
             canvas,
-            msg,
-            (w - tw) / 2,
-            start_y - 24,
+            ready_line,
+            panel_x + (panel_w - ready_w) / 2,
+            panel_y + 3,
             s,
-            Color::RGB(200, 80, 80),
+            Color::RGB(235, 110, 90),
         )?;
     }
 
-    let footer = "UP/DN or DPAD Select   ENTER Confirm";
+    let footer = "UP/DN Select   ENTER Confirm   Shift+D Doctor";
     let fs = small_scale(h);
     let fw = font.text_width_exact(footer, fs);
     font.draw(
@@ -1075,7 +1100,179 @@ fn draw_main(
         )?;
     }
 
+    if show_sidebar {
+        let sidebar_y = (start_y - 16).max(84);
+        draw_main_leaderboard(
+            canvas,
+            font,
+            leaderboard,
+            sidebar_x,
+            sidebar_y,
+            sidebar_w,
+            h,
+        )?;
+    }
+
     Ok(())
+}
+
+fn draw_main_leaderboard(
+    canvas: &mut Canvas<Window>,
+    font: &mut Font,
+    state: &LeaderboardState,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+) -> Result<(), String> {
+    let small = small_scale(h);
+    let heading_scale = (small + 1).min(3);
+    let row_h = 18 * small as i32;
+    let visible_rows = match state {
+        LeaderboardState::Loaded(rows) => rows.len().clamp(4, 10),
+        _ => 4,
+    } as i32;
+    let panel_h = (58 + row_h * visible_rows).min(h - y - 58).max(150);
+    draw_panel(canvas, x, y, w, panel_h, Color::RGBA(14, 16, 24, 225))?;
+    draw_stroked_rect(canvas, x, y, w, panel_h, Color::RGB(80, 140, 220), 3)?;
+
+    font.draw(
+        canvas,
+        "Leaderboards",
+        x + 12,
+        y + 10,
+        heading_scale,
+        Color::RGB(255, 200, 80),
+    )?;
+
+    match state {
+        LeaderboardState::Loading => {
+            draw_sidebar_note(canvas, font, "Loading stats...", x, y + 48, w, small)?;
+        }
+        LeaderboardState::Error(_) => {
+            draw_sidebar_note(canvas, font, "Stats warming up", x, y + 48, w, small)?;
+        }
+        LeaderboardState::Loaded(rows) if rows.is_empty() => {
+            draw_sidebar_note(canvas, font, "No ranked sets yet", x, y + 48, w, small)?;
+        }
+        LeaderboardState::Loaded(rows) => {
+            let rating_header = "RATING";
+            let record_header = "W-L";
+            let rhw = font.text_width_exact(rating_header, small);
+            font.draw(
+                canvas,
+                record_header,
+                x + w - 118,
+                y + 36,
+                small,
+                Color::RGB(95, 115, 145),
+            )?;
+            font.draw(
+                canvas,
+                rating_header,
+                x + w - rhw - 12,
+                y + 36,
+                small,
+                Color::RGB(95, 115, 145),
+            )?;
+
+            let max_name_w = w - 170;
+            for (idx, row) in rows.iter().take(10).enumerate() {
+                let row_y = y + 56 + idx as i32 * row_h;
+                let rank = format!("{}.", idx + 1);
+                font.draw(
+                    canvas,
+                    &rank,
+                    x + 12,
+                    row_y,
+                    small,
+                    Color::RGB(150, 165, 190),
+                )?;
+                let name = fit_text(font, &row.username.to_uppercase(), small, max_name_w);
+                font.draw(
+                    canvas,
+                    &name,
+                    x + 34,
+                    row_y,
+                    small,
+                    Color::RGB(225, 230, 240),
+                )?;
+                let record = format!("{}-{}", row.wins, row.losses);
+                font.draw(
+                    canvas,
+                    &record,
+                    x + w - 118,
+                    row_y,
+                    small,
+                    Color::RGB(155, 170, 195),
+                )?;
+                let rating = row.rating.to_string();
+                let rw = font.text_width_exact(&rating, small);
+                font.draw(
+                    canvas,
+                    &rating,
+                    x + w - rw - 12,
+                    row_y,
+                    small,
+                    Color::RGB(120, 210, 150),
+                )?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn draw_stroked_rect(
+    canvas: &mut Canvas<Window>,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    color: Color,
+    stroke: i32,
+) -> Result<(), String> {
+    canvas.set_draw_color(color);
+    for inset in 0..stroke {
+        let rw = w - inset * 2;
+        let rh = h - inset * 2;
+        if rw > 0 && rh > 0 {
+            canvas.draw_rect(Rect::new(x + inset, y + inset, rw as u32, rh as u32))?;
+        }
+    }
+    Ok(())
+}
+
+fn draw_sidebar_note(
+    canvas: &mut Canvas<Window>,
+    font: &mut Font,
+    note: &str,
+    x: i32,
+    y: i32,
+    w: i32,
+    scale: u32,
+) -> Result<(), String> {
+    let text = fit_text(font, note, scale, w - 24);
+    let tw = font.text_width_exact(&text, scale);
+    font.draw(
+        canvas,
+        &text,
+        x + (w - tw) / 2,
+        y,
+        scale,
+        Color::RGB(150, 165, 190),
+    )
+}
+
+fn fit_text(font: &mut Font, text: &str, scale: u32, max_w: i32) -> String {
+    if font.text_width_exact(text, scale) <= max_w {
+        return text.to_string();
+    }
+    let mut out = text.to_string();
+    while !out.is_empty() && font.text_width_exact(&format!("{out}..."), scale) > max_w {
+        out.pop();
+    }
+    format!("{out}...")
 }
 
 fn draw_about(canvas: &mut Canvas<Window>, font: &mut Font, w: i32, h: i32) -> Result<(), String> {
@@ -1769,6 +1966,7 @@ fn draw_settings(
     discord_rpc_enabled: bool,
     fullscreen: bool,
     volume_percent: u8,
+    video_filter: VideoFilter,
     w: i32,
     h: i32,
 ) -> Result<(), String> {
@@ -1798,12 +1996,14 @@ fn draw_settings(
             0 => Some(if discord_rpc_enabled { "ON" } else { "OFF" }.to_string()),
             1 => Some(if fullscreen { "ON" } else { "OFF" }.to_string()),
             2 => Some(format!("{volume_percent}%")),
+            3 => Some(video_filter.label().to_string()),
             _ => None,
         };
         if let Some(value) = value {
             let vw = font.text_width_exact(&value, scale);
             let enabled_colour = match i {
                 2 => Color::RGB(180, 205, 255),
+                3 => Color::RGB(180, 205, 255),
                 _ if value == "ON" => Color::RGB(120, 230, 150),
                 _ => Color::RGB(210, 140, 140),
             };
@@ -1815,6 +2015,7 @@ fn draw_settings(
     let notes = [
         "Doctor checks local setup in a separate window.",
         "Use LEFT/RIGHT on Volume.",
+        "Video Filter applies during gameplay.",
         "Logs are written next to the app while Freeplay runs.",
     ];
     for note in notes {
