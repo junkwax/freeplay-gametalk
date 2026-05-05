@@ -4,6 +4,7 @@
 )]
 
 mod cli;
+mod clip;
 mod config;
 mod controllers;
 mod diag;
@@ -52,7 +53,7 @@ use crate::session::{
 use sdl2::audio::AudioQueue;
 use sdl2::event::Event;
 use sdl2::keyboard::{Keycode, Mod};
-use sdl2::pixels::PixelFormatEnum;
+use sdl2::pixels::{Color, PixelFormatEnum};
 use sdl2::render::BlendMode;
 use sdl2::surface::Surface;
 use sdl2::video::FullscreenType;
@@ -103,6 +104,47 @@ fn apply_volume(samples: &[i16], volume_percent: u8) -> Vec<i16> {
         .iter()
         .map(|s| ((*s as i32 * volume) / 100).clamp(i16::MIN as i32, i16::MAX as i32) as i16)
         .collect()
+}
+
+fn queue_game_audio(
+    q: &AudioQueue<i16>,
+    samples: &[i16],
+    volume_percent: u8,
+    buffer: config::AudioBuffer,
+) {
+    const BYTES_PER_STEREO_SAMPLE: u32 = 4;
+    let freq = q.spec().freq.max(1) as u32;
+    let target_bytes = freq * BYTES_PER_STEREO_SAMPLE * buffer.ms() / 1000;
+    let max_bytes = target_bytes + freq * BYTES_PER_STEREO_SAMPLE / 10;
+    let low_water_bytes = freq * BYTES_PER_STEREO_SAMPLE / 12;
+    let queued = q.size();
+
+    if queued >= max_bytes {
+        return;
+    }
+
+    if queued < low_water_bytes {
+        dlog!(
+            "audio",
+            "low queue: {} ms queued, target={} ms",
+            queued * 1000 / (freq * BYTES_PER_STEREO_SAMPLE),
+            buffer.ms()
+        );
+    }
+
+    if volume_percent >= 100 {
+        let _ = q.queue_audio(samples);
+    } else {
+        let scaled = apply_volume(samples, volume_percent);
+        let _ = q.queue_audio(&scaled);
+    }
+}
+
+fn finish_clip_recording(recorder: clip::ClipRecorder) -> String {
+    match recorder.finish() {
+        Ok(result) => result.message,
+        Err(e) => format!("Clip save failed: {e}"),
+    }
 }
 
 #[allow(static_mut_refs)]
@@ -190,10 +232,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut core: Option<retro::Core> = None;
     let mut audio_queue: Option<AudioQueue<i16>> = None;
-    let mut save_slot: Option<Vec<u8>> = None;
+    let mut _save_slot: Option<Vec<u8>> = None;
     let mut rewind_test: Option<replay::RewindTest> = None;
     let mut ghost_recording: Option<ghost::Recording> = None;
     let mut ghost_playback: Option<ghost::Playback> = None;
+    let mut clip_recorder: Option<clip::ClipRecorder> = None;
     let mut ghost_port_mask: u8 = 0b11;
     let mut drone_runner: Option<drone::DroneRunner> = None;
     let ghost_path = std::path::Path::new("ghost.bin").to_path_buf();
@@ -531,6 +574,54 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     AppState::Menu(MenuScreen::Settings { cursor: 3, .. })
                 ) =>
                 {
+                    cfg.audio_buffer = cfg.audio_buffer.cycle(-1);
+                    config::save(&cfg);
+                    if let AppState::Menu(MenuScreen::Settings {
+                        ref mut audio_buffer,
+                        ..
+                    }) = state
+                    {
+                        *audio_buffer = cfg.audio_buffer;
+                    }
+                    toast = Some((
+                        format!("Audio Buffer {}", cfg.audio_buffer.label()),
+                        Instant::now() + Duration::from_millis(1800),
+                    ));
+                }
+
+                Event::KeyDown {
+                    keycode: Some(Keycode::Right),
+                    repeat: false,
+                    ..
+                } if matches!(
+                    state,
+                    AppState::Menu(MenuScreen::Settings { cursor: 3, .. })
+                ) =>
+                {
+                    cfg.audio_buffer = cfg.audio_buffer.cycle(1);
+                    config::save(&cfg);
+                    if let AppState::Menu(MenuScreen::Settings {
+                        ref mut audio_buffer,
+                        ..
+                    }) = state
+                    {
+                        *audio_buffer = cfg.audio_buffer;
+                    }
+                    toast = Some((
+                        format!("Audio Buffer {}", cfg.audio_buffer.label()),
+                        Instant::now() + Duration::from_millis(1800),
+                    ));
+                }
+
+                Event::KeyDown {
+                    keycode: Some(Keycode::Left),
+                    repeat: false,
+                    ..
+                } if matches!(
+                    state,
+                    AppState::Menu(MenuScreen::Settings { cursor: 4, .. })
+                ) =>
+                {
                     cfg.video_filter = cfg.video_filter.cycle(-1);
                     config::save(&cfg);
                     if let AppState::Menu(MenuScreen::Settings {
@@ -552,7 +643,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ..
                 } if matches!(
                     state,
-                    AppState::Menu(MenuScreen::Settings { cursor: 3, .. })
+                    AppState::Menu(MenuScreen::Settings { cursor: 4, .. })
                 ) =>
                 {
                     cfg.video_filter = cfg.video_filter.cycle(1);
@@ -568,6 +659,169 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         format!("Video Filter {}", cfg.video_filter.label()),
                         Instant::now() + Duration::from_millis(1800),
                     ));
+                }
+
+                Event::KeyDown {
+                    keycode: Some(Keycode::Left),
+                    repeat: false,
+                    ..
+                } if matches!(
+                    state,
+                    AppState::Menu(MenuScreen::Settings { cursor: 6, .. })
+                ) =>
+                {
+                    cfg.aspect_mode = cfg.aspect_mode.cycle(-1);
+                    config::save(&cfg);
+                    if let AppState::Menu(MenuScreen::Settings {
+                        ref mut aspect_mode,
+                        ..
+                    }) = state
+                    {
+                        *aspect_mode = cfg.aspect_mode;
+                    }
+                    toast = Some((
+                        format!("Aspect {}", cfg.aspect_mode.label()),
+                        Instant::now() + Duration::from_millis(1800),
+                    ));
+                }
+
+                Event::KeyDown {
+                    keycode: Some(Keycode::Right),
+                    repeat: false,
+                    ..
+                } if matches!(
+                    state,
+                    AppState::Menu(MenuScreen::Settings { cursor: 6, .. })
+                ) =>
+                {
+                    cfg.aspect_mode = cfg.aspect_mode.cycle(1);
+                    config::save(&cfg);
+                    if let AppState::Menu(MenuScreen::Settings {
+                        ref mut aspect_mode,
+                        ..
+                    }) = state
+                    {
+                        *aspect_mode = cfg.aspect_mode;
+                    }
+                    toast = Some((
+                        format!("Aspect {}", cfg.aspect_mode.label()),
+                        Instant::now() + Duration::from_millis(1800),
+                    ));
+                }
+
+                Event::KeyDown {
+                    keycode: Some(Keycode::Left),
+                    repeat: false,
+                    ..
+                } if matches!(
+                    state,
+                    AppState::Menu(MenuScreen::Settings { cursor: 7, .. })
+                ) =>
+                {
+                    cfg.scorebar_style = cfg.scorebar_style.cycle(-1);
+                    config::save(&cfg);
+                    if let AppState::Menu(MenuScreen::Settings {
+                        ref mut scorebar_style,
+                        ..
+                    }) = state
+                    {
+                        *scorebar_style = cfg.scorebar_style;
+                    }
+                    toast = Some((
+                        format!("Scorebar {}", cfg.scorebar_style.label()),
+                        Instant::now() + Duration::from_millis(1800),
+                    ));
+                }
+
+                Event::KeyDown {
+                    keycode: Some(Keycode::Right),
+                    repeat: false,
+                    ..
+                } if matches!(
+                    state,
+                    AppState::Menu(MenuScreen::Settings { cursor: 7, .. })
+                ) =>
+                {
+                    cfg.scorebar_style = cfg.scorebar_style.cycle(1);
+                    config::save(&cfg);
+                    if let AppState::Menu(MenuScreen::Settings {
+                        ref mut scorebar_style,
+                        ..
+                    }) = state
+                    {
+                        *scorebar_style = cfg.scorebar_style;
+                    }
+                    toast = Some((
+                        format!("Scorebar {}", cfg.scorebar_style.label()),
+                        Instant::now() + Duration::from_millis(1800),
+                    ));
+                }
+
+                Event::KeyDown {
+                    keycode: Some(Keycode::F),
+                    keymod,
+                    repeat: false,
+                    ..
+                } if state == AppState::Playing
+                    && keymod.intersects(Mod::LCTRLMOD | Mod::RCTRLMOD) =>
+                {
+                    cfg.video_filter = cfg.video_filter.cycle(1);
+                    config::save(&cfg);
+                    toast = Some((
+                        format!("Video Filter {}", cfg.video_filter.label()),
+                        Instant::now() + Duration::from_millis(1800),
+                    ));
+                }
+
+                Event::KeyDown {
+                    keycode: Some(Keycode::A),
+                    keymod,
+                    repeat: false,
+                    ..
+                } if state == AppState::Playing
+                    && keymod.intersects(Mod::LCTRLMOD | Mod::RCTRLMOD) =>
+                {
+                    cfg.aspect_mode = cfg.aspect_mode.cycle(1);
+                    config::save(&cfg);
+                    toast = Some((
+                        format!("Aspect {}", cfg.aspect_mode.label()),
+                        Instant::now() + Duration::from_millis(1800),
+                    ));
+                }
+
+                Event::KeyDown {
+                    keycode: Some(Keycode::R),
+                    keymod,
+                    repeat: false,
+                    ..
+                } if state == AppState::Playing
+                    && keymod.intersects(Mod::LCTRLMOD | Mod::RCTRLMOD) =>
+                {
+                    if let Some(recorder) = clip_recorder.take() {
+                        let message = finish_clip_recording(recorder);
+                        println!("[clip] {message}");
+                        toast = Some((message, Instant::now() + Duration::from_millis(3200)));
+                    } else {
+                        let sample_rate = audio_queue
+                            .as_ref()
+                            .map(|q| q.spec().freq.max(1) as u32)
+                            .unwrap_or(48_000);
+                        match clip::ClipRecorder::start(sample_rate) {
+                            Ok(recorder) => {
+                                clip_recorder = Some(recorder);
+                                toast = Some((
+                                    "Recording clip... Ctrl+R to stop".into(),
+                                    Instant::now() + Duration::from_millis(2200),
+                                ));
+                            }
+                            Err(e) => {
+                                toast = Some((
+                                    format!("Clip start failed: {e}"),
+                                    Instant::now() + Duration::from_millis(3200),
+                                ));
+                            }
+                        }
+                    }
                 }
 
                 Event::TextInput { text, .. }
@@ -741,7 +995,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         discord_rpc_enabled: cfg.discord_rpc_enabled,
                                         fullscreen: cfg.fullscreen,
                                         volume_percent: cfg.volume_percent,
+                                        audio_buffer: cfg.audio_buffer,
                                         video_filter: cfg.video_filter,
+                                        crt_corner_bend: cfg.crt_corner_bend,
+                                        aspect_mode: cfg.aspect_mode,
+                                        scorebar_style: cfg.scorebar_style,
                                     });
                                 }
                                 NavResult::OpenTraining => {
@@ -845,6 +1103,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         Instant::now() + Duration::from_millis(1800),
                                     ));
                                 }
+                                NavResult::CycleAudioBuffer(delta) => {
+                                    cfg.audio_buffer = cfg.audio_buffer.cycle(delta);
+                                    config::save(&cfg);
+                                    if let AppState::Menu(MenuScreen::Settings {
+                                        ref mut audio_buffer,
+                                        ..
+                                    }) = state
+                                    {
+                                        *audio_buffer = cfg.audio_buffer;
+                                    }
+                                    toast = Some((
+                                        format!("Audio Buffer {}", cfg.audio_buffer.label()),
+                                        Instant::now() + Duration::from_millis(1800),
+                                    ));
+                                }
                                 NavResult::CycleVideoFilter(delta) => {
                                     cfg.video_filter = cfg.video_filter.cycle(delta);
                                     config::save(&cfg);
@@ -857,6 +1130,54 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     }
                                     toast = Some((
                                         format!("Video Filter {}", cfg.video_filter.label()),
+                                        Instant::now() + Duration::from_millis(1800),
+                                    ));
+                                }
+                                NavResult::ToggleCrtGlass => {
+                                    cfg.crt_corner_bend = !cfg.crt_corner_bend;
+                                    config::save(&cfg);
+                                    if let AppState::Menu(MenuScreen::Settings {
+                                        ref mut crt_corner_bend,
+                                        ..
+                                    }) = state
+                                    {
+                                        *crt_corner_bend = cfg.crt_corner_bend;
+                                    }
+                                    toast = Some((
+                                        format!(
+                                            "CRT Glass {}",
+                                            if cfg.crt_corner_bend { "ON" } else { "OFF" }
+                                        ),
+                                        Instant::now() + Duration::from_millis(1800),
+                                    ));
+                                }
+                                NavResult::CycleAspectMode(delta) => {
+                                    cfg.aspect_mode = cfg.aspect_mode.cycle(delta);
+                                    config::save(&cfg);
+                                    if let AppState::Menu(MenuScreen::Settings {
+                                        ref mut aspect_mode,
+                                        ..
+                                    }) = state
+                                    {
+                                        *aspect_mode = cfg.aspect_mode;
+                                    }
+                                    toast = Some((
+                                        format!("Aspect {}", cfg.aspect_mode.label()),
+                                        Instant::now() + Duration::from_millis(1800),
+                                    ));
+                                }
+                                NavResult::CycleScorebarStyle(delta) => {
+                                    cfg.scorebar_style = cfg.scorebar_style.cycle(delta);
+                                    config::save(&cfg);
+                                    if let AppState::Menu(MenuScreen::Settings {
+                                        ref mut scorebar_style,
+                                        ..
+                                    }) = state
+                                    {
+                                        *scorebar_style = cfg.scorebar_style;
+                                    }
+                                    toast = Some((
+                                        format!("Scorebar {}", cfg.scorebar_style.label()),
                                         Instant::now() + Duration::from_millis(1800),
                                     ));
                                 }
@@ -919,6 +1240,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         ));
                                     }
                                 },
+                                NavResult::OpenClipsFolder => {
+                                    let target = std::env::current_dir()
+                                        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+                                        .join("clips");
+                                    let _ = std::fs::create_dir_all(&target);
+                                    match open::that(&target) {
+                                        Ok(()) => {
+                                            toast = Some((
+                                                "Clips folder opened".into(),
+                                                Instant::now() + Duration::from_millis(2200),
+                                            ));
+                                        }
+                                        Err(e) => {
+                                            toast = Some((
+                                                format!("Open failed: {e}"),
+                                                Instant::now() + Duration::from_millis(2600),
+                                            ));
+                                        }
+                                    }
+                                }
                                 NavResult::OpenLogsFolder => {
                                     let target = std::env::current_dir()
                                         .unwrap_or_else(|_| std::path::PathBuf::from("."));
@@ -1028,21 +1369,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         state = AppState::Menu(MenuScreen::Main { cursor: 0 });
                     }
                     Event::KeyDown {
-                        keycode: Some(Keycode::F5),
-                        repeat: false,
-                        ..
-                    } if net_session.is_none() => {
-                        if let Some(c) = &core {
-                            match c.save_state() {
-                                Some(buf) => {
-                                    println!("State saved ({} bytes)", buf.len());
-                                    save_slot = Some(buf);
-                                }
-                                None => println!("Save failed: core refused to serialize"),
-                            }
-                        }
-                    }
-                    Event::KeyDown {
                         keycode: Some(Keycode::F9),
                         repeat: false,
                         ..
@@ -1069,21 +1395,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             println!("[drone] Enabled — posture-reactive playback");
                         }
                     }
-                    Event::KeyDown {
-                        keycode: Some(Keycode::F7),
-                        repeat: false,
-                        ..
-                    } if net_session.is_none() => match (&core, &save_slot) {
-                        (Some(c), Some(buf)) => {
-                            if c.load_state(buf) {
-                                println!("State loaded ({} bytes)", buf.len());
-                            } else {
-                                println!("Load failed: core rejected state");
-                            }
-                        }
-                        (_, None) => println!("No save slot to load"),
-                        _ => {}
-                    },
                     Event::KeyDown {
                         keycode: Some(Keycode::F2),
                         repeat: false,
@@ -1568,17 +1879,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Some(q) = &audio_queue {
                         unsafe {
                             if !AUDIO_BUFFER.is_empty() {
-                                let max_queued_bytes = (q.spec().freq as u32) * 2 * 2 / 5;
-                                if q.size() < max_queued_bytes {
-                                    if cfg.volume_percent >= 100 {
-                                        let _ = q.queue_audio(&AUDIO_BUFFER);
-                                    } else {
-                                        let scaled =
-                                            apply_volume(&AUDIO_BUFFER, cfg.volume_percent);
-                                        let _ = q.queue_audio(&scaled);
+                                if let Some(recorder) = clip_recorder.as_mut() {
+                                    recorder.record_audio(&AUDIO_BUFFER);
+                                }
+                                queue_game_audio(
+                                    q,
+                                    &AUDIO_BUFFER,
+                                    cfg.volume_percent,
+                                    cfg.audio_buffer,
+                                );
+                                AUDIO_BUFFER.clear();
+                            }
+                        }
+                    }
+                    if let Some(recorder) = clip_recorder.as_mut() {
+                        match recorder.record_frame() {
+                            Ok(()) => {
+                                if recorder.is_at_limit() {
+                                    if let Some(done) = clip_recorder.take() {
+                                        let message = finish_clip_recording(done);
+                                        println!("[clip] {message}");
+                                        toast = Some((
+                                            message,
+                                            Instant::now() + Duration::from_millis(3200),
+                                        ));
                                     }
                                 }
-                                AUDIO_BUFFER.clear();
+                            }
+                            Err(e) => {
+                                clip_recorder = None;
+                                toast = Some((
+                                    format!("Clip recording stopped: {e}"),
+                                    Instant::now() + Duration::from_millis(3200),
+                                ));
                             }
                         }
                     }
@@ -1669,9 +2002,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         peer_name = None;
                         auto_start_done = false;
                         auto_start_frame = 0;
-                        save_slot = None;
+                        _save_slot = None;
                         ghost_recording = None;
                         ghost_playback = None;
+                        if let Some(recorder) = clip_recorder.take() {
+                            let message = finish_clip_recording(recorder);
+                            println!("[clip] {message}");
+                            toast = Some((message, Instant::now() + Duration::from_millis(3200)));
+                        }
                         drone_runner = None;
                         ghost::drain_upload_queue(&cfg.stats_url);
                         score_tracker.reset();
@@ -1687,14 +2025,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         });
                     }
                 }
+                canvas.set_logical_size(0, 0)?;
+                canvas.set_draw_color(Color::RGB(0, 0, 0));
+                canvas.clear();
                 draw_emu_frame(
                     &mut canvas,
                     &mut emu_texture,
                     &texture_creator,
                     cfg.video_filter,
+                    cfg.aspect_mode,
+                    cfg.crt_corner_bend,
                 )?;
-                // Draw modern fight overlay for all play modes
-                {
+                // Draw modern fight overlay only while a round is loaded. round_num
+                // (0x256D6) ticks to 1 as soon as the round-intro sequence starts —
+                // earlier than gstate=0x02 transitioning or HP being written, so the
+                // HUD appears with the round intro rather than only after "FIGHT".
+                // It returns to 0 on attract / VS / character select, which keeps
+                // the HUD off those screens.
+                let in_fight_screen = core
+                    .as_ref()
+                    .map(|c| {
+                        let gstate = memory::peek_u16(c, GSTATE_ADDR, memory::Endian::Little)
+                            .unwrap_or(0);
+                        let round_num = memory::peek_u16(c, 0x256D6, memory::Endian::Little)
+                            .unwrap_or(0);
+                        gstate != GS_AMODE && round_num > 0
+                    })
+                    .unwrap_or(false);
+                if in_fight_screen {
                     if discord_user.is_none() {
                         discord_user = matchmaking::username_from_cached_token();
                     }
@@ -1749,8 +2107,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         } else {
                             None
                         },
+                        cfg.scorebar_style,
                     )
                     .map_err(|e| format!("overlay: {e}"))?;
+                    if let Some(recorder) = clip_recorder.as_ref() {
+                        let label = format!(
+                            "REC {:02}:{:02}",
+                            recorder.elapsed_seconds() / 60,
+                            recorder.elapsed_seconds() % 60
+                        );
+                        let scale = 1;
+                        let text_w = font.text_width_exact(&label, scale);
+                        let x = win_w as i32 - text_w - 18;
+                        let y = 44;
+                        canvas.set_draw_color(Color::RGBA(80, 0, 0, 210));
+                        canvas.fill_rect(sdl2::rect::Rect::new(
+                            x - 10,
+                            y - 5,
+                            (text_w + 18) as u32,
+                            22,
+                        ))?;
+                        canvas.set_draw_color(Color::RGBA(235, 55, 55, 240));
+                        canvas.fill_rect(sdl2::rect::Rect::new(x - 4, y + 5, 5, 5))?;
+                        font.draw(
+                            &mut canvas,
+                            &label,
+                            x + 8,
+                            y,
+                            scale,
+                            Color::RGB(255, 215, 215),
+                        )
+                        .map_err(|e| format!("recording indicator: {e}"))?;
+                    }
                     canvas.set_logical_size(LOGICAL_W as u32, LOGICAL_H as u32)?;
                 }
                 canvas.present();
@@ -1801,7 +2189,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     reset_for_netplay(
                                         c,
                                         &mut trainer,
-                                        &mut save_slot,
+                                        &mut _save_slot,
                                         &mut ghost_playback,
                                         &mut ghost_recording,
                                     );

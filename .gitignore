@@ -98,6 +98,7 @@ ghosts/
 ghost_library.json
 *.ncgh
 *.state
+clips/
 
 # Pre-sync savestate dumps for desync diagnosis
 presync_*.state

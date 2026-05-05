@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to create, for example v0.4.2"
+        description: "Release tag to create, for example v0.4.3"
         required: true
-        default: "v0.4.2"
+        default: "v0.4.3"
       prerelease:
         description: "Mark as prerelease"
         required: false
@@ -18,6 +18,12 @@ on:
 
 permissions:
   contents: write
+
+# Pin upstream FBNeo across Linux/macOS jobs so a release ships a known core,
+# rather than whatever upstream master happened to be the day CI ran. Bump
+# this when you've validated a newer FBNeo locally.
+env:
+  FBNEO_REF: master
 
 jobs:
   windows:
@@ -95,3 +101,127 @@ jobs:
             }
             gh @args
           }
+
+  linux:
+    name: Linux release package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install build + SDL2 dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential pkg-config \
+            libsdl2-dev libsdl2-ttf-dev
+
+      - name: Cache FBNeo libretro core
+        id: fbneo-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            cores/fbneo_libretro.so
+            vendor/FBNeo
+          key: fbneo-linux-${{ env.FBNEO_REF }}
+
+      - name: Build FBNeo libretro core
+        if: steps.fbneo-cache.outputs.cache-hit != 'true'
+        run: ./tools/build-fbneo-linux.sh
+
+      - name: Build freeplay
+        run: cargo build --release
+
+      - name: Package
+        run: ./package-linux.sh
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: freeplay-gametalk-linux
+          path: dist/freeplay-gametalk-v*-linux.tar.gz
+          if-no-files-found: error
+
+      - name: Attach to GitHub Release
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          tag="${REF_NAME}"
+          if [ "$EVENT_NAME" != "push" ]; then tag="${INPUT_TAG}"; fi
+          asset="$(ls dist/freeplay-gametalk-v*-linux.tar.gz | head -n1)"
+          if [ -z "$asset" ]; then echo "release tarball not found" >&2; exit 1; fi
+          notes="Automated freeplay-gametalk client release. ROM files are not included."
+          if gh release view "$tag" --repo "$GH_REPO" >/dev/null 2>&1; then
+            gh release upload "$tag" "$asset" --repo "$GH_REPO" --clobber
+          else
+            args=(release create "$tag" "$asset" --repo "$GH_REPO" --title "$tag" --notes "$notes")
+            if [ "$INPUT_PRERELEASE" = "true" ]; then args+=(--prerelease); fi
+            gh "${args[@]}"
+          fi
+
+  macos:
+    name: macOS release package
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install SDL2 dependencies
+        run: brew install sdl2 sdl2_ttf
+
+      - name: Cache FBNeo libretro core
+        id: fbneo-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            cores/fbneo_libretro.dylib
+            vendor/FBNeo
+          key: fbneo-macos-${{ env.FBNEO_REF }}
+
+      - name: Build FBNeo libretro core
+        if: steps.fbneo-cache.outputs.cache-hit != 'true'
+        run: ./tools/build-fbneo-macos.sh
+
+      - name: Build freeplay
+        run: cargo build --release
+
+      - name: Package
+        run: ./package-macos.sh
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: freeplay-gametalk-macos
+          path: dist/freeplay-gametalk-v*-macos.tar.gz
+          if-no-files-found: error
+
+      - name: Attach to GitHub Release
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          tag="${REF_NAME}"
+          if [ "$EVENT_NAME" != "push" ]; then tag="${INPUT_TAG}"; fi
+          asset="$(ls dist/freeplay-gametalk-v*-macos.tar.gz | head -n1)"
+          if [ -z "$asset" ]; then echo "release tarball not found" >&2; exit 1; fi
+          notes="Automated freeplay-gametalk client release. ROM files are not included."
+          if gh release view "$tag" --repo "$GH_REPO" >/dev/null 2>&1; then
+            gh release upload "$tag" "$asset" --repo "$GH_REPO" --clobber
+          else
+            args=(release create "$tag" "$asset" --repo "$GH_REPO" --title "$tag" --notes "$notes")
+            if [ "$INPUT_PRERELEASE" = "true" ]; then args+=(--prerelease); fi
+            gh "${args[@]}"
+          fi

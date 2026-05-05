@@ -49,9 +49,21 @@ pub struct Config {
     /// Audio output level as a percentage.
     #[serde(default = "default_volume_percent")]
     pub volume_percent: u8,
+    /// Audio queue depth. Higher values tolerate frame jitter better.
+    #[serde(default)]
+    pub audio_buffer: AudioBuffer,
     /// Gameplay frame presentation filter.
     #[serde(default)]
     pub video_filter: VideoFilter,
+    /// Enable rounded CRT glass/corner shading on CRT-style filters.
+    #[serde(default = "default_true")]
+    pub crt_corner_bend: bool,
+    /// How the gameplay frame is fit into the window.
+    #[serde(default)]
+    pub aspect_mode: AspectMode,
+    /// Which scorebar layout to draw over gameplay.
+    #[serde(default)]
+    pub scorebar_style: ScorebarStyle,
     /// Optional Discord webhook URL. When non-empty, Freeplay posts round/match
     /// results here during netplay sessions. Get one from any Discord channel
     /// via Edit Channel → Integrations → Webhooks → New Webhook → Copy URL.
@@ -64,12 +76,101 @@ pub struct Config {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum AudioBuffer {
+    Low,
+    Normal,
+    #[default]
+    Stable,
+}
+
+impl AudioBuffer {
+    pub fn label(self) -> &'static str {
+        match self {
+            AudioBuffer::Low => "LOW",
+            AudioBuffer::Normal => "NORMAL",
+            AudioBuffer::Stable => "STABLE",
+        }
+    }
+
+    pub fn ms(self) -> u32 {
+        match self {
+            AudioBuffer::Low => 120,
+            AudioBuffer::Normal => 220,
+            AudioBuffer::Stable => 320,
+        }
+    }
+
+    pub fn cycle(self, delta: i8) -> Self {
+        let all = [AudioBuffer::Low, AudioBuffer::Normal, AudioBuffer::Stable];
+        let idx = all.iter().position(|v| *v == self).unwrap_or(2) as i8;
+        let next = (idx + delta).rem_euclid(all.len() as i8) as usize;
+        all[next]
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum VideoFilter {
     #[default]
     Sharp,
     Smooth,
     Scanlines,
     CrtLite,
+    CrtArcade,
+    CrtCabinet,
+    PvmSharp,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AspectMode {
+    #[default]
+    Fit,
+    Integer,
+    Stretch,
+}
+
+impl AspectMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            AspectMode::Fit => "FIT",
+            AspectMode::Integer => "INTEGER",
+            AspectMode::Stretch => "STRETCH",
+        }
+    }
+
+    pub fn cycle(self, delta: i8) -> Self {
+        let all = [AspectMode::Fit, AspectMode::Integer, AspectMode::Stretch];
+        let idx = all.iter().position(|v| *v == self).unwrap_or(0) as i8;
+        let next = (idx + delta).rem_euclid(all.len() as i8) as usize;
+        all[next]
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScorebarStyle {
+    /// Slanted scoreplates with name + win count (original layout).
+    Plates,
+    /// Just the players' gamertags, pulled in toward the center of the screen.
+    #[default]
+    Centered,
+}
+
+impl ScorebarStyle {
+    pub fn label(self) -> &'static str {
+        match self {
+            ScorebarStyle::Plates => "PLATES",
+            ScorebarStyle::Centered => "CENTERED",
+        }
+    }
+
+    pub fn cycle(self, delta: i8) -> Self {
+        let all = [ScorebarStyle::Plates, ScorebarStyle::Centered];
+        let idx = all.iter().position(|v| *v == self).unwrap_or(0) as i8;
+        let next = (idx + delta).rem_euclid(all.len() as i8) as usize;
+        all[next]
+    }
 }
 
 impl VideoFilter {
@@ -79,6 +180,9 @@ impl VideoFilter {
             VideoFilter::Smooth => "SMOOTH",
             VideoFilter::Scanlines => "SCANLINES",
             VideoFilter::CrtLite => "CRT LITE",
+            VideoFilter::CrtArcade => "CRT ARCADE",
+            VideoFilter::CrtCabinet => "CRT CABINET",
+            VideoFilter::PvmSharp => "PVM SHARP",
         }
     }
 
@@ -88,6 +192,9 @@ impl VideoFilter {
             VideoFilter::Smooth,
             VideoFilter::Scanlines,
             VideoFilter::CrtLite,
+            VideoFilter::CrtArcade,
+            VideoFilter::CrtCabinet,
+            VideoFilter::PvmSharp,
         ];
         let idx = all.iter().position(|v| *v == self).unwrap_or(0) as i8;
         let next = (idx + delta).rem_euclid(all.len() as i8) as usize;

@@ -1,5 +1,5 @@
 //! In-engine menu: list-based screens, pad/keyboard navigation, rebind flow.
-use crate::config::VideoFilter;
+use crate::config::{AspectMode, AudioBuffer, ScorebarStyle, VideoFilter};
 use crate::font::Font;
 use crate::input::{is_action_active, Action, Binding, Bindings, Player, PlayerBindings};
 use crate::matchmaking::{HistoryRow, LeaderboardRow, LiveMatch, ProfileData, RemoteGhostMeta};
@@ -87,7 +87,11 @@ pub enum MenuScreen {
         discord_rpc_enabled: bool,
         fullscreen: bool,
         volume_percent: u8,
+        audio_buffer: AudioBuffer,
         video_filter: VideoFilter,
+        crt_corner_bend: bool,
+        aspect_mode: AspectMode,
+        scorebar_style: ScorebarStyle,
     },
     /// Practice/training helpers backed by RAM pokes already used by F-keys.
     Training {
@@ -196,12 +200,17 @@ pub const MAIN_ITEMS: [&str; 8] = [
     "Quit",
 ];
 
-const SETTINGS_ITEMS: [&str; 6] = [
+const SETTINGS_ITEMS: [&str; 11] = [
     "Discord Rich Presence",
     "Fullscreen",
     "Volume",
+    "Audio Buffer",
     "Video Filter",
+    "CRT Glass",
+    "Aspect",
+    "Scorebar",
     "Run Doctor",
+    "Open Clips Folder",
     "Open Logs Folder",
 ];
 const TRAINING_ITEMS: [&str; 3] = ["Hitbox View", "Infinite Health", "Freeze Timer"];
@@ -247,8 +256,16 @@ pub enum NavResult {
     ToggleFullscreen,
     /// Adjust audio volume by signed percentage points.
     AdjustVolume(i8),
+    /// Cycle audio queue stability setting.
+    CycleAudioBuffer(i8),
     /// Cycle gameplay video presentation filter.
     CycleVideoFilter(i8),
+    /// Toggle rounded CRT glass/corner shading.
+    ToggleCrtGlass,
+    /// Cycle gameplay frame aspect handling.
+    CycleAspectMode(i8),
+    /// Cycle the in-game scorebar layout.
+    CycleScorebarStyle(i8),
     /// Open Training helper menu.
     #[allow(dead_code)]
     OpenTraining,
@@ -256,6 +273,8 @@ pub enum NavResult {
     ToggleTraining(&'static str),
     /// Launch the external setup diagnostics window.
     LaunchDoctor,
+    /// Open the folder where Ctrl+R clips are written.
+    OpenClipsFolder,
     /// Open the folder where runtime logs are written.
     OpenLogsFolder,
 }
@@ -383,7 +402,11 @@ impl AppState {
                         discord_rpc_enabled: false,
                         fullscreen: false,
                         volume_percent: 100,
+                        audio_buffer: AudioBuffer::Stable,
                         video_filter: VideoFilter::Sharp,
+                        crt_corner_bend: true,
+                        aspect_mode: AspectMode::Fit,
+                        scorebar_style: ScorebarStyle::Centered,
                     });
                     NavResult::OpenSettings
                 }
@@ -466,9 +489,14 @@ impl AppState {
                 0 => NavResult::ToggleDiscordRpc,
                 1 => NavResult::ToggleFullscreen,
                 2 => NavResult::AdjustVolume(10),
-                3 => NavResult::CycleVideoFilter(1),
-                4 => NavResult::LaunchDoctor,
-                5 => NavResult::OpenLogsFolder,
+                3 => NavResult::CycleAudioBuffer(1),
+                4 => NavResult::CycleVideoFilter(1),
+                5 => NavResult::ToggleCrtGlass,
+                6 => NavResult::CycleAspectMode(1),
+                7 => NavResult::CycleScorebarStyle(1),
+                8 => NavResult::LaunchDoctor,
+                9 => NavResult::OpenClipsFolder,
+                10 => NavResult::OpenLogsFolder,
                 _ => NavResult::Stay,
             },
             AppState::Menu(MenuScreen::Training { cursor, .. }) => match cursor {
@@ -619,7 +647,11 @@ pub fn draw(
             discord_rpc_enabled,
             fullscreen,
             volume_percent,
+            audio_buffer,
             video_filter,
+            crt_corner_bend,
+            aspect_mode,
+            scorebar_style,
         }) => draw_settings(
             canvas,
             font,
@@ -627,7 +659,11 @@ pub fn draw(
             *discord_rpc_enabled,
             *fullscreen,
             *volume_percent,
+            *audio_buffer,
             *video_filter,
+            *crt_corner_bend,
+            *aspect_mode,
+            *scorebar_style,
             w,
             h,
         )?,
@@ -1333,12 +1369,13 @@ fn draw_about(canvas: &mut Canvas<Window>, font: &mut Font, w: i32, h: i32) -> R
         "F2   Hitbox overlay",
         "F3   Infinite health",
         "F4   Freeze timer",
-        "F5   Save state",
-        "F7   Load state",
         "F6   Ghost record",
         "F8   Ghost playback",
+        "Ctrl+R Record clip",
+        "Ctrl+F Video filter",
+        "Ctrl+A Aspect",
         "F12  Play vs ghost",
-        "F11  Dump RAM",
+        "F10  Drone during ghost",
     ];
     let right = [
         "Auto-skip attract on both sides",
@@ -1347,8 +1384,8 @@ fn draw_about(canvas: &mut Canvas<Window>, font: &mut Font, w: i32, h: i32) -> R
         "Disconnect returns to lobby",
         "Esc ends match gracefully",
         "",
+        "F1 exits online gracefully",
         "Logs: freeplay-net.log",
-        "Ghosts: ghosts/*.ncgh",
         "",
     ];
     for (l, r) in left.iter().zip(right.iter()) {
@@ -1966,7 +2003,11 @@ fn draw_settings(
     discord_rpc_enabled: bool,
     fullscreen: bool,
     volume_percent: u8,
+    audio_buffer: AudioBuffer,
     video_filter: VideoFilter,
+    crt_corner_bend: bool,
+    aspect_mode: AspectMode,
+    scorebar_style: ScorebarStyle,
     w: i32,
     h: i32,
 ) -> Result<(), String> {
@@ -1996,7 +2037,11 @@ fn draw_settings(
             0 => Some(if discord_rpc_enabled { "ON" } else { "OFF" }.to_string()),
             1 => Some(if fullscreen { "ON" } else { "OFF" }.to_string()),
             2 => Some(format!("{volume_percent}%")),
-            3 => Some(video_filter.label().to_string()),
+            3 => Some(audio_buffer.label().to_string()),
+            4 => Some(video_filter.label().to_string()),
+            5 => Some(if crt_corner_bend { "ON" } else { "OFF" }.to_string()),
+            6 => Some(aspect_mode.label().to_string()),
+            7 => Some(scorebar_style.label().to_string()),
             _ => None,
         };
         if let Some(value) = value {
@@ -2004,6 +2049,9 @@ fn draw_settings(
             let enabled_colour = match i {
                 2 => Color::RGB(180, 205, 255),
                 3 => Color::RGB(180, 205, 255),
+                4 => Color::RGB(180, 205, 255),
+                6 => Color::RGB(180, 205, 255),
+                7 => Color::RGB(180, 205, 255),
                 _ if value == "ON" => Color::RGB(120, 230, 150),
                 _ => Color::RGB(210, 140, 140),
             };
@@ -2014,8 +2062,11 @@ fn draw_settings(
     y += SETTINGS_ITEMS.len() as i32 * row_h + 20;
     let notes = [
         "Doctor checks local setup in a separate window.",
-        "Use LEFT/RIGHT on Volume.",
+        "Use LEFT/RIGHT on Volume and video options.",
+        "Stable audio reduces crackle with a little more latency.",
         "Video Filter applies during gameplay.",
+        "Aspect controls fullscreen fit.",
+        "Ctrl+R clips are written under clips/.",
         "Logs are written next to the app while Freeplay runs.",
     ];
     for note in notes {

@@ -33,15 +33,39 @@ ROM files are not distributed with Freeplay.
 EOF
 
 cat > "$OUT_DIR/README.txt" <<EOF
-freeplay-gametalk v$VERSION
-===========================
+freeplay-gametalk v$VERSION (Linux)
+===================================
+
+PREREQS (one-time, system-wide):
+  Debian/Ubuntu:
+    sudo apt install libsdl2-2.0-0 libsdl2-ttf-2.0-0
+
+  Fedora:
+    sudo dnf install SDL2 SDL2_ttf
+
+  Arch:
+    sudo pacman -S sdl2 sdl2_ttf
+
+  These are runtime libraries the bundled freeplay binary links against.
+  They are NOT shipped in this archive.
 
 INSTALL:
   1. Extract this archive anywhere.
-  2. Put your legally-obtained ROM zip in the roms/ folder.
-  3. Copy .env.example to .env and fill in online service values.
-  4. Run ./freeplay --doctor to verify setup.
-  5. Run ./freeplay.
+  2. Put your legally-obtained ROM zip (mk2.zip) into the roms/ folder.
+  3. Copy .env.example to .env and fill in online service values
+     (signaling URL, Discord client id, stats URL — optional).
+  4. Make the binary executable if needed:
+         chmod +x ./freeplay
+  5. Run ./freeplay --doctor to verify setup.
+  6. Run ./freeplay.
+
+TROUBLESHOOTING:
+  - "error while loading shared libraries: libSDL2-2.0.so.0"
+        -> install the SDL2 package for your distro (above).
+  - "fbneo_libretro.so not found"
+        -> ensure it's beside ./freeplay.
+  - No audio: PulseAudio/PipeWire not running for your user. SDL falls
+    back to silent; the game still runs.
 EOF
 
 rm -f "$ZIP_FILE"

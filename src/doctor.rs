@@ -82,6 +82,15 @@ pub fn run() -> i32 {
         false,
     );
 
+    let ffmpeg = crate::clip::find_ffmpeg();
+    check_path(
+        "ffmpeg clip encoder",
+        ffmpeg.as_deref(),
+        "optional; required for Ctrl+R MP4 clips",
+        &mut ok,
+        false,
+    );
+
     println!();
     if ok {
         println!("doctor: OK");

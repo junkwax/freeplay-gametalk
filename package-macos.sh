@@ -33,18 +33,40 @@ ROM files are not distributed with Freeplay.
 EOF
 
 cat > "$OUT_DIR/README.txt" <<EOF
-freeplay-gametalk v$VERSION
-===========================
+freeplay-gametalk v$VERSION (macOS)
+===================================
+
+PREREQS (one-time, system-wide):
+  Install Homebrew if you don't have it (https://brew.sh), then:
+
+    brew install sdl2 sdl2_ttf
+
+  These are runtime libraries the bundled freeplay binary links against.
+  They are NOT shipped in this archive.
 
 INSTALL:
   1. Extract this archive anywhere.
-  2. Put your legally-obtained ROM zip in the roms/ folder.
-  3. Copy .env.example to .env and fill in online service values.
-  4. Run ./freeplay --doctor to verify setup.
-  5. Run ./freeplay.
+  2. Put your legally-obtained ROM zip (mk2.zip) into the roms/ folder.
+  3. Copy .env.example to .env and fill in online service values
+     (signaling URL, Discord client id, stats URL — optional).
+  4. macOS Gatekeeper will refuse to launch the unsigned binary on
+     first run. Either:
+         xattr -d com.apple.quarantine ./freeplay
+     or right-click freeplay in Finder > Open > Open anyway.
+  5. Make the binary executable if needed:
+         chmod +x ./freeplay
+  6. Run ./freeplay --doctor to verify setup.
+  7. Run ./freeplay.
+
+TROUBLESHOOTING:
+  - "image not found: libSDL2-2.0.0.dylib" -> brew install sdl2 sdl2_ttf
+  - "fbneo_libretro.dylib not found"       -> ensure it's beside ./freeplay
+  - Apple Silicon: build was produced for the host arch of the CI runner.
+    If your Mac arch differs, build locally with package-macos.sh.
 
 NOTE:
-  This is a folder package, not a signed .app bundle yet.
+  This is a folder package, not a signed .app bundle yet. Code-signing and
+  notarization are tracked as future work.
 EOF
 
 rm -f "$ZIP_FILE"

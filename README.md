@@ -30,10 +30,14 @@ URLs, OAuth client IDs, tokens, or webhooks.
 
 ## Requirements
 
-- Windows
+- Windows, Linux, or macOS
 - Rust stable toolchain
-- SDL2 runtime DLLs available next to the executable when running packaged
-  builds
+- SDL2 runtime libraries:
+  - **Windows**: SDL2.dll + SDL2_ttf.dll next to the executable (bundled in
+    the packaged Windows release)
+  - **Linux**: `libsdl2-2.0-0` and `libsdl2-ttf-2.0-0` from your distro
+    (Debian/Ubuntu); equivalents on Fedora/Arch
+  - **macOS**: `brew install sdl2 sdl2_ttf`
 - FBNeo libretro core available next to the executable
 - A legally obtained compatible ROM zip supplied by the user
 - Optional Discord application and backend services for online features
@@ -118,26 +122,44 @@ executable, runtime DLLs, media assets, app icon, registry helper, and an empty
 
 ## Release Automation
 
-GitHub Actions includes `.github/workflows/release.yml`.
+GitHub Actions includes `.github/workflows/release.yml`. It now produces
+release packages for **Windows, Linux, and macOS** in parallel:
+
+- Windows: `freeplay-gametalk-v<version>.zip`
+- Linux: `freeplay-gametalk-v<version>-linux.tar.gz`
+- macOS: `freeplay-gametalk-v<version>-macos.tar.gz`
 
 Regular pushes and pull requests also run CI and upload a Windows package
-artifact from the **CI** workflow. Use a version tag when you want that build
+artifact from the **CI** workflow. Use a version tag when you want builds
 published as a GitHub Release.
 
 Create and publish a release by pushing a version tag:
 
 ```powershell
-git tag v0.4.2
-git push origin v0.4.2
+git tag v0.4.3
+git push origin v0.4.3
 ```
 
 You can also run the **Release** workflow manually from GitHub Actions and
-provide a tag. The workflow builds the Windows package, uploads it as an
-artifact, and creates a GitHub Release with the zip attached.
+provide a tag. The workflow builds packages for all three platforms, uploads
+them as artifacts, and attaches the archives to a GitHub Release.
 
-The automated release does not include ROM files. If an FBNeo core is not
-available in the CI workspace, the package is still produced as a client
-package and users can provide/build the core locally.
+### FBNeo pin
+
+The Linux/macOS jobs build the FBNeo libretro core from
+`finalburnneo/FBNeo`. The commit/branch is controlled by the `FBNEO_REF`
+env var at the top of `release.yml` (default: `master`). Both build scripts
+(`tools/build-fbneo-{linux,macos}.sh`) honor the same `FBNEO_REF` env var
+when run locally, so a release build can be reproduced bit-for-bit. CI also
+caches `vendor/FBNeo` and `cores/` keyed on this ref so repeat builds skip
+the ~10–20 minute FBNeo compile.
+
+Bump `FBNEO_REF` to a specific commit SHA when you want to lock netplay
+savestate compatibility across releases.
+
+The automated release does not include ROM files. SDL2 runtime libraries
+are NOT bundled in the Linux/macOS archives — users install them via their
+package manager (see the per-platform README inside each archive).
 
 ## Runtime Files
 

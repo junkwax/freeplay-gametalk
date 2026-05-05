@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.4.3 - 2026-05-05
+
+### Added
+
+- Scorebar style option in Settings: PLATES (slanted scoreplates with names +
+  win count) or CENTERED (gamertags-only HUD pulled toward the center of the
+  screen above the timer).
+- Linux release packaging job in `release.yml`. Tagged pushes now produce a
+  `freeplay-gametalk-v<version>-linux.tar.gz` and attach it to the GitHub
+  Release alongside the Windows build.
+- macOS release packaging job in `release.yml` (folder package, unsigned).
+  Tagged pushes now produce `freeplay-gametalk-v<version>-macos.tar.gz`.
+- `FBNEO_REF` env var support in `tools/build-fbneo-{linux,macos}.sh` so the
+  FBNeo libretro core is checked out at a known ref. Defaults to `master`.
+  Release workflows cache `vendor/FBNeo` and `cores/` keyed on this ref so
+  subsequent builds skip the FBNeo compile step.
+- Per-platform README inside Linux/macOS release packages: prereqs (SDL2
+  install per distro / Homebrew), Gatekeeper unquarantine note for macOS,
+  troubleshooting for the common runtime-library and core-not-found errors.
+
+### Changed
+
+- The fight overlay is now suppressed on attract / VS / character-select
+  screens. It only renders when MK2's `round_num` (RAM 0x256D6) is non-zero,
+  so the HUD appears with the round intro instead of overlapping menus.
+- Default `ScorebarStyle` is now CENTERED.
+- Centered scorebar Y position scales with window height (~6.5% of height,
+  clamped 36–84 px) to sit just under MK2's timer instead of overlapping the
+  life bars.
+
 ## 0.4.2 - 2026-05-01
 
 ### Added
