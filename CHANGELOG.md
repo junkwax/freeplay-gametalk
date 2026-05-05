@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.4.4 - 2026-05-05
+
+### Changed
+
+- STUN discovery now tries `stun.l.google.com`, `stun1.l.google.com`, and
+  `stun.cloudflare.com` (resolved via DNS) instead of a single hardcoded
+  Google IP, so matchmaking survives Google rotating its STUN backends or
+  a single provider being down.
+- "UDP port already in use" now produces a clearer error pointing at a
+  stray freeplay.exe instead of the generic OS message.
+- `poll_status` now retries up to 5 transient HTTP failures (502/503,
+  connection resets, brief network blips) with linear backoff before
+  failing the queue session. Cloud Run cold starts no longer end a queue.
+
+### Fixed
+
+- Workflow now clones `libretro/FBNeo` (which carries `src/burner/libretro/`)
+  instead of `finalburnneo/FBNeo` (which does not), so Linux/macOS release
+  builds actually find the libretro Makefile.
+
 ## 0.4.3 - 2026-05-05
 
 ### Added

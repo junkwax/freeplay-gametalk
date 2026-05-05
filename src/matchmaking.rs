@@ -1,7 +1,7 @@
 //! Automated matchmaking client for Freeplay.
 
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{SocketAddr, UdpSocket};
+use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
 use std::sync::{mpsc::Sender, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -538,13 +538,28 @@ fn discord_login(tx: &Sender<Update>) -> Result<String, String> {
 
 // ── STUN discovery ────────────────────────────────────────────────────────────
 
-fn stun_discover(game_port: u16) -> Result<String, String> {
-    let sock = UdpSocket::bind(format!("0.0.0.0:{game_port}"))
-        .map_err(|e| format!("UDP bind on :{game_port} failed: {e}"))?;
-    sock.set_read_timeout(Some(Duration::from_secs(5)))
-        .map_err(|e| e.to_string())?;
+/// STUN servers tried in order. Hostnames so DNS round-robin can fail us over
+/// when a single backend IP is dropped (e.g. Google rotating its STUN pool).
+/// Mixing providers protects against a full-provider outage.
+const STUN_HOSTS: &[&str] = &[
+    "stun.l.google.com:19302",
+    "stun1.l.google.com:19302",
+    "stun.cloudflare.com:3478",
+];
 
-    let stun: SocketAddr = "74.125.250.129:19302".parse().unwrap();
+fn stun_discover(game_port: u16) -> Result<String, String> {
+    let sock = UdpSocket::bind(format!("0.0.0.0:{game_port}")).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::AddrInUse {
+            format!(
+                "UDP port {game_port} is already in use. Another freeplay.exe \
+                 is probably running — close it (Task Manager) and try again."
+            )
+        } else {
+            format!("UDP bind on :{game_port} failed: {e}")
+        }
+    })?;
+    sock.set_read_timeout(Some(Duration::from_secs(3)))
+        .map_err(|e| e.to_string())?;
 
     let mut req = [0u8; 20];
     req[0] = 0x00;
@@ -561,16 +576,41 @@ fn stun_discover(game_port: u16) -> Result<String, String> {
         *b = ((t >> (i * 5)) ^ (t >> (i * 3 + 1))) as u8;
     }
 
-    sock.send_to(&req, stun)
-        .map_err(|e| format!("STUN send failed: {e}"))?;
+    let mut last_err = String::new();
+    for host in STUN_HOSTS {
+        match try_stun_one(&sock, host, &req) {
+            Ok(endpoint) => return Ok(endpoint),
+            Err(e) => {
+                println!("[mm] STUN via {host} failed: {e}");
+                last_err = e;
+            }
+        }
+    }
+    Err(format!(
+        "All STUN servers unreachable (last: {last_err}). Check internet \
+         connectivity and that UDP egress is not firewalled."
+    ))
+}
+
+fn try_stun_one(sock: &UdpSocket, host: &str, req: &[u8; 20]) -> Result<String, String> {
+    let mut addrs = host
+        .to_socket_addrs()
+        .map_err(|e| format!("DNS lookup for {host}: {e}"))?
+        .filter(SocketAddr::is_ipv4);
+    let stun = addrs
+        .next()
+        .ok_or_else(|| format!("{host} resolved to no IPv4 addresses"))?;
+
+    sock.send_to(req, stun)
+        .map_err(|e| format!("STUN send to {stun}: {e}"))?;
 
     let mut buf = [0u8; 512];
     let (n, _) = sock
         .recv_from(&mut buf)
-        .map_err(|e| format!("STUN recv failed: {e}"))?;
+        .map_err(|e| format!("STUN recv from {stun}: {e}"))?;
 
     parse_stun_xor_mapped(&buf[..n])
-        .ok_or_else(|| "No XOR-MAPPED-ADDRESS in STUN response".to_string())
+        .ok_or_else(|| format!("No XOR-MAPPED-ADDRESS in {host} response"))
 }
 
 fn parse_stun_xor_mapped(buf: &[u8]) -> Option<String> {
@@ -743,13 +783,48 @@ fn lfg(token: &str, stun_endpoint: &str) -> Result<(String, bool), String> {
 fn poll_status(token: &str, session_id: &str, tx: &Sender<Update>) -> Result<MatchInfo, String> {
     let url = format!("{}/match/status/{session_id}", signaling_url()?);
     let deadline = Instant::now() + Duration::from_secs(120);
+    // Allow a handful of consecutive transient HTTP failures before giving up.
+    // Cloud Run cold starts and brief network blips routinely produce 502/503
+    // or connection resets; a single hiccup shouldn't end a queue session.
+    let mut transient_failures = 0u32;
+    const MAX_TRANSIENT_FAILURES: u32 = 5;
 
     loop {
         if Instant::now() > deadline {
             return Err("No opponent found within 2 minutes".to_string());
         }
 
-        let resp = http_get(&url, token)?;
+        let resp = match http_get(&url, token) {
+            Ok(r) => {
+                transient_failures = 0;
+                r
+            }
+            Err(e) => {
+                // 401/403 are auth errors — bubble up immediately so the caller
+                // can clear the cached token. Everything else is treated as a
+                // transient network/server issue and retried.
+                if e.contains("401") || e.contains("403") {
+                    return Err(e);
+                }
+                transient_failures += 1;
+                if transient_failures >= MAX_TRANSIENT_FAILURES {
+                    return Err(format!(
+                        "Signaling server unreachable after {transient_failures} retries: {e}"
+                    ));
+                }
+                println!(
+                    "[mm] poll_status transient error ({transient_failures}/{MAX_TRANSIENT_FAILURES}): {e}"
+                );
+                send(
+                    tx,
+                    Update::Status("Reconnecting to matchmaking...".into()),
+                )?;
+                // Linear backoff (1.5s, 3s, 4.5s, 6s, 7.5s) keeps total worst
+                // case well inside the 120s window.
+                std::thread::sleep(Duration::from_millis(1500 * transient_failures as u64));
+                continue;
+            }
+        };
         let status = json_str(&resp, "status").unwrap_or_default();
 
         match status.as_str() {
