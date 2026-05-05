@@ -14,7 +14,9 @@ FBNEO_REF="${FBNEO_REF:-master}"
 mkdir -p "$VENDOR_DIR" "$CORES_DIR"
 
 if [ ! -d "$FBNEO_DIR" ]; then
-  git clone https://github.com/finalburnneo/FBNeo.git "$FBNEO_DIR"
+  # Clone the libretro/FBNeo fork — it carries the libretro target under
+  # src/burner/libretro/, which finalburnneo/FBNeo does not.
+  git clone https://github.com/libretro/FBNeo.git "$FBNEO_DIR"
 fi
 git -C "$FBNEO_DIR" fetch --tags origin
 git -C "$FBNEO_DIR" checkout "$FBNEO_REF"
