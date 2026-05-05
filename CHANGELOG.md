@@ -19,6 +19,11 @@
 - Workflow now clones `libretro/FBNeo` (which carries `src/burner/libretro/`)
   instead of `finalburnneo/FBNeo` (which does not), so Linux/macOS release
   builds actually find the libretro Makefile.
+- macOS workflow exports `LIBRARY_PATH`/`CPATH`/`PKG_CONFIG_PATH` from the
+  Homebrew prefix (`/opt/homebrew` on Apple Silicon runners) so the
+  release link step actually finds `-lSDL2`/`-lSDL2_ttf`. Previously the
+  cargo build failed with `library 'SDL2' not found` even though brew
+  install had succeeded.
 
 ## 0.4.3 - 2026-05-05
 

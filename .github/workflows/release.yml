@@ -177,6 +177,19 @@ jobs:
       - name: Install SDL2 dependencies
         run: brew install sdl2 sdl2_ttf
 
+      - name: Expose Homebrew lib/include to linker
+        # On Apple Silicon runners brew installs to /opt/homebrew, which is
+        # NOT in the default search path for `cc`/`ld`. Without this the
+        # final link of the freeplay binary fails with "library 'SDL2' not
+        # found" even though `brew install sdl2` succeeded.
+        run: |
+          BREW_PREFIX="$(brew --prefix)"
+          {
+            echo "LIBRARY_PATH=$BREW_PREFIX/lib"
+            echo "CPATH=$BREW_PREFIX/include"
+            echo "PKG_CONFIG_PATH=$BREW_PREFIX/lib/pkgconfig"
+          } >> "$GITHUB_ENV"
+
       - name: Cache FBNeo libretro core
         id: fbneo-cache
         uses: actions/cache@v4
