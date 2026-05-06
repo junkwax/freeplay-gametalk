@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.2 - 2026-05-06
+
+### Fixed
+
+- Actually track `.env.public` in git. v0.5.1 updated the packagers to
+  fall back to `.env.public`, but `.gitignore` still excluded `.env.*`
+  except `.env.example`, so CI never received the public defaults file
+  and the Windows archive still shipped without a runtime `.env`.
+- `.env.example` now contains the public production defaults instead of
+  placeholder URLs, and packagers can use it as a final fallback.
+- Windows package README now reflects the current fresh-download flow:
+  ROM first, then run the app; no manual env setup is needed for public
+  matchmaking.
+
 ## 0.5.1 - 2026-05-06
 
 ### Fixed

@@ -80,6 +80,7 @@ config.toml
 .env
 .env.*
 !.env.example
+!.env.public
 
 # Local development scratch files
 Cargo.lock

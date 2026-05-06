@@ -82,6 +82,9 @@ if (Test-Path ".env") {
 } elseif (Test-Path ".env.public") {
     $envSource = ".env.public"
     Write-Host "  ✓ Using .env.public for config injection (no local .env)"
+} elseif (Test-Path ".env.example") {
+    $envSource = ".env.example"
+    Write-Host "  ✓ Using .env.example for config injection (no local .env or .env.public)"
 }
 
 if (Test-Path "config.toml") {
@@ -195,14 +198,14 @@ freeplay-gametalk v$VERSION
 INSTALL:
   1. Extract this zip anywhere (e.g. C:\Games\Freeplay)
   2. Put your legally-obtained ROM zip in the roms\ folder
-  3. Copy .env.example to .env and fill in online service values
-  4. Run freeplay.exe --doctor to verify setup
-  5. Double-click freeplay.exe
+  3. Run freeplay.exe --doctor to verify setup
+  4. Double-click freeplay.exe
 
 MATCHMAKING:
   Click "Find Match" in the main menu. You'll log in with Discord once,
   then automatically pair with any other player also in the queue.
   Login is cached for 24 hours.
+  Matchmaking works out of the box with the bundled public .env.
 
 MANUAL NETPLAY:
   "Host Match" and "Join Match" still work for direct IP connections.

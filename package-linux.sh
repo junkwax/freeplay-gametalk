@@ -36,6 +36,8 @@ if [ -f ".env" ]; then
   ENV_SOURCE=".env"
 elif [ -f ".env.public" ]; then
   ENV_SOURCE=".env.public"
+elif [ -f ".env.example" ]; then
+  ENV_SOURCE=".env.example"
 fi
 if [ -n "$ENV_SOURCE" ]; then
   grep -v -E '^\s*FREEPLAY_DISCORD_WEBHOOK_URL\s*=' "$ENV_SOURCE" > "$OUT_DIR/.env"
