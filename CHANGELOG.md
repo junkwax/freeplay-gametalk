@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.4.5 - 2026-05-06
+
+### Fixed
+
+- Spectator frame push (`/spectate/push/:sid`) now sends the cached JWT
+  in `Authorization: Bearer ...`. The signaling server was updated in the
+  same release window to require auth on this endpoint; v0.4.4 silently
+  failed every push with 401, so the live-match scoreboard never
+  reflected in-progress matches.
+- Ghost upload (`/ghosts/upload`) now sends the JWT. Same root cause —
+  the stats server now verifies the uploader's identity from the JWT
+  `sub` rather than the trusted-but-spoofable `X-Freeplay-Discord-Id`
+  header. v0.4.4 ghost uploads were 401-bouncing into the retry queue
+  forever after the server upgrade.
+
+### Changed
+
+- `drain_upload_queue` now skips entirely when no JWT is cached, instead
+  of attempting unauthenticated retries that would just re-enqueue. The
+  queue is drained again as soon as Discord login completes, so nothing
+  is lost.
+
 ## 0.4.4 - 2026-05-05
 
 ### Changed

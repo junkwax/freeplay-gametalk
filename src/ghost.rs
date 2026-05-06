@@ -485,6 +485,11 @@ pub fn upload_ghost_to_stats(
     let uname = username.to_string();
     let rh = rom_hash.to_string();
 
+    // Snapshot the cached JWT here, on the calling thread, so the upload
+    // worker thread doesn't race against a sign-out that clears the token.
+    // Server (v0.4.5+) requires this for /ghosts/upload — without it we'd
+    // get 401 and bounce the file into the retry queue forever.
+    let token = crate::matchmaking::current_token();
     std::thread::spawn(move || {
         if !try_upload_one(
             &url,
@@ -495,6 +500,7 @@ pub fn upload_ghost_to_stats(
             &rh,
             &filename,
             frame_count,
+            token.as_deref(),
         ) {
             enqueue_upload(&path_buf);
         }
@@ -511,6 +517,7 @@ fn try_upload_one(
     rom_hash: &str,
     filename: &str,
     frame_count: u32,
+    token: Option<&str>,
 ) -> bool {
     let raw = match std::fs::read(ghost_path) {
         Ok(d) => d,
@@ -536,6 +543,7 @@ fn try_upload_one(
         rom_hash,
         filename,
         frame_count,
+        token,
     ) {
         Ok(resp) => {
             ulog!(
@@ -555,10 +563,19 @@ fn try_upload_one(
 }
 
 /// Drain the upload queue. Called at startup and after each match.
+///
+/// If no JWT is cached (user not signed in), we skip the drain entirely —
+/// the server requires auth and retrying without it just bounces files
+/// straight back into the queue. They'll wait for the next call, which
+/// happens after Discord login completes.
 pub fn drain_upload_queue(stats_url: &str) {
     if stats_url.is_empty() {
         return;
     }
+    let token = match crate::matchmaking::current_token() {
+        Some(t) => t,
+        None => return,
+    };
     let url = format!("{stats_url}/ghosts/upload");
     let queue = match std::fs::read_to_string(UPLOAD_QUEUE_PATH) {
         Ok(q) => q,
@@ -583,7 +600,7 @@ pub fn drain_upload_queue(stats_url: &str) {
                 .unwrap_or(0)
         );
         ulog!("[ghost] Retrying upload: {path_str}");
-        if try_upload_one(&url, p, &ghost_id, "", "", "", filename, 0) {
+        if try_upload_one(&url, p, &ghost_id, "", "", "", filename, 0, Some(&token)) {
             // Success — removed from queue
         } else {
             pending.push(path_str.to_string());
@@ -669,6 +686,7 @@ pub fn queue_all_local_ghosts(
             let rh = rom_hash.to_string();
             let fn_str = filename.to_string();
             let pb = path.clone();
+            let token = crate::matchmaking::current_token();
             std::thread::spawn(move || {
                 if !try_upload_one(
                     &url,
@@ -679,6 +697,7 @@ pub fn queue_all_local_ghosts(
                     &rh,
                     &fn_str,
                     frame_count,
+                    token.as_deref(),
                 ) {
                     enqueue_upload(&pb);
                 }
@@ -705,6 +724,7 @@ fn http_post_binary(
     rom_hash: &str,
     filename: &str,
     frame_count: u32,
+    token: Option<&str>,
 ) -> Result<String, String> {
     use std::io::{BufRead, BufReader, Write};
     let parsed = match url.strip_prefix("https://") {
@@ -726,9 +746,20 @@ fn http_post_binary(
         .connect(host, tcp)
         .map_err(|e| format!("TLS: {e}"))?;
 
+    // Note: discord_id / username headers are still sent for backward
+    // compatibility with old server builds, but the v0.4.5+ server
+    // **ignores** them — it derives the authoritative discord_id and
+    // username from the JWT's `sub` and `username` claims. So even if
+    // these headers were spoofed, the server attributes the upload to
+    // the JWT-bearing user.
+    let auth_line = match token {
+        Some(t) => format!("Authorization: Bearer {t}\r\n"),
+        None => String::new(),
+    };
     let headers = format!(
         "POST {path} HTTP/1.1\r\n\
          Host: {host}\r\n\
+         {auth_line}\
          Content-Type: application/octet-stream\r\n\
          Content-Encoding: gzip\r\n\
          Content-Length: {}\r\n\

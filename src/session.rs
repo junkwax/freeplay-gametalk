@@ -10,8 +10,19 @@ use crate::version;
 
 /// Fire-and-forget: push current match status to the signaling server for
 /// spectator clients to poll. Called every ~3s during netplay.
+///
+/// The signaling server requires the matching peer's JWT on this endpoint
+/// (added in the v0.4.5 server release) — without it the request is
+/// rejected with 401 and the live-match scoreboard never updates. We pull
+/// the cached token from `matchmaking::current_token()`; if there isn't
+/// one, we skip the push silently rather than burning a TLS handshake on
+/// a guaranteed-to-fail request.
 pub fn push_spectator_frame(session_id: &str, p1_wins: u16, p2_wins: u16, frame: u32) {
     let sid = session_id.to_string();
+    let token = match matchmaking::current_token() {
+        Some(t) => t,
+        None => return,
+    };
     std::thread::spawn(move || {
         let Some(base_url) = signaling_url() else {
             println!("[spectate] FREEPLAY_SIGNALING_URL is not configured");
@@ -21,7 +32,7 @@ pub fn push_spectator_frame(session_id: &str, p1_wins: u16, p2_wins: u16, frame:
         let body = format!(
             r#"{{"savestate":"","inputs":"","frame":{frame},"score_p1":{p1_wins},"score_p2":{p2_wins}}}"#
         );
-        let _ = http_post_fire(&url, &body);
+        let _ = http_post_fire(&url, &body, Some(&token));
     });
 }
 
@@ -32,7 +43,7 @@ fn signaling_url() -> Option<String> {
     crate::config::signaling_url()
 }
 
-fn http_post_fire(url: &str, body: &str) -> Result<(), String> {
+fn http_post_fire(url: &str, body: &str, token: Option<&str>) -> Result<(), String> {
     use std::io::{BufRead, BufReader, Write};
     let parsed = url.strip_prefix("https://").ok_or("only HTTPS")?;
     let slash = parsed.find('/').unwrap_or(parsed.len());
@@ -46,8 +57,12 @@ fn http_post_fire(url: &str, body: &str) -> Result<(), String> {
     let mut tls = connector
         .connect(host, tcp)
         .map_err(|e| format!("TLS: {e}"))?;
+    let auth_line = match token {
+        Some(t) => format!("Authorization: Bearer {t}\r\n"),
+        None => String::new(),
+    };
     let req = format!(
-        "POST {path} HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "POST {path} HTTP/1.1\r\nHost: {host}\r\n{auth_line}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
     tls.write_all(req.as_bytes())
