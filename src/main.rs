@@ -160,8 +160,13 @@ fn exchange_turn_addresses(
     matchmaking::post_turn_ready(token, session_id, &our_relayed.to_string())
         .map_err(|e| format!("publish our relayed addr: {e}"))?;
 
-    let deadline = Instant::now() + Duration::from_secs(5);
+    // 15s deadline — TURN allocation alone can take 1-3s per side, so a
+    // 5s deadline raced both peers' TURN handshakes. 200ms poll cadence
+    // means up to 75 attempts before timeout.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut attempts: u32 = 0;
     loop {
+        attempts += 1;
         match matchmaking::fetch_peer_relay(token, session_id) {
             Ok(Some(s)) => {
                 let peer_relayed: std::net::SocketAddr = s
@@ -180,10 +185,10 @@ fn exchange_turn_addresses(
         }
         if Instant::now() >= deadline {
             return Err(format!(
-                "partner did not publish relayed addr within 5s (session={session_id})"
+                "partner did not publish relayed addr within 15s ({attempts} polls, session={session_id})"
             ));
         }
-        std::thread::sleep(Duration::from_millis(250));
+        std::thread::sleep(Duration::from_millis(200));
     }
 }
 
@@ -2301,7 +2306,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         ) {
                                             Ok(socket) => {
                                                 let our_relayed = socket.relayed_addr();
-                                                println!("[net] our relayed addr: {our_relayed}");
+                                                // Write exchange diagnostics to net_log directly
+                                                // so the incident bucket sees them. println! alone
+                                                // goes to stdout and is invisible in failure
+                                                // post-mortems.
+                                                let mut log_to_file = |line: &str| {
+                                                    println!("{line}");
+                                                    if let Some(f) = log.as_mut() {
+                                                        use std::io::Write;
+                                                        let _ = writeln!(f, "{line}");
+                                                    }
+                                                };
+                                                log_to_file(&format!(
+                                                    "[net] our relayed addr: {our_relayed}"
+                                                ));
 
                                                 // ── TURN-to-TURN address exchange ──
                                                 // Send-to-peer's-STUN-endpoint failed in production
@@ -2316,6 +2334,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     mm_session_id.as_deref(),
                                                     matchmaking::current_token(),
                                                 ) {
+                                                    log_to_file(&format!(
+                                                        "[net] TURN exchange: publishing our relayed addr to signaling and polling for peer (sid={sid})"
+                                                    ));
                                                     match exchange_turn_addresses(
                                                         sid,
                                                         &token,
@@ -2323,25 +2344,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                         &socket,
                                                     ) {
                                                         Ok(peer_relayed) => {
-                                                            println!(
-                                                                "[net] TURN exchange complete — routing to peer relay {peer_relayed}"
-                                                            );
+                                                            log_to_file(&format!(
+                                                                "[net] TURN exchange OK — peer relayed addr {peer_relayed}; routing through coturn-internal"
+                                                            ));
                                                             peer_for_ggrs = peer_relayed;
                                                         }
                                                         Err(e) => {
                                                             // Best-effort: if exchange fails, fall
-                                                            // back to STUN-endpoint addressing. Log
-                                                            // for incident triage but don't abort
-                                                            // the session.
-                                                            println!(
-                                                                "[net] TURN address exchange failed ({e}); falling back to peer STUN addr {stun_peer}"
-                                                            );
+                                                            // back to STUN-endpoint addressing.
+                                                            log_to_file(&format!(
+                                                                "[net] TURN exchange FAILED: {e}; falling back to peer STUN addr {stun_peer}"
+                                                            ));
                                                         }
                                                     }
                                                 } else {
-                                                    println!(
-                                                        "[net] no session_id/token for TURN exchange; using peer STUN addr"
-                                                    );
+                                                    log_to_file(&format!(
+                                                        "[net] TURN exchange SKIPPED — sid_set={} token_set={}; using peer STUN addr",
+                                                        mm_session_id.is_some(),
+                                                        matchmaking::current_token().is_some(),
+                                                    ));
                                                 }
 
                                                 let log_ref = &mut log;

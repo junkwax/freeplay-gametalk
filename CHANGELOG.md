@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.4.9 - 2026-05-06
+
+### Changed
+
+- TURN address-exchange diagnostics now go to `freeplay-net.log` (and
+  therefore the incident bucket) instead of stdout-only. Without this
+  the bucket couldn't tell us whether the exchange even ran on a
+  failure — we'd see `[session] ready (TURN): peer @ <STUN endpoint>`
+  with no clue whether that was a successful exchange routing through
+  coturn (impossible — STUN endpoints aren't on coturn) or a silent
+  fallback (correct interpretation).
+
+- TURN exchange deadline raised from 5s to 15s, polled every 200ms.
+  TURN allocation alone can take 1-3s per side; the old 5s budget
+  raced both peers' handshakes and timed out before either had time
+  to publish.
+
 ## 0.4.8 - 2026-05-06
 
 ### Fixed
