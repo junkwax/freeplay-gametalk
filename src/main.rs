@@ -2194,6 +2194,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 is_host,
                                 turn,
                                 session_id,
+                                room_id,
                                 peer_username,
                             }) => {
                                 let stun_peer: std::net::SocketAddr = match peer_endpoint.parse() {
@@ -2330,6 +2331,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         lines.push(format!("FAIL {tail}"));
                                         lines.push(String::new());
                                         lines.push("Log: freeplay-net.log".into());
+
+                                        let mut inc = incident::Incident::new(
+                                            if tail.contains("relay") || tail.contains("Relay") {
+                                                incident::KIND_TURN_FALLBACK_FAILED
+                                            } else {
+                                                incident::KIND_MATCH_ENDED_EARLY
+                                            },
+                                            tail,
+                                        );
+                                        inc.session_id = mm_session_id.clone();
+                                        inc.room_id = room_id.clone();
+                                        inc.peer_endpoint = Some(peer_endpoint.clone());
+                                        inc.role = Some(if is_host { "host" } else { "join" });
+                                        inc.net_log_path =
+                                            Some(std::path::PathBuf::from("freeplay-net.log"));
+                                        let (_size, hash) = rom_fingerprint();
+                                        inc.rom_hash = Some(format!("{:016x}", hash));
+                                        incident::submit(inc);
+
                                         state = AppState::Menu(MenuScreen::TestResult { lines });
                                     }
                                 }

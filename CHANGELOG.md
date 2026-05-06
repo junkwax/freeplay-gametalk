@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.3 - 2026-05-06
+
+### Fixed
+
+- Relay/GGRS setup failures after matchmaking now upload an incident to
+  the signaling server instead of only showing the local error screen.
+  The incident includes the room id, session id, peer endpoint, role,
+  ROM hash, and `freeplay-net.log` tail.
+
 ## 0.5.2 - 2026-05-06
 
 ### Fixed

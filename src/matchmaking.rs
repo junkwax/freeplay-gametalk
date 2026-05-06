@@ -13,6 +13,7 @@ pub enum Update {
         is_host: bool,
         turn: Option<TurnConnectInfo>,
         session_id: String,
+        room_id: Option<String>,
         peer_username: Option<String>,
     },
     Error(String),
@@ -170,6 +171,7 @@ fn run(tx: &Sender<Update>) -> Result<(), String> {
                         is_host: match_info.role == "host",
                         turn: None,
                         session_id: session_id_for_update,
+                        room_id: match_info.room_id.clone(),
                         peer_username: match_info.peer_username.clone(),
                     },
                 )
@@ -193,6 +195,7 @@ fn run(tx: &Sender<Update>) -> Result<(), String> {
                         is_host: match_info.role == "host",
                         turn: Some(turn),
                         session_id: session_id_for_update,
+                        room_id: match_info.room_id.clone(),
                         peer_username: match_info.peer_username.clone(),
                     },
                 )
@@ -257,6 +260,7 @@ fn run_join_room(tx: &Sender<Update>, room_id: &str) -> Result<(), String> {
                     is_host: match_info.role == "host",
                     turn: None,
                     session_id: match_info.session_id,
+                    room_id: match_info.room_id.clone(),
                     peer_username: match_info.peer_username.clone(),
                 },
             )
@@ -280,6 +284,7 @@ fn run_join_room(tx: &Sender<Update>, room_id: &str) -> Result<(), String> {
                     is_host: match_info.role == "host",
                     turn: Some(turn),
                     session_id: match_info.session_id,
+                    room_id: match_info.room_id.clone(),
                     peer_username: match_info.peer_username.clone(),
                 },
             )
@@ -289,6 +294,7 @@ fn run_join_room(tx: &Sender<Update>, room_id: &str) -> Result<(), String> {
 
 struct JoinInfo {
     session_id: String,
+    room_id: Option<String>,
     peer_endpoint: String,
     punch_at_ms: i64,
     role: String,
@@ -308,6 +314,7 @@ fn join_room_http(token: &str, room_id: &str, stun_endpoint: &str) -> Result<Joi
         .ok_or_else(|| format!("join response missing session_id: {resp}"))?;
     let peer_endpoint = json_nested_str(&resp, "match_info", "peer_endpoint")
         .ok_or_else(|| format!("join response missing peer_endpoint: {resp}"))?;
+    let room_id = json_nested_str(&resp, "match_info", "room_id");
     let punch_at_ms = json_nested_i64(&resp, "match_info", "punch_at_ms")
         .ok_or_else(|| format!("join response missing punch_at_ms: {resp}"))?;
     let role = json_nested_str(&resp, "match_info", "role").unwrap_or_else(|| "join".to_string());
@@ -316,6 +323,7 @@ fn join_room_http(token: &str, room_id: &str, stun_endpoint: &str) -> Result<Joi
 
     Ok(JoinInfo {
         session_id,
+        room_id,
         peer_endpoint,
         punch_at_ms,
         role,
@@ -778,6 +786,7 @@ fn tls_connect(host: &str) -> Result<Box<dyn ReadWrite>, String> {
 struct MatchInfo {
     #[allow(dead_code)]
     session_id: String,
+    room_id: Option<String>,
     peer_endpoint: String,
     punch_at_ms: i64,
     role: String,
@@ -854,6 +863,7 @@ fn poll_status(token: &str, session_id: &str, tx: &Sender<Update>) -> Result<Mat
             "matched" => {
                 let peer_endpoint = json_nested_str(&resp, "match_info", "peer_endpoint")
                     .ok_or("missing peer_endpoint")?;
+                let room_id = json_nested_str(&resp, "match_info", "room_id");
                 let punch_at_ms = json_nested_i64(&resp, "match_info", "punch_at_ms")
                     .ok_or("missing punch_at_ms")?;
                 let role = json_nested_str(&resp, "match_info", "role").ok_or("missing role")?;
@@ -861,6 +871,7 @@ fn poll_status(token: &str, session_id: &str, tx: &Sender<Update>) -> Result<Mat
                 let turn = parse_turn_creds(&resp);
                 return Ok(MatchInfo {
                     session_id: session_id.to_string(),
+                    room_id,
                     peer_endpoint,
                     punch_at_ms,
                     role,
