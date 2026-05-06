@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.1 - 2026-05-06
+
+### Fixed
+
+- Release archives now bundle a working `.env` next to the binary with
+  public defaults baked in (signaling URL, Discord client ID, stats URL).
+  Previously a clean download of v0.5.0 hit "FREEPLAY_SIGNALING_URL is
+  not configured" — users had to know to create `.env` manually with
+  values copied out of band. New users can now download, drop their
+  ROM in `roms/`, and click Find Match.
+- Added tracked `.env.public` with the public values. Local `.env`
+  still wins if present (so dev/self-host overrides are unchanged);
+  CI builds fall back to `.env.public`. Discord webhook URL is always
+  blank in the bundled `.env` — that's the one private value.
+
 ## 0.5.0 - 2026-05-06
 
 ### Changed

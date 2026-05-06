@@ -70,19 +70,32 @@ foreach ($dll in $sdl_needed) {
 }
 
 # ── Copy config ───────────────────────────────────────────────────────────────
+
+# Source of values for the bundled .env: prefer local .env (dev/self-host
+# overrides) → fall back to .env.public (tracked, public defaults baked in
+# so a fresh download just works). CI builds always hit the .env.public
+# branch since they have no .env.
+$envSource = $null
+if (Test-Path ".env") {
+    $envSource = ".env"
+    Write-Host "  ✓ Using .env for config injection"
+} elseif (Test-Path ".env.public") {
+    $envSource = ".env.public"
+    Write-Host "  ✓ Using .env.public for config injection (no local .env)"
+}
+
 if (Test-Path "config.toml") {
     Copy-Item "config.toml" $OUT_DIR
     Write-Host "  ✓ Copied config.toml"
     $cfgPath = "$OUT_DIR\config.toml"
     if (Test-Path $cfgPath) {
         $cfg = Get-Content $cfgPath -Raw
-        
+
         # Scrub webhook
         $cfg = $cfg -replace '(discord_webhook_url\s*=\s*")[^"]*(")', '${1}https://discord.com/api/webhooks/your-webhook-url-here${2}'
-        
-        # Inject values from .env
-        if (Test-Path ".env") {
-            $envLines = Get-Content ".env" | Where-Object { $_ -match '^\s*\w+\s*=' -and -not $_.Trim().StartsWith('#') }
+
+        if ($envSource) {
+            $envLines = Get-Content $envSource | Where-Object { $_ -match '^\s*\w+\s*=' -and -not $_.Trim().StartsWith('#') }
             foreach ($line in $envLines) {
                 if ($line -match '^\s*FREEPLAY_SIGNALING_URL\s*=\s*(.+)$') {
                     $url = $Matches[1].Trim().Trim('"').Trim("'")
@@ -102,14 +115,37 @@ if (Test-Path "config.toml") {
                 }
             }
             if ($cfg -match 'signaling_url' -or $cfg -match 'discord_client_id') {
-                Write-Host "  ✓ Injected env values into config.toml"
+                Write-Host "  ✓ Injected env values into config.toml from $envSource"
             }
         }
-        
+
         Set-Content $cfgPath $cfg -NoNewline
         Write-Host "  ✓ Scrubbed webhook URL from config.toml"
     }
 }
+
+# Bundle a `.env` next to freeplay.exe so the binary can read URLs and
+# client ID at runtime. Built from .env.public if there's no local .env,
+# so a clean download is functional out of the box. Webhook URL is
+# always blank in this bundled file — users who want personal Discord
+# notifications fill it in themselves.
+if ($envSource) {
+    $bundled = Get-Content $envSource | Where-Object {
+        # Strip any line that pretends to set a webhook URL or any other
+        # genuinely-private secret. We only ship public values.
+        $line = $_.Trim()
+        if ($line -match '^\s*FREEPLAY_DISCORD_WEBHOOK_URL\s*=') {
+            return $false
+        }
+        return $true
+    }
+    # Always end with a blank webhook line so users see where to put one.
+    $bundled += "`n# Optional — your own Discord channel webhook for match notifications."
+    $bundled += "FREEPLAY_DISCORD_WEBHOOK_URL="
+    Set-Content "$OUT_DIR\.env" -Value ($bundled -join "`n") -NoNewline
+    Write-Host "  ✓ Bundled .env (public defaults, no secrets)"
+}
+
 if (Test-Path ".env.example") {
     Copy-Item ".env.example" $OUT_DIR
     Write-Host "  ✓ Copied .env.example"
