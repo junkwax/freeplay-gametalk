@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.4.7 - 2026-05-06
+
+### Fixed
+
+- TURN sessions now route through the partner's TURN-relayed address
+  rather than the partner's STUN endpoint. The previous design sent
+  packets to the peer's NAT-mapped public IP via TURN's Send Indication;
+  coturn forwarded them as raw UDP, but the receiving NAT dropped the
+  unsolicited packets. GGRS sat at `Synchronizing` for 10 frames then
+  timed out — the failure mode that the v0.4.5 / v0.4.6 incident bucket
+  captured.
+  
+  The new flow uses the signaling server's `/match/turn-ready` and
+  `/match/peer-relay` endpoints (which were always there, just unused
+  by the client). After both sides publish their relayed addresses,
+  each TurnSocket re-targets itself at the partner's relayed addr.
+  coturn then routes between its own two allocations internally,
+  bypassing the receiving side's NAT entirely. 5-second deadline; if
+  the partner doesn't publish in time, falls back to the legacy STUN-
+  endpoint path (better than aborting).
+
 ## 0.4.6 - 2026-05-06
 
 ### Fixed

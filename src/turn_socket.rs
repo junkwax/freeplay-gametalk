@@ -43,6 +43,23 @@ impl TurnSocket {
             .unwrap_or_else(|_| "0.0.0.0:0".parse().unwrap())
     }
 
+    /// Re-target this allocation at the partner's relayed address (learned
+    /// via the signaling server's /match/peer-relay endpoint). Adds a TURN
+    /// permission for the new address before swapping. Returns an error if
+    /// the permission install failed — the caller should fall back to the
+    /// STUN-endpoint path or surface the error.
+    pub fn switch_peer(&self, new_peer: SocketAddr) -> Result<(), crate::turn_relay::TurnError> {
+        let mut relay = self
+            .inner
+            .lock()
+            .map_err(|_| crate::turn_relay::TurnError::AllocationFailed("relay mutex poisoned".into()))?;
+        relay.switch_peer(new_peer)?;
+        if let Ok(mut p) = self.peer_addr.lock() {
+            *p = new_peer;
+        }
+        Ok(())
+    }
+
     fn current_peer(&self) -> SocketAddr {
         self.peer_addr
             .lock()

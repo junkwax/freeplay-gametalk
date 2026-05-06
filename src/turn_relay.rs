@@ -131,6 +131,21 @@ impl TurnRelay {
         Ok(())
     }
 
+    /// Switch this allocation's send target to a new peer (the partner's
+    /// TURN-relayed address) and install a permission for it. Used after
+    /// the signaling-server-mediated TURN address exchange completes.
+    ///
+    /// Sending to the partner's *relayed* address rather than their STUN
+    /// address keeps both sides of the conversation inside coturn's own
+    /// internal routing. The previous design sent to the partner's STUN
+    /// endpoint, which coturn forwarded as raw UDP — and a strict NAT
+    /// on the partner's side dropped those packets.
+    pub fn switch_peer(&mut self, peer: SocketAddr) -> Result<(), TurnError> {
+        self.add_permission(peer)?;
+        self.peer_addr = peer;
+        Ok(())
+    }
+
     /// Install a TURN permission for `peer`. Required before the TURN server
     /// will forward Send Indications to that peer or deliver Data Indications
     /// from it. Can be called multiple times for different peers.
