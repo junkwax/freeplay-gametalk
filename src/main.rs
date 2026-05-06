@@ -13,6 +13,7 @@ mod doctor;
 mod drone;
 mod font;
 mod ghost;
+mod incident;
 mod input;
 mod log;
 mod matchmaking;
@@ -1925,6 +1926,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         let intentional_quit = reason == "you quit the match";
                         let completed_set = reason.starts_with("match limit reached");
+
+                        // Auto-incident on abnormal teardowns. We skip
+                        // intentional_quit (user pressed back) and
+                        // completed_set (clean BO3 finish) because those
+                        // aren't failures. Everything else — disconnect,
+                        // timeout, GGRS desync — gets uploaded.
+                        if !intentional_quit && !completed_set {
+                            let kind = if reason.contains("disconnected") {
+                                incident::KIND_GGRS_DISCONNECTED
+                            } else if reason.contains("timed out") || reason.contains("no progress") {
+                                if net_frame_counter < 60 {
+                                    incident::KIND_GGRS_NEVER_SYNCED
+                                } else {
+                                    incident::KIND_MATCH_ENDED_EARLY
+                                }
+                            } else {
+                                incident::KIND_MATCH_ENDED_EARLY
+                            };
+                            let mut inc = incident::Incident::new(kind, reason.clone());
+                            inc.session_id = mm_session_id.clone();
+                            inc.role = Some(if local_handle == 0 { "host" } else { "join" });
+                            inc.frames_advanced = net_frame_counter;
+                            inc.p1_score = Some(session_p1_wins as u16);
+                            inc.p2_score = Some(session_p2_wins as u16);
+                            inc.net_log_path = Some(std::path::PathBuf::from("freeplay-net.log"));
+                            let (_size, hash) = rom_fingerprint();
+                            inc.rom_hash = Some(format!("{:016x}", hash));
+                            incident::submit(inc);
+                        }
                         let player_role = if local_handle == 0 { "P1" } else { "P2" };
                         let opponent = peer_name.as_deref().unwrap_or("Opponent");
                         let final_score =
@@ -2305,6 +2335,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                             Ok(matchmaking::Update::Error(e)) => {
                                 println!("[mm] matchmaking error: {e}");
+                                // Auto-incident on the "match never happened"
+                                // failure modes. Classification is by error
+                                // string because the matchmaking thread's
+                                // error type collapses everything to String.
+                                let kind = if e.contains("Hole punch") {
+                                    incident::KIND_HOLE_PUNCH_FAILED
+                                } else if e.contains("TURN") || e.contains("relay") {
+                                    incident::KIND_TURN_FALLBACK_FAILED
+                                } else {
+                                    incident::KIND_MATCH_ENDED_EARLY
+                                };
+                                let mut inc = incident::Incident::new(kind, e.clone());
+                                inc.session_id = mm_session_id.clone();
+                                // peer_endpoint is None at this point — the
+                                // matchmaking thread didn't survive long enough
+                                // to publish a Connected event. Server-side
+                                // queue state has it.
+                                inc.role = Some(if local_handle == 0 { "host" } else { "join" });
+                                inc.net_log_path = Some(std::path::PathBuf::from("freeplay-net.log"));
+                                let (_size, hash) = rom_fingerprint();
+                                inc.rom_hash = Some(format!("{:016x}", hash));
+                                incident::submit(inc);
+
                                 mm_rx = None;
                                 state = AppState::Menu(MenuScreen::TestResult {
                                     lines: vec![

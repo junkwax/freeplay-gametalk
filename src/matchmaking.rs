@@ -112,6 +112,24 @@ fn run(tx: &Sender<Update>) -> Result<(), String> {
         };
         set_current_token(&token);
 
+        // Best-effort cancel of any prior session before we re-queue.
+        // If a previous match crashed or was abandoned without an explicit
+        // /match/cancel, the server still has us bound to a matched
+        // session — and the OLD partner is still polling that session,
+        // about to hole-punch a stale endpoint. Calling /match/cancel
+        // lets the server cleanly invalidate the old room (the server's
+        // re-queue handler does this too, but doing it here makes the
+        // partner's "match cancelled" status appear ~1s earlier).
+        // Failure is non-fatal; the server's own re-queue cleanup is the
+        // belt to this suspender.
+        if let Err(e) = cancel_match(&token, "self-cleanup") {
+            // 404 on self-cleanup is the common case: no prior session.
+            // Anything else is logged but not fatal.
+            if !e.contains("404") {
+                println!("[mm] pre-LFG cancel: {e}");
+            }
+        }
+
         send(tx, Update::Status("Discovering network...".into()))?;
         let stun_endpoint = stun_discover(GAME_PORT).map_err(|e| format!("STUN failed: {e}"))?;
         println!("[mm] public endpoint: {stun_endpoint}");
@@ -195,8 +213,13 @@ fn run(tx: &Sender<Update>) -> Result<(), String> {
     outcome
 }
 
-fn cancel_match(token: &str, session_id: &str) -> Result<(), String> {
-    let url = format!("{}/match/cancel/{session_id}", signaling_url()?);
+fn cancel_match(token: &str, _session_id: &str) -> Result<(), String> {
+    // Server resolves the session from the JWT's `sub` via the
+    // player_sessions map; no path param needed. Previously this hit
+    // /match/cancel/<sid> (a 404 route) so cancels silently failed —
+    // which is why prior sessions lingered on the server and caused
+    // ghost-match symptoms when players re-queued.
+    let url = format!("{}/match/cancel", signaling_url()?);
     http_post_json(&url, token, "{}").map(|_| ())
 }
 

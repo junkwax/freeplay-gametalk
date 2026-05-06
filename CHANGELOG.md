@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.4.6 - 2026-05-06
+
+### Fixed
+
+- `/match/cancel` now hits the correct route. The client was POSTing to
+  `/match/cancel/<session_id>` (a 404), so cancels silently failed. The
+  server resolves the session from the JWT, no path param needed. Stale
+  prior sessions on the server were causing "match doesn't happen" /
+  ghost-match symptoms when players re-queued.
+
+### Added
+
+- Auto-incident upload on failed matches. When a match fails to start
+  (hole-punch failure, TURN fallback failure) or ends abnormally
+  (peer disconnect, GGRS timeout, score-mismatch rejection), the client
+  now POSTs an incident JSON to the signaling server with the last
+  256 KB of `freeplay-net.log`, role, frames advanced, ROM hash, and a
+  short kind tag. The server stores these in
+  `gs://quarterframe-freeplay-incidents/YYYY/MM/DD/<id>.json` for
+  offline investigation.
+- Pre-LFG self-cleanup: every Find Match starts by calling
+  `/match/cancel` (best effort) so a previously-matched session that
+  ended unexpectedly doesn't linger and trip up the next pairing.
+
 ## 0.4.5 - 2026-05-06
 
 ### Fixed
