@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.4 - 2026-05-06
+
+### Fixed
+
+- Matchmaking now uses the relay whenever relay credentials are present,
+  instead of letting each client independently decide whether direct UDP
+  succeeded. The old flow could split-brain: one peer would start GGRS
+  direct while the other peer routed through `freeplay-relay`, so both
+  sat in Synchronizing until timeout.
+- `RelaySocket::connect` now waits for the relay's `PEER_READY` signal
+  before starting GGRS, with a 20s setup window. This prevents one peer
+  from starting GGRS while the partner is still reaching relay setup.
+
 ## 0.5.3 - 2026-05-06
 
 ### Fixed

@@ -159,8 +159,24 @@ fn run(tx: &Sender<Update>) -> Result<(), String> {
             println!("[mm] TURN fallback available");
         }
 
-        send(tx, Update::Status("Connecting to opponent...".into()))?;
         let session_id_for_update = session_id.clone();
+        if let Some(turn) = match_info.turn.clone() {
+            send(tx, Update::Status("Connecting via relay...".into()))?;
+            println!("[mm] using relay at {} (skipping direct P2P probe)", turn.uri);
+            return send(
+                tx,
+                Update::Connected {
+                    peer_endpoint: match_info.peer_endpoint.clone(),
+                    is_host: match_info.role == "host",
+                    turn: Some(turn),
+                    session_id: session_id_for_update,
+                    room_id: match_info.room_id.clone(),
+                    peer_username: match_info.peer_username.clone(),
+                },
+            );
+        }
+
+        send(tx, Update::Status("Connecting to opponent...".into()))?;
         match hole_punch(&match_info.peer_endpoint, match_info.punch_at_ms) {
             Ok(peer_addr) => {
                 println!("[mm] direct P2P established: {peer_addr}");
@@ -176,30 +192,9 @@ fn run(tx: &Sender<Update>) -> Result<(), String> {
                     },
                 )
             }
-            Err(punch_err) => {
-                println!("[mm] hole punch failed: {punch_err}");
-
-                let Some(turn) = match_info.turn.clone() else {
-                    return Err(format!(
-                        "Direct P2P failed and no TURN relay configured: {punch_err}"
-                    ));
-                };
-
-                send(tx, Update::Status("Connecting via relay...".into()))?;
-                println!("[mm] falling back to TURN relay at {}", turn.uri);
-
-                send(
-                    tx,
-                    Update::Connected {
-                        peer_endpoint: match_info.peer_endpoint.clone(),
-                        is_host: match_info.role == "host",
-                        turn: Some(turn),
-                        session_id: session_id_for_update,
-                        room_id: match_info.room_id.clone(),
-                        peer_username: match_info.peer_username.clone(),
-                    },
-                )
-            }
+            Err(punch_err) => Err(format!(
+                "Direct P2P failed and no TURN relay configured: {punch_err}"
+            )),
         }
     })();
 
@@ -249,6 +244,22 @@ fn run_join_room(tx: &Sender<Update>, room_id: &str) -> Result<(), String> {
         println!("[mm] TURN fallback available");
     }
 
+    if let Some(turn) = match_info.turn.clone() {
+        send(tx, Update::Status("Connecting via relay...".into()))?;
+        println!("[mm] using relay at {} (skipping direct P2P probe)", turn.uri);
+        return send(
+            tx,
+            Update::Connected {
+                peer_endpoint: match_info.peer_endpoint.clone(),
+                is_host: match_info.role == "host",
+                turn: Some(turn),
+                session_id: match_info.session_id,
+                room_id: match_info.room_id.clone(),
+                peer_username: match_info.peer_username.clone(),
+            },
+        );
+    }
+
     send(tx, Update::Status("Connecting to opponent...".into()))?;
     match hole_punch(&match_info.peer_endpoint, match_info.punch_at_ms) {
         Ok(peer_addr) => {
@@ -265,30 +276,9 @@ fn run_join_room(tx: &Sender<Update>, room_id: &str) -> Result<(), String> {
                 },
             )
         }
-        Err(punch_err) => {
-            println!("[mm] hole punch failed: {punch_err}");
-
-            let Some(turn) = match_info.turn.clone() else {
-                return Err(format!(
-                    "Direct P2P failed and no TURN relay configured: {punch_err}"
-                ));
-            };
-
-            send(tx, Update::Status("Connecting via relay...".into()))?;
-            println!("[mm] falling back to TURN relay at {}", turn.uri);
-
-            send(
-                tx,
-                Update::Connected {
-                    peer_endpoint: match_info.peer_endpoint.clone(),
-                    is_host: match_info.role == "host",
-                    turn: Some(turn),
-                    session_id: match_info.session_id,
-                    room_id: match_info.room_id.clone(),
-                    peer_username: match_info.peer_username.clone(),
-                },
-            )
-        }
+        Err(punch_err) => Err(format!(
+            "Direct P2P failed and no TURN relay configured: {punch_err}"
+        )),
     }
 }
 

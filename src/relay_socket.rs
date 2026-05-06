@@ -125,8 +125,11 @@ impl RelaySocket {
         pkt.extend_from_slice(&hmac_bytes);
         debug_assert_eq!(pkt.len(), 78);
 
-        // Send REGISTER, wait up to 5s for REGISTERED. Resend every 500ms.
-        let deadline = Instant::now() + Duration::from_secs(5);
+        // Send REGISTER until the relay confirms both sides are present.
+        // Returning after REGISTERED but before PEER_READY lets one client
+        // start GGRS while the partner is still doing setup, which can trip
+        // the short GGRS disconnect timer before the relay path is usable.
+        let deadline = Instant::now() + Duration::from_secs(20);
         let mut next_send = Instant::now();
         let mut buf = [0u8; 2048];
         let mut registered = false;
@@ -158,11 +161,11 @@ impl RelaySocket {
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut => {}
                 Err(e) => return Err(RelayError::Recv(e)),
             }
-            if registered {
+            if registered && peer_ready {
                 break;
             }
         }
-        if !registered {
+        if !registered || !peer_ready {
             return Err(RelayError::HandshakeTimeout);
         }
 
