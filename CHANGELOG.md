@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.5.0 - 2026-05-06
+
+### Changed
+
+- Replaced TURN/coturn relay path with a custom UDP relay
+  (`freeplay-relay`). coturn refused to install permissions for its own
+  external IP (`is_my_address` hardcoded check), so the TURN-to-TURN
+  routing the v0.4.7-v0.4.9 design needed was unworkable without
+  forking coturn. The new relay is a 250-line UDP forwarder that just
+  pairs clients on a room ID — no STUN, no permissions, no NAT
+  traversal at all (both clients send to the relay, relay forwards to
+  partner).
+
+- Removed `src/turn_relay.rs` and `src/turn_socket.rs` (~960 lines).
+  Replaced with `src/relay_socket.rs` (~250 lines) speaking the new
+  protocol. Same `NonBlockingSocket<SocketAddr>` trait so GGRS plumbing
+  is unchanged.
+
+- Signaling server's MatchInfo.turn payload still has uri/username/
+  password/ttl_secs (wire format unchanged), but contents now describe
+  relay credentials: uri = `relay://...`, username =
+  `<role>:<expiry>:<room_id>`, password = hex HMAC-SHA256.
+
+### Fixed
+
+- Cross-NAT matches between two real machines now connect. Previously
+  hole-punch + TURN both failed for residential ISP NAT pairs (Cox/
+  Comcast etc.). The relay sidesteps NAT entirely.
+
 ## 0.4.9 - 2026-05-06
 
 ### Changed

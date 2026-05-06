@@ -1502,37 +1502,6 @@ pub fn post_match_result(
     Ok(())
 }
 
-/// Tell the signaling server our TURN-relayed address. The partner polls
-/// `/match/peer-relay` to learn it, then re-targets their TURN allocation
-/// at us. Used in the TURN-to-TURN address exchange so both sides route
-/// through coturn's own internal table rather than firing UDP into a
-/// possibly-strict-NAT'd peer endpoint.
-pub fn post_turn_ready(
-    token: &str,
-    session_id: &str,
-    relayed_addr: &str,
-) -> Result<(), String> {
-    let body = format!(r#"{{"relayed_addr":"{relayed_addr}"}}"#);
-    let url = format!("{}/match/turn-ready/{session_id}", signaling_url()?);
-    http_post_json(&url, token, &body)?;
-    Ok(())
-}
-
-/// Poll the partner's TURN-relayed address. Returns Ok(Some(addr)) once
-/// the partner has called /match/turn-ready, Ok(None) while still waiting.
-/// Caller should poll on a short cadence (250-500ms) with a deadline.
-pub fn fetch_peer_relay(
-    token: &str,
-    session_id: &str,
-) -> Result<Option<String>, String> {
-    let url = format!("{}/match/peer-relay/{session_id}", signaling_url()?);
-    let resp = http_get(&url, token)?;
-    // The server returns {"peer_relayed_addr": "ip:port"} or
-    // {"peer_relayed_addr": null}. Use the existing string-parser to
-    // grab the value; null produces None.
-    Ok(json_str(&resp, "peer_relayed_addr"))
-}
-
 // ── UDP hole punch ────────────────────────────────────────────────────────────
 
 fn hole_punch(peer_endpoint: &str, punch_at_ms: i64) -> Result<SocketAddr, String> {

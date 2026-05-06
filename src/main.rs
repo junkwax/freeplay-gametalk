@@ -31,8 +31,7 @@ mod rom;
 mod rpc;
 mod score;
 mod session;
-mod turn_relay;
-mod turn_socket;
+mod relay_socket;
 mod version;
 
 use crate::cli::{parse_args, NetMode};
@@ -138,57 +137,6 @@ fn queue_game_audio(
     } else {
         let scaled = apply_volume(samples, volume_percent);
         let _ = q.queue_audio(&scaled);
-    }
-}
-
-/// Run the signaling-server-mediated TURN address exchange.
-///
-/// 1. Tell the server our TURN-relayed address.
-/// 2. Poll until the partner has done the same and we learn theirs.
-/// 3. Switch our TURN allocation to send to the partner's relayed addr
-///    (also installs a permission for it).
-///
-/// Bounded by a 5-second deadline. If the partner doesn't publish in
-/// time, we return Err and the caller falls back to the legacy
-/// STUN-endpoint addressing — better than silently stalling GGRS.
-fn exchange_turn_addresses(
-    session_id: &str,
-    token: &str,
-    our_relayed: &std::net::SocketAddr,
-    socket: &turn_socket::TurnSocket,
-) -> Result<std::net::SocketAddr, String> {
-    matchmaking::post_turn_ready(token, session_id, &our_relayed.to_string())
-        .map_err(|e| format!("publish our relayed addr: {e}"))?;
-
-    // 15s deadline — TURN allocation alone can take 1-3s per side, so a
-    // 5s deadline raced both peers' TURN handshakes. 200ms poll cadence
-    // means up to 75 attempts before timeout.
-    let deadline = Instant::now() + Duration::from_secs(15);
-    let mut attempts: u32 = 0;
-    loop {
-        attempts += 1;
-        match matchmaking::fetch_peer_relay(token, session_id) {
-            Ok(Some(s)) => {
-                let peer_relayed: std::net::SocketAddr = s
-                    .parse()
-                    .map_err(|e| format!("partner sent malformed relayed addr {s}: {e}"))?;
-                socket
-                    .switch_peer(peer_relayed)
-                    .map_err(|e| format!("switch_peer to {peer_relayed}: {e}"))?;
-                return Ok(peer_relayed);
-            }
-            Ok(None) => {}
-            Err(e) => {
-                // Transient HTTP error — keep polling until the deadline.
-                println!("[net] peer_relay poll error (will retry): {e}");
-            }
-        }
-        if Instant::now() >= deadline {
-            return Err(format!(
-                "partner did not publish relayed addr within 15s ({attempts} polls, session={session_id})"
-            ));
-        }
-        std::thread::sleep(Duration::from_millis(200));
     }
 }
 
@@ -2295,81 +2243,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         // address. coturn 4.6 hardcodes a "no peer = own external-ip"
                                         // rule and rejects it. The peer's STUN IP is what we use as
                                         // the GGRS peer label, AND it's what TURN routes by.
-                                        println!("[net] using TURN relay: {}", creds.uri);
+                                        println!("[net] using freeplay-relay: {}", creds.uri);
 
-                                        match turn_socket::TurnSocket::new(
+                                        match relay_socket::RelaySocket::connect(
                                             &creds.uri,
                                             &creds.username,
                                             &creds.password,
-                                            stun_peer, // initial permission; replaced by exchange
                                             menu::DEFAULT_NETPLAY_PORT,
                                         ) {
                                             Ok(socket) => {
-                                                let our_relayed = socket.relayed_addr();
-                                                // Write exchange diagnostics to net_log directly
-                                                // so the incident bucket sees them. println! alone
-                                                // goes to stdout and is invisible in failure
-                                                // post-mortems.
-                                                let mut log_to_file = |line: &str| {
-                                                    println!("{line}");
-                                                    if let Some(f) = log.as_mut() {
-                                                        use std::io::Write;
-                                                        let _ = writeln!(f, "{line}");
-                                                    }
-                                                };
-                                                log_to_file(&format!(
-                                                    "[net] our relayed addr: {our_relayed}"
-                                                ));
-
-                                                // ── TURN-to-TURN address exchange ──
-                                                // Send-to-peer's-STUN-endpoint failed in production
-                                                // because strict NAT on the receiving side dropped
-                                                // unsolicited UDP from the TURN server's external IP.
-                                                // The fix: each side learns the OTHER's *relayed*
-                                                // address (also on coturn) and sends there. coturn
-                                                // routes between its own allocations internally,
-                                                // bypassing the receiving side's NAT entirely.
-                                                let mut peer_for_ggrs = stun_peer;
-                                                if let (Some(sid), Some(token)) = (
-                                                    mm_session_id.as_deref(),
-                                                    matchmaking::current_token(),
-                                                ) {
-                                                    log_to_file(&format!(
-                                                        "[net] TURN exchange: publishing our relayed addr to signaling and polling for peer (sid={sid})"
-                                                    ));
-                                                    match exchange_turn_addresses(
-                                                        sid,
-                                                        &token,
-                                                        &our_relayed,
-                                                        &socket,
-                                                    ) {
-                                                        Ok(peer_relayed) => {
-                                                            log_to_file(&format!(
-                                                                "[net] TURN exchange OK — peer relayed addr {peer_relayed}; routing through coturn-internal"
-                                                            ));
-                                                            peer_for_ggrs = peer_relayed;
-                                                        }
-                                                        Err(e) => {
-                                                            // Best-effort: if exchange fails, fall
-                                                            // back to STUN-endpoint addressing.
-                                                            log_to_file(&format!(
-                                                                "[net] TURN exchange FAILED: {e}; falling back to peer STUN addr {stun_peer}"
-                                                            ));
-                                                        }
-                                                    }
-                                                } else {
-                                                    log_to_file(&format!(
-                                                        "[net] TURN exchange SKIPPED — sid_set={} token_set={}; using peer STUN addr",
-                                                        mm_session_id.is_some(),
-                                                        matchmaking::current_token().is_some(),
-                                                    ));
+                                                let peer_label = socket.peer_label();
+                                                if let Some(f) = log.as_mut() {
+                                                    use std::io::Write;
+                                                    let _ = writeln!(f,
+                                                        "[net] relay session ready, routing through {peer_label} (peer_ready={})",
+                                                        socket.is_peer_ready());
                                                 }
+                                                println!(
+                                                    "[net] relay session ready (peer_ready={})",
+                                                    socket.is_peer_ready()
+                                                );
 
                                                 let log_ref = &mut log;
                                                 let lines_ref = &mut lines;
                                                 netplay::start_session_with_socket(
                                                     local_handle,
-                                                    peer_for_ggrs,
+                                                    peer_label,
                                                     socket,
                                                     |line: &str| {
                                                         println!("[net] {}", line);
