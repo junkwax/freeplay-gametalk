@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.8 - 2026-05-06
+
+### Fixed
+
+- Windows release archive now bundles `freetype.dll` and the rest of
+  vcpkg's SDL2_ttf transitive dependencies (zlib, bzip2, libpng,
+  brotli). v0.4.7 only shipped `SDL2.dll` and `SDL2_ttf.dll`, so a
+  clean Windows install failed at launch with "freetype.dll was not
+  found". Dev machines didn't see this because they had freetype on
+  PATH from another install.
+
+  No client-code changes — same v0.4.7 binary, just a complete
+  Windows DLL bundle.
+
 ## 0.4.7 - 2026-05-06
 
 ### Fixed

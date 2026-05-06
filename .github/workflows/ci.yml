@@ -45,10 +45,12 @@ jobs:
 
       - name: Stage SDL DLLs
         shell: pwsh
+        # See release.yml — vcpkg's SDL2_ttf pulls freetype + zlib + others.
+        # Copy every vcpkg DLL so a clean Windows runtime has no "DLL not
+        # found" surprises.
         run: |
           $bin = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows\bin"
-          Copy-Item "$bin\SDL2.dll" "target\release\SDL2.dll" -Force
-          Copy-Item "$bin\SDL2_ttf.dll" "target\release\SDL2_ttf.dll" -Force
+          Copy-Item "$bin\*.dll" "target\release\" -Force
 
       - name: Package
         shell: pwsh
