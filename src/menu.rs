@@ -190,8 +190,8 @@ impl Default for AppState {
 /// Watch Live, Leaderboard, and Training are still implemented, but are hidden
 /// from the public menu for now to keep the first-run footprint focused.
 pub const MAIN_ITEMS: [&str; 8] = [
-    "Practice",
     "Find Match",
+    "Practice",
     "Profile",
     "Load Ghosts",
     "Controls",
@@ -354,14 +354,6 @@ impl AppState {
         match self.clone() {
             AppState::Menu(MenuScreen::Main { cursor }) => match cursor {
                 0 => {
-                    // Practice
-                    if !rom_present {
-                        return NavResult::Stay;
-                    }
-                    *self = AppState::Playing;
-                    NavResult::StartGame
-                }
-                1 => {
                     // Find Match
                     if !rom_present {
                         return NavResult::Stay;
@@ -370,6 +362,14 @@ impl AppState {
                         status: "Starting...".to_string(),
                     });
                     NavResult::StartMatchmaking
+                }
+                1 => {
+                    // Practice
+                    if !rom_present {
+                        return NavResult::Stay;
+                    }
+                    *self = AppState::Playing;
+                    NavResult::StartGame
                 }
                 2 => {
                     // Profile
@@ -2551,14 +2551,25 @@ fn draw_ghost_select(
             let selected = i == cursor;
             let (kind, display, subtitle) = match &entries[i] {
                 GhostEntry::Local { filename, .. } => {
-                    let name = strip_ncgh(filename);
-                    let info = parse_ghost_info(filename);
-                    ("LOCAL", name, info)
+                    let time = parse_ghost_time(filename);
+                    ("LOCAL", "Recorded match".to_string(), time)
                 }
                 GhostEntry::Remote(meta) => {
-                    let name = strip_ncgh(&meta.filename);
-                    let info = format!("by {} \u{2022} {} frames", meta.username, meta.frame_count);
-                    ("REMOTE", name, info)
+                    let who = if meta.username.trim().is_empty() {
+                        "Community".to_string()
+                    } else {
+                        meta.username.clone()
+                    };
+                    let time = parse_ghost_time(&meta.filename);
+                    let info = if time.is_empty() {
+                        format!("{} \u{2022} {} frames", who, meta.frame_count)
+                    } else {
+                        format!(
+                            "{} \u{2022} {} frames \u{2022} {}",
+                            who, meta.frame_count, time
+                        )
+                    };
+                    ("REMOTE", "Shared recording".to_string(), info)
                 }
             };
             let bg = if selected {
@@ -2629,22 +2640,29 @@ fn strip_ncgh(s: &str) -> String {
     }
 }
 
-fn parse_ghost_info(filename: &str) -> String {
+fn parse_ghost_time(filename: &str) -> String {
     let base = strip_ncgh(filename);
     let parts: Vec<&str> = base.split('_').collect();
     if parts.len() >= 2 {
-        let ip = parts[0].replace('-', ".");
-        if parts.len() >= 3 {
-            let ts = parts.last().unwrap_or(&"");
-            if let Ok(n) = ts.parse::<u64>() {
-                let secs = n % 1_000_000_000;
-                let t = chrono_prelude(secs as i64);
-                return format!("vs {ip} \u{2022} {t}");
-            }
+        let ts = parts.last().unwrap_or(&"");
+        if let Ok(n) = ts.parse::<u64>() {
+            let secs = normalize_ghost_timestamp(n);
+            return format!("Recorded {}", chrono_prelude(secs as i64));
         }
-        return format!("vs {ip}");
     }
     String::new()
+}
+
+fn normalize_ghost_timestamp(n: u64) -> u64 {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if n > now + 365 * 24 * 60 * 60 && n > 1_000_000_000 {
+        n % 1_000_000_000
+    } else {
+        n
+    }
 }
 
 fn chrono_prelude(secs: i64) -> String {

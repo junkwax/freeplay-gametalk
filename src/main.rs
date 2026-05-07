@@ -42,7 +42,8 @@ use crate::menu::{AppState, MenuScreen, NavResult, LOGICAL_H, LOGICAL_W};
 use crate::menu_input::{capture_rebind, event_to_menu_nav, is_cancel, is_clear, MenuNav};
 use crate::netcore::{reset_for_netplay, step_netplay_frame, NetRuntime};
 use crate::render::{
-    draw_emu_frame, draw_fight_overlay, ensure_core_loaded, format_probe_result, route_player,
+    draw_chat_overlay, draw_emu_frame, draw_fight_overlay, ensure_core_loaded, format_probe_result,
+    route_player,
 };
 use crate::retro::*;
 use crate::session::{
@@ -338,6 +339,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut net_session: Option<netplay::Session> = None;
     let mut local_handle: usize = 0;
+    let mut relay_chat: Option<relay_socket::RelayChatHandle> = None;
+    let mut chat_open = false;
+    let mut chat_draft = String::new();
+    let mut chat_lines: Vec<String> = Vec::new();
 
     let mut mm_rx: Option<std::sync::mpsc::Receiver<matchmaking::Update>> = None;
     let mut mm_session_id: Option<String> = None;
@@ -384,6 +389,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     'running: loop {
         let frame_start = Instant::now();
+
+        if chat_open
+            || matches!(
+                state,
+                AppState::Menu(menu::MenuScreen::TestIp { editing: true, .. })
+            )
+        {
+            video_subsystem.text_input().start();
+        } else {
+            video_subsystem.text_input().stop();
+        }
 
         // Check for Discord ACTIVITY_JOIN (friend clicked "Join to Spar")
         if mm_rx.is_none() {
@@ -845,6 +861,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     Instant::now() + Duration::from_millis(3200),
                                 ));
                             }
+                        }
+                    }
+                }
+
+                Event::TextInput { text, .. }
+                    if state == AppState::Playing && net_session.is_some() && chat_open =>
+                {
+                    for ch in text.chars().filter(|c| !c.is_control()) {
+                        if chat_draft.chars().count() < 180 {
+                            chat_draft.push(ch);
                         }
                     }
                 }
@@ -1376,6 +1402,60 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 _ if state == AppState::Playing => match event {
                     Event::KeyDown {
+                        keycode: Some(Keycode::T),
+                        repeat: false,
+                        ..
+                    } if net_session.is_some() && !chat_open => {
+                        input::clear_all_inputs();
+                        chat_open = true;
+                        chat_draft.clear();
+                    }
+                    Event::KeyDown {
+                        keycode: Some(Keycode::Backspace),
+                        repeat: false,
+                        ..
+                    } if chat_open => {
+                        chat_draft.pop();
+                    }
+                    Event::KeyDown {
+                        keycode: Some(Keycode::Escape),
+                        repeat: false,
+                        ..
+                    } if chat_open => {
+                        chat_open = false;
+                        chat_draft.clear();
+                        input::clear_all_inputs();
+                    }
+                    Event::KeyDown {
+                        keycode: Some(Keycode::Return),
+                        repeat: false,
+                        ..
+                    } if chat_open => {
+                        let msg = chat_draft.trim().to_string();
+                        if !msg.is_empty() {
+                            if let Some(chat) = relay_chat.as_ref() {
+                                match chat.send(&msg) {
+                                    Ok(()) => {
+                                        let who = discord_user.as_deref().unwrap_or("You");
+                                        chat_lines.push(format!("{who}: {msg}"));
+                                        if chat_lines.len() > 8 {
+                                            chat_lines.remove(0);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        chat_lines.push(format!("Chat send failed: {e}"));
+                                        if chat_lines.len() > 8 {
+                                            chat_lines.remove(0);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        chat_open = false;
+                        chat_draft.clear();
+                        input::clear_all_inputs();
+                    }
+                    Event::KeyDown {
                         keycode: Some(Keycode::F1),
                         ..
                     } => {
@@ -1581,7 +1661,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         keycode: Some(k),
                         repeat: false,
                         ..
-                    } => {
+                    } if !chat_open => {
                         for p in [Player::P1, Player::P2] {
                             for a in cfg.bindings.get(p).actions_for_key(k) {
                                 let dest = route_player(p, &net_session, local_handle);
@@ -1599,7 +1679,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     Event::KeyUp {
                         keycode: Some(k), ..
-                    } => {
+                    } if !chat_open => {
                         for p in [Player::P1, Player::P2] {
                             for a in cfg.bindings.get(p).actions_for_key(k) {
                                 let dest = route_player(p, &net_session, local_handle);
@@ -1615,7 +1695,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                     }
-                    Event::ControllerButtonDown { which, button, .. } => {
+                    Event::ControllerButtonDown { which, button, .. } if !chat_open => {
                         if let Some(p) = pad_owner(&pads, which) {
                             for a in cfg.bindings.get(p).actions_for_button(button) {
                                 let dest = route_player(p, &net_session, local_handle);
@@ -1634,7 +1714,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             dlog!("input", "PadDown pad={} {:?} -- no owner", which, button);
                         }
                     }
-                    Event::ControllerButtonUp { which, button, .. } => {
+                    Event::ControllerButtonUp { which, button, .. } if !chat_open => {
                         if let Some(p) = pad_owner(&pads, which) {
                             for a in cfg.bindings.get(p).actions_for_button(button) {
                                 let dest = route_player(p, &net_session, local_handle);
@@ -1653,7 +1733,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     Event::ControllerAxisMotion {
                         which, axis, value, ..
-                    } => {
+                    } if !chat_open => {
                         if let Some(p) = pad_owner(&pads, which) {
                             for (a, pressed) in cfg.bindings.get(p).axis_updates(axis, value) {
                                 let dest = route_player(p, &net_session, local_handle);
@@ -1733,6 +1813,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             &mut net_log,
                             &mut net_runtime,
                         );
+                        if let Some(chat) = relay_chat.as_ref() {
+                            let who = peer_name.as_deref().unwrap_or("Opponent");
+                            for msg in chat.drain() {
+                                chat_lines.push(format!("{who}: {msg}"));
+                                if chat_lines.len() > 8 {
+                                    chat_lines.remove(0);
+                                }
+                            }
+                        }
 
                         if net_frame_counter < 10 {
                             if let Some(f) = net_log.as_mut() {
@@ -2058,6 +2147,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         net_frame_counter = 0;
                         net_runtime = NetRuntime::default();
                         net_log = None;
+                        relay_chat = None;
+                        chat_open = false;
+                        chat_draft.clear();
+                        chat_lines.clear();
                         mm_session_id = None;
                         peer_name = None;
                         auto_start_done = false;
@@ -2199,6 +2292,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         )
                         .map_err(|e| format!("recording indicator: {e}"))?;
                     }
+                    if net_session.is_some() && (chat_open || !chat_lines.is_empty()) {
+                        draw_chat_overlay(
+                            &mut canvas,
+                            &mut font,
+                            win_w as i32,
+                            win_h as i32,
+                            &chat_lines,
+                            if chat_open { Some(&chat_draft) } else { None },
+                        )
+                        .map_err(|e| format!("chat overlay: {e}"))?;
+                    }
                     canvas.set_logical_size(LOGICAL_W as u32, LOGICAL_H as u32)?;
                 }
                 canvas.present();
@@ -2285,6 +2389,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         ) {
                                             Ok(socket) => {
                                                 let peer_label = socket.peer_label();
+                                                relay_chat = match socket.chat_handle() {
+                                                    Ok(handle) => Some(handle),
+                                                    Err(e) => {
+                                                        println!(
+                                                            "[chat] relay chat unavailable: {e}"
+                                                        );
+                                                        None
+                                                    }
+                                                };
                                                 if let Some(f) = log.as_mut() {
                                                     use std::io::Write;
                                                     let _ = writeln!(f,
@@ -2323,6 +2436,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         }
                                     } else {
                                         // ── DIRECT UDP PATH (unchanged) ──
+                                        relay_chat = None;
                                         let log_ref = &mut log;
                                         let lines_ref = &mut lines;
                                         netplay::start_session_verbose(
@@ -2343,6 +2457,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 match result {
                                     Ok(s) => {
                                         net_session = Some(s);
+                                        chat_open = false;
+                                        chat_draft.clear();
+                                        chat_lines.clear();
                                         net_recording = maybe_start_net_recording(
                                             &ghost_library,
                                             stun_peer,

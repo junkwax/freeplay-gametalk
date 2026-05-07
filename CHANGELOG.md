@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.9 - 2026-05-07
+
+### Added
+
+- Added a small relay-backed in-match chat overlay. Press `T` during
+  online play, type a short message, then press Enter to send.
+
+### Changed
+
+- Moved Find Match to the top of the main menu, with Practice directly
+  underneath it.
+- Load Ghosts now shows privacy-safe recording labels and timestamps
+  instead of exposing peer endpoint details from local filenames.
+
 ## 0.5.8 - 2026-05-07
 
 ### Fixed

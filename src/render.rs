@@ -509,6 +509,69 @@ pub fn draw_fight_overlay(
     }
 }
 
+pub fn draw_chat_overlay(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    font: &mut Font,
+    window_w: i32,
+    window_h: i32,
+    lines: &[String],
+    draft: Option<&str>,
+) -> Result<(), String> {
+    let scale = 1;
+    let pad = 10;
+    let box_w = (window_w / 2).clamp(360, 620);
+    let line_h = 20;
+    let visible_lines = lines.len().min(4);
+    let input_rows = if draft.is_some() { 1 } else { 0 };
+    let box_h = pad * 2 + ((visible_lines + input_rows).max(1) as i32 * line_h);
+    let x = 18;
+    let y = window_h - box_h - 24;
+
+    canvas.set_draw_color(Color::RGBA(8, 10, 18, 205));
+    canvas.fill_rect(Rect::new(x, y, box_w as u32, box_h as u32))?;
+    canvas.set_draw_color(Color::RGBA(95, 130, 210, 210));
+    canvas.draw_rect(Rect::new(x, y, box_w as u32, box_h as u32))?;
+
+    let mut row_y = y + pad;
+    let first = lines.len().saturating_sub(visible_lines);
+    for line in &lines[first..] {
+        let clipped = fit_overlay_text(font, line, scale, box_w - pad * 2);
+        font.draw_overlay(
+            canvas,
+            &clipped,
+            x + pad,
+            row_y,
+            scale,
+            Color::RGBA(230, 238, 255, 235),
+        )?;
+        row_y += line_h;
+    }
+
+    if let Some(draft) = draft {
+        let prompt = format!("> {draft}_");
+        let clipped = fit_overlay_text(font, &prompt, scale, box_w - pad * 2);
+        font.draw_overlay(
+            canvas,
+            &clipped,
+            x + pad,
+            row_y,
+            scale,
+            Color::RGBA(255, 230, 130, 245),
+        )?;
+    } else if lines.is_empty() {
+        font.draw_overlay(
+            canvas,
+            "T CHAT",
+            x + pad,
+            row_y,
+            scale,
+            Color::RGBA(150, 165, 195, 180),
+        )?;
+    }
+
+    Ok(())
+}
+
 fn draw_fight_overlay_plates(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     font: &mut Font,

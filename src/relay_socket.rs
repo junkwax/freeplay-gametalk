@@ -13,6 +13,7 @@
 //! No NAT traversal needed — both clients are sending to a public IP
 //! (the relay's), which both can reach.
 
+use std::collections::VecDeque;
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::{Arc, Mutex};
@@ -25,6 +26,7 @@ const TAG_REGISTERED: u8 = 0x02;
 const TAG_ERROR: u8 = 0x03;
 const TAG_DATA: u8 = 0x04;
 const TAG_PEER_READY: u8 = 0x05;
+const CHAT_PREFIX: &[u8] = b"FPCHAT1:";
 
 #[derive(Debug)]
 pub enum RelayError {
@@ -66,6 +68,36 @@ pub struct RelaySocket {
     /// by the relay (no peer to forward to). We let GGRS retry — its
     /// Synchronizing handshake naturally re-sends.
     peer_ready: Arc<Mutex<bool>>,
+    chat_inbox: Arc<Mutex<VecDeque<String>>>,
+}
+
+pub struct RelayChatHandle {
+    sock: UdpSocket,
+    relay_addr: SocketAddr,
+    inbox: Arc<Mutex<VecDeque<String>>>,
+}
+
+impl RelayChatHandle {
+    pub fn send(&self, text: &str) -> io::Result<()> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Ok(());
+        }
+        let bytes = text.as_bytes();
+        let bytes = &bytes[..bytes.len().min(180)];
+        let mut pkt = Vec::with_capacity(1 + CHAT_PREFIX.len() + bytes.len());
+        pkt.push(TAG_DATA);
+        pkt.extend_from_slice(CHAT_PREFIX);
+        pkt.extend_from_slice(bytes);
+        self.sock.send_to(&pkt, self.relay_addr).map(|_| ())
+    }
+
+    pub fn drain(&self) -> Vec<String> {
+        let Ok(mut inbox) = self.inbox.lock() else {
+            return Vec::new();
+        };
+        inbox.drain(..).collect()
+    }
 }
 
 impl RelaySocket {
@@ -190,6 +222,7 @@ impl RelaySocket {
             peer_label: relay_addr,
             registered: Arc::new(Mutex::new(registered)),
             peer_ready: Arc::new(Mutex::new(peer_ready)),
+            chat_inbox: Arc::new(Mutex::new(VecDeque::new())),
         })
     }
 
@@ -208,6 +241,14 @@ impl RelaySocket {
     /// Whether the relay acknowledged our REGISTER during setup.
     pub fn is_registered(&self) -> bool {
         self.registered.lock().map(|g| *g).unwrap_or(false)
+    }
+
+    pub fn chat_handle(&self) -> io::Result<RelayChatHandle> {
+        Ok(RelayChatHandle {
+            sock: self.sock.try_clone()?,
+            relay_addr: self.relay_addr,
+            inbox: self.chat_inbox.clone(),
+        })
     }
 }
 
@@ -240,7 +281,19 @@ impl NonBlockingSocket<SocketAddr> for RelaySocket {
                 Ok((n, _from)) if n >= 1 => match buf[0] {
                     TAG_DATA => {
                         let payload = &buf[1..n];
-                        if let Ok(m) = bincode::deserialize::<Message>(payload) {
+                        if let Some(text) = payload.strip_prefix(CHAT_PREFIX) {
+                            if let Ok(text) = std::str::from_utf8(text) {
+                                let text = text.trim();
+                                if !text.is_empty() {
+                                    if let Ok(mut inbox) = self.chat_inbox.lock() {
+                                        inbox.push_back(text.chars().take(180).collect());
+                                        while inbox.len() > 8 {
+                                            inbox.pop_front();
+                                        }
+                                    }
+                                }
+                            }
+                        } else if let Ok(m) = bincode::deserialize::<Message>(payload) {
                             out.push((self.peer_label, m));
                         }
                     }
