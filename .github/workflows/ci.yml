@@ -29,6 +29,15 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            git
+            make
+            mingw-w64-x86_64-gcc
+
       - name: Install SDL2 runtime/link dependencies
         shell: pwsh
         run: |
@@ -42,6 +51,10 @@ jobs:
       - name: Build
         shell: pwsh
         run: cargo build --release
+
+      - name: Build FBNeo libretro core
+        shell: pwsh
+        run: .\tools\build-fbneo-windows.ps1
 
       - name: Stage SDL DLLs
         shell: pwsh

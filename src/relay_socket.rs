@@ -6,7 +6,7 @@
 //!
 //!   - On connect: send REGISTER with `(role, expiry, room_id, hmac)`
 //!     parsed out of the signaling server's MatchInfo.turn payload.
-//!     Wait for REGISTERED, then PEER_READY (when partner is also up).
+//!     Wait briefly for REGISTERED/PEER_READY (when partner is also up).
 //!   - To send: prefix payload with `0x04` and send_to(relay_addr).
 //!   - To recv: recv_from, verify first byte is `0x04`, strip it.
 //!
@@ -33,7 +33,6 @@ pub enum RelayError {
     Bind(io::Error),
     Send(io::Error),
     Recv(io::Error),
-    HandshakeTimeout,
     ServerError { code: u8, msg: String },
 }
 
@@ -45,7 +44,6 @@ impl std::fmt::Display for RelayError {
             Self::Bind(e) => write!(f, "UDP bind: {e}"),
             Self::Send(e) => write!(f, "send: {e}"),
             Self::Recv(e) => write!(f, "recv: {e}"),
-            Self::HandshakeTimeout => write!(f, "relay handshake timeout"),
             Self::ServerError { code, msg } => write!(f, "relay error {code}: {msg}"),
         }
     }
@@ -59,6 +57,10 @@ pub struct RelaySocket {
     /// What we tell GGRS the peer is at. The relay's actual address —
     /// every send goes here, every receive comes from here.
     peer_label: SocketAddr,
+    /// `registered` flips true when the relay acknowledges our REGISTER.
+    /// Some mobile paths appear to drop the relay's tiny control replies, so
+    /// setup can proceed without this after a bounded warmup.
+    registered: Arc<Mutex<bool>>,
     /// `peer_ready` flips true when the relay confirms the partner is
     /// also registered. Sent packets BEFORE this flips would be dropped
     /// by the relay (no peer to forward to). We let GGRS retry — its
@@ -125,10 +127,12 @@ impl RelaySocket {
         pkt.extend_from_slice(&hmac_bytes);
         debug_assert_eq!(pkt.len(), 78);
 
-        // Send REGISTER until the relay confirms both sides are present.
-        // Returning after REGISTERED but before PEER_READY lets one client
-        // start GGRS while the partner is still doing setup, which can trip
-        // the short GGRS disconnect timer before the relay path is usable.
+        // Send REGISTER for a bounded warmup. The relay may answer with
+        // REGISTERED and PEER_READY, but at least one real mobile path has
+        // shown repeated REGISTERs arriving at the relay while its one-byte
+        // control replies never make it back to the client. DATA packets are
+        // larger and flow through the same relay mapping, so don't fail the
+        // whole match just because this optional control-plane ACK is missing.
         let deadline = Instant::now() + Duration::from_secs(20);
         let mut next_send = Instant::now();
         let mut buf = [0u8; 2048];
@@ -165,9 +169,9 @@ impl RelaySocket {
                 break;
             }
         }
-        if !registered || !peer_ready {
-            return Err(RelayError::HandshakeTimeout);
-        }
+        // Expired or bad credentials are still surfaced by TAG_ERROR above.
+        // If no control reply arrived, proceed anyway and let GGRS exchange
+        // real DATA through the relay; the caller logs the observed state.
 
         sock.set_nonblocking(true).ok();
 
@@ -180,6 +184,7 @@ impl RelaySocket {
             // routing details — it just calls send_to(addr) and gets
             // packets back from the same addr.
             peer_label: relay_addr,
+            registered: Arc::new(Mutex::new(registered)),
             peer_ready: Arc::new(Mutex::new(peer_ready)),
         })
     }
@@ -194,6 +199,11 @@ impl RelaySocket {
     /// regardless.
     pub fn is_peer_ready(&self) -> bool {
         self.peer_ready.lock().map(|g| *g).unwrap_or(false)
+    }
+
+    /// Whether the relay acknowledged our REGISTER during setup.
+    pub fn is_registered(&self) -> bool {
+        self.registered.lock().map(|g| *g).unwrap_or(false)
     }
 }
 

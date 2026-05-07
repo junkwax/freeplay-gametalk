@@ -152,10 +152,10 @@ where
             log_fn(&format!("[session] with_max_prediction_window err: {e}"));
             e
         })?
-        .with_disconnect_notify_delay(std::time::Duration::from_millis(400))
-        .with_disconnect_timeout(std::time::Duration::from_millis(1500))
+        .with_disconnect_notify_delay(std::time::Duration::from_millis(2000))
+        .with_disconnect_timeout(std::time::Duration::from_millis(10000))
         .with_desync_detection_mode(ggrs::DesyncDetection::On { interval: 30 });
-    log_fn("[session] (turn) builder configured");
+    log_fn("[session] (relay) builder configured (drop=10s)");
 
     builder = builder
         .add_player(PlayerType::Local, local_handle)
@@ -174,7 +174,7 @@ where
         e
     })?;
     log_fn(&format!(
-        "[session] ready (TURN): we are P{} → P{} @ {}",
+        "[session] ready (relay): we are P{} → P{} @ {}",
         local_handle + 1,
         remote_handle + 1,
         remote_addr

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.5 - 2026-05-07
+
+### Fixed
+
+- Windows release archives now fail packaging if `fbneo_libretro.dll` is
+  missing, and GitHub Actions builds the Windows FBNeo core before
+  packaging. This prevents public zips from crashing or exiting when
+  Find Match hands off into the emulator path.
+- Relay sessions now use a 10s GGRS disconnect timeout instead of the
+  old 1.5s direct-UDP timeout, giving internet relay setup time to
+  synchronize.
+- Relay setup no longer aborts solely because the relay control ACKs are
+  missing. Incidents showed one client reaching the relay repeatedly
+  while not receiving the relay's tiny control packets; the client now
+  proceeds to GGRS after the bounded relay warmup and logs whether
+  `REGISTERED`/`PEER_READY` were observed.
+- Added `tools/test-relay-local.ps1`, a one-machine relay smoke test
+  that starts the sibling relay, simulates both roles, and verifies
+  control packets plus bidirectional DATA forwarding.
+
 ## 0.5.4 - 2026-05-06
 
 ### Fixed

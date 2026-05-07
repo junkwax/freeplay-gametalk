@@ -42,6 +42,7 @@ Get-ChildItem "target\release\*.dll" -ErrorAction SilentlyContinue | ForEach-Obj
 if (-not (Test-Path "$OUT_DIR\fbneo_libretro.dll")) {
     $fbneo_candidates = @(
         "cores\fbneo_libretro.dll",
+        "src\fbneo_libretro.dll",
         "fbneo_libretro.dll",
         "$env:USERPROFILE\AppData\Roaming\RetroArch\cores\fbneo_libretro.dll"
     )
@@ -52,6 +53,10 @@ if (-not (Test-Path "$OUT_DIR\fbneo_libretro.dll")) {
             break
         }
     }
+}
+if (-not (Test-Path "$OUT_DIR\fbneo_libretro.dll")) {
+    Write-Host "  ❌ fbneo_libretro.dll not found. Run: .\tools\build-fbneo-windows.ps1" -ForegroundColor Red
+    exit 1
 }
 
 # ── Ensure SDL2 DLLs ──────────────────────────────────────────────────────────

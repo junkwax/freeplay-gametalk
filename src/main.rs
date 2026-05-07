@@ -2257,11 +2257,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 if let Some(f) = log.as_mut() {
                                                     use std::io::Write;
                                                     let _ = writeln!(f,
-                                                        "[net] relay session ready, routing through {peer_label} (peer_ready={})",
+                                                        "[net] relay session ready, routing through {peer_label} (registered={}, peer_ready={})",
+                                                        socket.is_registered(),
                                                         socket.is_peer_ready());
                                                 }
                                                 println!(
-                                                    "[net] relay session ready (peer_ready={})",
+                                                    "[net] relay session ready (registered={}, peer_ready={})",
+                                                    socket.is_registered(),
                                                     socket.is_peer_ready()
                                                 );
 
