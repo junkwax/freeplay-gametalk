@@ -394,6 +394,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             || matches!(
                 state,
                 AppState::Menu(menu::MenuScreen::TestIp { editing: true, .. })
+                    | AppState::Menu(menu::MenuScreen::TextEdit { .. })
             )
         {
             video_subsystem.text_input().start();
@@ -564,7 +565,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ..
                 } if matches!(
                     state,
-                    AppState::Menu(MenuScreen::Settings { cursor: 2, .. })
+                    AppState::Menu(MenuScreen::Settings { cursor: 4, .. })
                 ) =>
                 {
                     cfg.volume_percent = cfg.volume_percent.saturating_sub(10);
@@ -588,7 +589,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ..
                 } if matches!(
                     state,
-                    AppState::Menu(MenuScreen::Settings { cursor: 2, .. })
+                    AppState::Menu(MenuScreen::Settings { cursor: 4, .. })
                 ) =>
                 {
                     cfg.volume_percent = cfg.volume_percent.saturating_add(10).min(100);
@@ -612,7 +613,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ..
                 } if matches!(
                     state,
-                    AppState::Menu(MenuScreen::Settings { cursor: 3, .. })
+                    AppState::Menu(MenuScreen::Settings { cursor: 5, .. })
                 ) =>
                 {
                     cfg.audio_buffer = cfg.audio_buffer.cycle(-1);
@@ -636,7 +637,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ..
                 } if matches!(
                     state,
-                    AppState::Menu(MenuScreen::Settings { cursor: 3, .. })
+                    AppState::Menu(MenuScreen::Settings { cursor: 5, .. })
                 ) =>
                 {
                     cfg.audio_buffer = cfg.audio_buffer.cycle(1);
@@ -660,7 +661,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ..
                 } if matches!(
                     state,
-                    AppState::Menu(MenuScreen::Settings { cursor: 4, .. })
+                    AppState::Menu(MenuScreen::Settings { cursor: 6, .. })
                 ) =>
                 {
                     cfg.video_filter = cfg.video_filter.cycle(-1);
@@ -684,7 +685,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ..
                 } if matches!(
                     state,
-                    AppState::Menu(MenuScreen::Settings { cursor: 4, .. })
+                    AppState::Menu(MenuScreen::Settings { cursor: 6, .. })
                 ) =>
                 {
                     cfg.video_filter = cfg.video_filter.cycle(1);
@@ -708,7 +709,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ..
                 } if matches!(
                     state,
-                    AppState::Menu(MenuScreen::Settings { cursor: 6, .. })
+                    AppState::Menu(MenuScreen::Settings { cursor: 8, .. })
                 ) =>
                 {
                     cfg.aspect_mode = cfg.aspect_mode.cycle(-1);
@@ -732,7 +733,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ..
                 } if matches!(
                     state,
-                    AppState::Menu(MenuScreen::Settings { cursor: 6, .. })
+                    AppState::Menu(MenuScreen::Settings { cursor: 8, .. })
                 ) =>
                 {
                     cfg.aspect_mode = cfg.aspect_mode.cycle(1);
@@ -756,7 +757,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ..
                 } if matches!(
                     state,
-                    AppState::Menu(MenuScreen::Settings { cursor: 7, .. })
+                    AppState::Menu(MenuScreen::Settings { cursor: 9, .. })
                 ) =>
                 {
                     cfg.scorebar_style = cfg.scorebar_style.cycle(-1);
@@ -780,7 +781,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ..
                 } if matches!(
                     state,
-                    AppState::Menu(MenuScreen::Settings { cursor: 7, .. })
+                    AppState::Menu(MenuScreen::Settings { cursor: 9, .. })
                 ) =>
                 {
                     cfg.scorebar_style = cfg.scorebar_style.cycle(1);
@@ -879,6 +880,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if matches!(
                         state,
                         AppState::Menu(menu::MenuScreen::TestIp { editing: true, .. })
+                            | AppState::Menu(menu::MenuScreen::TextEdit { .. })
                     ) =>
                 {
                     state.text_input(&text);
@@ -889,6 +891,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } if matches!(
                     state,
                     AppState::Menu(menu::MenuScreen::TestIp { editing: true, .. })
+                        | AppState::Menu(menu::MenuScreen::TextEdit { .. })
                 ) =>
                 {
                     state.text_backspace();
@@ -983,6 +986,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     }
                                 }
                                 NavResult::StartMatchmaking => {
+                                    cfg.player_username =
+                                        config::sanitize_username(&cfg.player_username)
+                                            .unwrap_or_else(config::default_username);
+                                    config::save(&cfg);
+                                    matchmaking::set_guest_profile(
+                                        cfg.player_username.clone(),
+                                        cfg.stats_email.clone(),
+                                    );
                                     let (tx, rx) = std::sync::mpsc::channel();
                                     mm_rx = Some(rx);
                                     matchmaking::start(tx);
@@ -1043,6 +1054,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 NavResult::OpenSettings => {
                                     state = AppState::Menu(MenuScreen::Settings {
                                         cursor: 0,
+                                        player_username: cfg.player_username.clone(),
+                                        stats_email: cfg.stats_email.clone(),
                                         discord_rpc_enabled: cfg.discord_rpc_enabled,
                                         fullscreen: cfg.fullscreen,
                                         volume_percent: cfg.volume_percent,
@@ -1072,6 +1085,95 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     discord_user = None;
                                     discord_id = None;
                                     println!("[auth] Signed out");
+                                }
+                                NavResult::EditText(field, title) => {
+                                    let value = match field {
+                                        menu::EditField::Username => cfg.player_username.clone(),
+                                        menu::EditField::StatsEmail => cfg.stats_email.clone(),
+                                    };
+                                    let label = match field {
+                                        menu::EditField::Username => {
+                                            "Choose the name other players see"
+                                        }
+                                        menu::EditField::StatsEmail => {
+                                            "Optional email for portable stats"
+                                        }
+                                    };
+                                    state = AppState::Menu(MenuScreen::TextEdit {
+                                        title,
+                                        label: label.into(),
+                                        value,
+                                        field,
+                                        came_from: Box::new(MenuScreen::Settings {
+                                            cursor: match field {
+                                                menu::EditField::Username => 0,
+                                                menu::EditField::StatsEmail => 1,
+                                            },
+                                            player_username: cfg.player_username.clone(),
+                                            stats_email: cfg.stats_email.clone(),
+                                            discord_rpc_enabled: cfg.discord_rpc_enabled,
+                                            fullscreen: cfg.fullscreen,
+                                            volume_percent: cfg.volume_percent,
+                                            audio_buffer: cfg.audio_buffer,
+                                            video_filter: cfg.video_filter,
+                                            crt_corner_bend: cfg.crt_corner_bend,
+                                            aspect_mode: cfg.aspect_mode,
+                                            scorebar_style: cfg.scorebar_style,
+                                        }),
+                                    });
+                                }
+                                NavResult::CommitText(field, value) => {
+                                    match field {
+                                        menu::EditField::Username => {
+                                            cfg.player_username = config::sanitize_username(&value)
+                                                .unwrap_or_else(config::default_username);
+                                            toast = Some((
+                                                format!("Username {}", cfg.player_username),
+                                                Instant::now() + Duration::from_millis(2200),
+                                            ));
+                                        }
+                                        menu::EditField::StatsEmail => {
+                                            let trimmed = value.trim();
+                                            if trimmed.is_empty() {
+                                                cfg.stats_email.clear();
+                                                toast = Some((
+                                                    "Stats email cleared".into(),
+                                                    Instant::now() + Duration::from_millis(2200),
+                                                ));
+                                            } else if let Some(email) =
+                                                config::normalize_email(trimmed)
+                                            {
+                                                cfg.stats_email = email;
+                                                toast = Some((
+                                                    "Stats email saved".into(),
+                                                    Instant::now() + Duration::from_millis(2200),
+                                                ));
+                                            } else {
+                                                toast = Some((
+                                                    "Enter a valid email address".into(),
+                                                    Instant::now() + Duration::from_millis(2600),
+                                                ));
+                                            }
+                                        }
+                                    }
+                                    config::save(&cfg);
+                                    matchmaking::clear_cached_token();
+                                    state = AppState::Menu(MenuScreen::Settings {
+                                        cursor: match field {
+                                            menu::EditField::Username => 0,
+                                            menu::EditField::StatsEmail => 1,
+                                        },
+                                        player_username: cfg.player_username.clone(),
+                                        stats_email: cfg.stats_email.clone(),
+                                        discord_rpc_enabled: cfg.discord_rpc_enabled,
+                                        fullscreen: cfg.fullscreen,
+                                        volume_percent: cfg.volume_percent,
+                                        audio_buffer: cfg.audio_buffer,
+                                        video_filter: cfg.video_filter,
+                                        crt_corner_bend: cfg.crt_corner_bend,
+                                        aspect_mode: cfg.aspect_mode,
+                                        scorebar_style: cfg.scorebar_style,
+                                    });
                                 }
                                 NavResult::ToggleDiscordRpc => {
                                     cfg.discord_rpc_enabled = !cfg.discord_rpc_enabled;
@@ -1378,18 +1480,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                         "[ghost] Anchor state rejected by core."
                                                     );
                                                     state = AppState::Menu(MenuScreen::Main {
-                                                        cursor: 3,
+                                                        cursor: 5,
                                                     });
                                                 }
                                             }
                                             Err(e) => {
                                                 println!("[ghost] Load failed: {e}");
                                                 state =
-                                                    AppState::Menu(MenuScreen::Main { cursor: 3 });
+                                                    AppState::Menu(MenuScreen::Main { cursor: 5 });
                                             }
                                         }
                                     } else {
-                                        state = AppState::Menu(MenuScreen::Main { cursor: 3 });
+                                        state = AppState::Menu(MenuScreen::Main { cursor: 5 });
                                     }
                                 }
                             },
@@ -2873,7 +2975,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 ghost_playback = Some(pb);
                                                 *cursor = 3;
                                                 state =
-                                                    AppState::Menu(MenuScreen::Main { cursor: 3 });
+                                                    AppState::Menu(MenuScreen::Main { cursor: 5 });
                                             } else {
                                                 println!("[ghost] Anchor state rejected.");
                                             }

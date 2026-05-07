@@ -143,8 +143,8 @@ pub fn maybe_start_net_recording(
 
 /// Save the in-progress ghost recording (if any), bump the per-peer counter,
 /// and fire-and-forget upload to `freeplay-stats` when both a stats URL and
-/// a Discord login are available. Anonymous sessions skip upload because
-/// empty `discord_id`/`username` pollute the public library.
+/// an active player identity are available. Anonymous sessions skip upload
+/// because empty player IDs/usernames pollute the public library.
 pub fn finalize_net_recording(
     rec_slot: &mut Option<ghost::NetRecording>,
     library: &mut ghost::Library,

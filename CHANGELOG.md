@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.5.11 - 2026-05-07
+
+### Added
+
+- Added username-based guest sign-in for online matchmaking. Players can set
+  the public name shown to opponents in Settings and match without Discord
+  OAuth.
+- Added an optional Stats Email field in Settings. When filled in, guest stats
+  use the email-derived identity so ratings and history can follow the same
+  player across machines.
+
+### Changed
+
+- Discord is no longer required for Find Match or Join/Spectate links. Discord
+  remains available as optional Rich Presence when configured.
+
 ## 0.5.10 - 2026-05-07
 
 ### Fixed

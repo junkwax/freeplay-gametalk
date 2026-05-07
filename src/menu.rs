@@ -84,6 +84,8 @@ pub enum MenuScreen {
     /// Small utility/settings panel for runtime toggles and diagnostics.
     Settings {
         cursor: usize,
+        player_username: String,
+        stats_email: String,
         discord_rpc_enabled: bool,
         fullscreen: bool,
         volume_percent: u8,
@@ -114,6 +116,19 @@ pub enum MenuScreen {
         session_id: String,
         status: SpectateStatus,
     },
+    TextEdit {
+        title: String,
+        label: String,
+        value: String,
+        field: EditField,
+        came_from: Box<MenuScreen>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditField {
+    Username,
+    StatsEmail,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -128,7 +143,7 @@ pub enum GhostEntry {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProfileScreenState {
-    /// User isn't logged in to Discord — fetcher won't have a discord_id.
+    /// No active player identity is available yet.
     NotLoggedIn,
     /// Background fetch in flight.
     Loading,
@@ -200,7 +215,9 @@ pub const MAIN_ITEMS: [&str; 8] = [
     "Quit",
 ];
 
-const SETTINGS_ITEMS: [&str; 11] = [
+const SETTINGS_ITEMS: [&str; 13] = [
+    "Username",
+    "Stats Email",
     "Discord Rich Presence",
     "Fullscreen",
     "Volume",
@@ -241,6 +258,8 @@ pub enum NavResult {
     Quit,
     BeginRebind,
     ClearAllBindings(Player),
+    EditText(EditField, String),
+    CommitText(EditField, String),
     /// Load a ghost file from the selected path.
     LoadGhost(String),
     /// Download a remote ghost by ghost_id, then load it.
@@ -399,6 +418,8 @@ impl AppState {
                     // Settings
                     *self = AppState::Menu(MenuScreen::Settings {
                         cursor: 0,
+                        player_username: String::new(),
+                        stats_email: String::new(),
                         discord_rpc_enabled: false,
                         fullscreen: false,
                         volume_percent: 100,
@@ -486,19 +507,24 @@ impl AppState {
                 NavResult::Stay
             }
             AppState::Menu(MenuScreen::Settings { cursor, .. }) => match cursor {
-                0 => NavResult::ToggleDiscordRpc,
-                1 => NavResult::ToggleFullscreen,
-                2 => NavResult::AdjustVolume(10),
-                3 => NavResult::CycleAudioBuffer(1),
-                4 => NavResult::CycleVideoFilter(1),
-                5 => NavResult::ToggleCrtGlass,
-                6 => NavResult::CycleAspectMode(1),
-                7 => NavResult::CycleScorebarStyle(1),
-                8 => NavResult::LaunchDoctor,
-                9 => NavResult::OpenClipsFolder,
-                10 => NavResult::OpenLogsFolder,
+                0 => NavResult::EditText(EditField::Username, "Username".into()),
+                1 => NavResult::EditText(EditField::StatsEmail, "Stats Email".into()),
+                2 => NavResult::ToggleDiscordRpc,
+                3 => NavResult::ToggleFullscreen,
+                4 => NavResult::AdjustVolume(10),
+                5 => NavResult::CycleAudioBuffer(1),
+                6 => NavResult::CycleVideoFilter(1),
+                7 => NavResult::ToggleCrtGlass,
+                8 => NavResult::CycleAspectMode(1),
+                9 => NavResult::CycleScorebarStyle(1),
+                10 => NavResult::LaunchDoctor,
+                11 => NavResult::OpenClipsFolder,
+                12 => NavResult::OpenLogsFolder,
                 _ => NavResult::Stay,
             },
+            AppState::Menu(MenuScreen::TextEdit { field, value, .. }) => {
+                NavResult::CommitText(field, value)
+            }
             AppState::Menu(MenuScreen::Training { cursor, .. }) => match cursor {
                 0 => NavResult::ToggleTraining("hitboxes"),
                 1 => NavResult::ToggleTraining("health"),
@@ -530,6 +556,9 @@ impl AppState {
             | AppState::Menu(MenuScreen::Spectate { .. }) => {
                 *self = AppState::Menu(MenuScreen::Main { cursor: 0 });
             }
+            AppState::Menu(MenuScreen::TextEdit { came_from, .. }) => {
+                *self = AppState::Menu((**came_from).clone());
+            }
             _ => {}
         }
     }
@@ -540,21 +569,25 @@ impl AppState {
         }
     }
 
-    /// Append a character to the TestIp IP editor buffer. No-op if not editing.
+    /// Append typed text to the active menu editor. No-op if nothing is editing.
     pub fn text_input(&mut self, s: &str) {
-        let buf: Option<&mut String> = match self {
-            AppState::Menu(MenuScreen::TestIp {
-                ip_text,
-                editing: true,
-            }) => Some(ip_text),
-            _ => None,
-        };
-        if let Some(ip_text) = buf {
+        if let AppState::Menu(MenuScreen::TestIp {
+            ip_text,
+            editing: true,
+        }) = self
+        {
             for c in s.chars() {
-                if c.is_ascii_digit() || c == '.' || c == ':' {
-                    if ip_text.len() < 24 {
-                        ip_text.push(c);
-                    }
+                if (c.is_ascii_digit() || c == '.' || c == ':') && ip_text.len() < 24 {
+                    ip_text.push(c);
+                }
+            }
+            return;
+        }
+
+        if let AppState::Menu(MenuScreen::TextEdit { value, .. }) = self {
+            for c in s.chars() {
+                if !c.is_control() && value.len() < 64 {
+                    value.push(c);
                 }
             }
         }
@@ -567,6 +600,8 @@ impl AppState {
         }) = self
         {
             ip_text.pop();
+        } else if let AppState::Menu(MenuScreen::TextEdit { value, .. }) = self {
+            value.pop();
         }
     }
 }
@@ -644,6 +679,8 @@ pub fn draw(
         }
         AppState::Menu(MenuScreen::Settings {
             cursor,
+            player_username,
+            stats_email,
             discord_rpc_enabled,
             fullscreen,
             volume_percent,
@@ -656,6 +693,8 @@ pub fn draw(
             canvas,
             font,
             *cursor,
+            player_username,
+            stats_email,
             *discord_rpc_enabled,
             *fullscreen,
             *volume_percent,
@@ -667,6 +706,12 @@ pub fn draw(
             w,
             h,
         )?,
+        AppState::Menu(MenuScreen::TextEdit {
+            title,
+            label,
+            value,
+            ..
+        }) => draw_text_edit(canvas, font, title, label, value, w, h)?,
         AppState::Menu(MenuScreen::Training {
             cursor,
             hitboxes,
@@ -1850,7 +1895,7 @@ fn draw_matchmaking(
     )?;
     y += 36 * scale as i32;
 
-    let hint = "Discord login will open in your browser";
+    let hint = "Using your Settings username for online play";
     let hw = font.text_width_exact(hint, small);
     font.draw(
         canvas,
@@ -2000,6 +2045,8 @@ fn draw_settings(
     canvas: &mut Canvas<Window>,
     font: &mut Font,
     cursor: usize,
+    player_username: &str,
+    stats_email: &str,
     discord_rpc_enabled: bool,
     fullscreen: bool,
     volume_percent: u8,
@@ -2034,24 +2081,37 @@ fn draw_settings(
         font.draw(canvas, label, x, row_y, scale, colour)?;
 
         let value = match i {
-            0 => Some(if discord_rpc_enabled { "ON" } else { "OFF" }.to_string()),
-            1 => Some(if fullscreen { "ON" } else { "OFF" }.to_string()),
-            2 => Some(format!("{volume_percent}%")),
-            3 => Some(audio_buffer.label().to_string()),
-            4 => Some(video_filter.label().to_string()),
-            5 => Some(if crt_corner_bend { "ON" } else { "OFF" }.to_string()),
-            6 => Some(aspect_mode.label().to_string()),
-            7 => Some(scorebar_style.label().to_string()),
+            0 => Some(
+                if player_username.trim().is_empty() {
+                    "Player"
+                } else {
+                    player_username
+                }
+                .to_string(),
+            ),
+            1 => Some(
+                if stats_email.trim().is_empty() {
+                    "optional"
+                } else {
+                    stats_email
+                }
+                .to_string(),
+            ),
+            2 => Some(if discord_rpc_enabled { "ON" } else { "OFF" }.to_string()),
+            3 => Some(if fullscreen { "ON" } else { "OFF" }.to_string()),
+            4 => Some(format!("{volume_percent}%")),
+            5 => Some(audio_buffer.label().to_string()),
+            6 => Some(video_filter.label().to_string()),
+            7 => Some(if crt_corner_bend { "ON" } else { "OFF" }.to_string()),
+            8 => Some(aspect_mode.label().to_string()),
+            9 => Some(scorebar_style.label().to_string()),
             _ => None,
         };
         if let Some(value) = value {
+            let value = fit_line(font, &value, scale, (w / 2).max(120));
             let vw = font.text_width_exact(&value, scale);
             let enabled_colour = match i {
-                2 => Color::RGB(180, 205, 255),
-                3 => Color::RGB(180, 205, 255),
-                4 => Color::RGB(180, 205, 255),
-                6 => Color::RGB(180, 205, 255),
-                7 => Color::RGB(180, 205, 255),
+                0 | 1 | 4 | 5 | 6 | 8 | 9 => Color::RGB(180, 205, 255),
                 _ if value == "ON" => Color::RGB(120, 230, 150),
                 _ => Color::RGB(210, 140, 140),
             };
@@ -2062,6 +2122,7 @@ fn draw_settings(
     y += SETTINGS_ITEMS.len() as i32 * row_h + 20;
     let notes = [
         "Doctor checks local setup in a separate window.",
+        "Username is required. Email is optional for portable stats.",
         "Use LEFT/RIGHT on Volume and video options.",
         "Stable audio reduces crackle with a little more latency.",
         "Video Filter applies during gameplay.",
@@ -2075,6 +2136,49 @@ fn draw_settings(
     }
 
     let footer = "ENTER Select   ESC Back";
+    let fw = font.text_width_exact(footer, small);
+    font.draw(
+        canvas,
+        footer,
+        (w - fw) / 2,
+        h - 28,
+        small,
+        Color::RGB(100, 100, 100),
+    )?;
+    Ok(())
+}
+
+fn draw_text_edit(
+    canvas: &mut Canvas<Window>,
+    font: &mut Font,
+    title: &str,
+    label: &str,
+    value: &str,
+    w: i32,
+    h: i32,
+) -> Result<(), String> {
+    draw_title(canvas, font, title, w, h)?;
+    let scale = body_scale(h).saturating_sub(1).max(1);
+    let small = small_scale(h);
+    let x = (w / 8).max(42);
+    let y = h / 3;
+    font.draw(canvas, label, x, y, small, Color::RGB(145, 155, 180))?;
+    let box_y = y + 24;
+    let box_h = 34;
+    canvas.set_draw_color(Color::RGBA(18, 22, 34, 230));
+    canvas.fill_rect(Rect::new(x, box_y, (w - x * 2) as u32, box_h))?;
+    canvas.set_draw_color(Color::RGBA(95, 130, 210, 210));
+    canvas.draw_rect(Rect::new(x, box_y, (w - x * 2) as u32, box_h))?;
+    let shown = fit_line(font, &format!("{value}_"), scale, w - x * 2 - 22);
+    font.draw(
+        canvas,
+        &shown,
+        x + 10,
+        box_y + 9,
+        scale,
+        Color::RGB(235, 240, 255),
+    )?;
+    let footer = "ENTER Save   ESC Cancel";
     let fw = font.text_width_exact(footer, small);
     font.draw(
         canvas,

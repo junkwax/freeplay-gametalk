@@ -1,6 +1,6 @@
 //! Automated matchmaking client for Freeplay.
 
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
 use std::sync::{mpsc::Sender, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -60,6 +60,7 @@ const GAME_PORT: u16 = 7000;
 const PUNCH_PAYLOAD: &[u8] = b"MK2PUNCH";
 
 static CURRENT_TOKEN: Mutex<Option<String>> = Mutex::new(None);
+static GUEST_PROFILE: Mutex<Option<(String, String)>> = Mutex::new(None);
 
 fn signaling_url() -> Result<String, String> {
     let from_env = crate::config::env_value("FREEPLAY_SIGNALING_URL");
@@ -72,6 +73,12 @@ fn signaling_url() -> Result<String, String> {
 
 pub fn current_token() -> Option<String> {
     CURRENT_TOKEN.lock().ok().and_then(|g| g.clone())
+}
+
+pub fn set_guest_profile(username: String, email: String) {
+    if let Ok(mut g) = GUEST_PROFILE.lock() {
+        *g = Some((username, email));
+    }
 }
 
 fn set_current_token(token: &str) {
@@ -102,15 +109,8 @@ fn run(tx: &Sender<Update>) -> Result<(), String> {
     let mut maybe_session_id: Option<String> = None;
 
     let outcome = (|| -> Result<(), String> {
-        let token = if let Some(cached) = read_cached_token() {
-            send(tx, Update::Status("Using saved login...".into()))?;
-            cached
-        } else {
-            send(tx, Update::Status("Opening Discord login...".into()))?;
-            let fresh = discord_login(tx)?;
-            write_cached_token(&fresh);
-            fresh
-        };
+        send(tx, Update::Status("Signing in as guest...".into()))?;
+        let token = guest_login()?;
         set_current_token(&token);
 
         // Best-effort cancel of any prior session before we re-queue.
@@ -225,15 +225,8 @@ fn cancel_match(token: &str, _session_id: &str) -> Result<(), String> {
 }
 
 fn run_join_room(tx: &Sender<Update>, room_id: &str) -> Result<(), String> {
-    let token = if let Some(cached) = read_cached_token() {
-        send(tx, Update::Status("Using saved login...".into()))?;
-        cached
-    } else {
-        send(tx, Update::Status("Opening Discord login...".into()))?;
-        let fresh = discord_login(tx)?;
-        write_cached_token(&fresh);
-        fresh
-    };
+    send(tx, Update::Status("Signing in as guest...".into()))?;
+    let token = guest_login()?;
     set_current_token(&token);
 
     send(tx, Update::Status("Discovering network...".into()))?;
@@ -344,56 +337,54 @@ fn token_cache_path() -> Option<std::path::PathBuf> {
     Some(dir.join("token"))
 }
 
-fn read_cached_token() -> Option<String> {
-    let path = token_cache_path()?;
-    let token = std::fs::read_to_string(&path).ok()?.trim().to_string();
-    if token.is_empty() {
-        return None;
-    }
-
-    let payload_b64 = token.split('.').nth(1)?;
-    let padded = pad_base64url(payload_b64);
-    let payload_bytes = base64_decode(&padded)?;
-    let payload_str = String::from_utf8(payload_bytes).ok()?;
-
-    let exp = json_i64(&payload_str, "exp")?;
-
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs() as i64;
-    if exp <= now + 60 {
-        println!("[mm] cached token expired, re-authenticating");
-        return None;
-    }
-
-    println!(
-        "[mm] using cached Discord token (expires in {}s)",
-        exp - now
-    );
-    Some(token)
-}
-
-fn write_cached_token(token: &str) {
-    if let Some(path) = token_cache_path() {
-        match std::fs::write(&path, token) {
-            Ok(_) => println!("[mm] Discord token cached to {}", path.display()),
-            Err(e) => println!("[mm] failed to cache token: {e}"),
-        }
-    }
-}
-
 pub fn clear_cached_token() {
+    if let Ok(mut guard) = CURRENT_TOKEN.lock() {
+        *guard = None;
+    }
     if let Some(path) = token_cache_path() {
         let _ = std::fs::remove_file(&path);
         println!("[mm] cleared cached token");
     }
 }
 
-/// Extract the discord username from the cached JWT, if one is present and not expired.
+fn guest_login() -> Result<String, String> {
+    let (username, email) = GUEST_PROFILE
+        .lock()
+        .ok()
+        .and_then(|g| g.clone())
+        .unwrap_or_else(|| (crate::config::default_username(), String::new()));
+    let username = crate::config::sanitize_username(&username)
+        .ok_or_else(|| "Username must be 2-24 letters/numbers".to_string())?;
+    let email = crate::config::normalize_email(&email).unwrap_or_default();
+    let body = if email.is_empty() {
+        format!(r#"{{"username":"{}"}}"#, json_escape(&username))
+    } else {
+        format!(
+            r#"{{"username":"{}","email":"{}"}}"#,
+            json_escape(&username),
+            json_escape(&email)
+        )
+    };
+    let url = format!("{}/auth/guest", signaling_url()?);
+    let resp = http_post_json_no_auth(&url, &body)?;
+    json_str(&resp, "token").ok_or_else(|| format!("guest auth missing token: {resp}"))
+}
+
+fn current_or_cached_token() -> Option<String> {
+    current_token().or_else(|| {
+        let path = token_cache_path()?;
+        let token = std::fs::read_to_string(&path).ok()?.trim().to_string();
+        if token.is_empty() {
+            None
+        } else {
+            Some(token)
+        }
+    })
+}
+
+/// Extract the current username from the active JWT, if one is present and not expired.
 pub fn username_from_cached_token() -> Option<String> {
-    let path = token_cache_path()?;
-    let token = std::fs::read_to_string(&path).ok()?.trim().to_string();
-    if token.is_empty() {
-        return None;
-    }
+    let token = current_or_cached_token()?;
     let payload_b64 = token.split('.').nth(1)?;
     let payload_bytes = base64_decode(&pad_base64url(payload_b64))?;
     let payload_str = String::from_utf8(payload_bytes).ok()?;
@@ -405,13 +396,9 @@ pub fn username_from_cached_token() -> Option<String> {
     json_str(&payload_str, "username")
 }
 
-/// Extract the Discord user ID (JWT `sub` claim) from the cached token.
+/// Extract the active stats/player ID (JWT `sub` claim) from the current token.
 pub fn discord_id_from_cached_token() -> Option<String> {
-    let path = token_cache_path()?;
-    let token = std::fs::read_to_string(&path).ok()?.trim().to_string();
-    if token.is_empty() {
-        return None;
-    }
+    let token = current_or_cached_token()?;
     let payload_b64 = token.split('.').nth(1)?;
     let payload_bytes = base64_decode(&pad_base64url(payload_b64))?;
     let payload_str = String::from_utf8(payload_bytes).ok()?;
@@ -469,98 +456,6 @@ fn rom_short_hash() -> String {
         h = h.wrapping_mul(0x100000001b3);
     }
     format!("{:08x}", (h >> 32) as u32)
-}
-
-// ── Discord OAuth ─────────────────────────────────────────────────────────────
-
-fn discord_login(tx: &Sender<Update>) -> Result<String, String> {
-    use std::net::TcpListener;
-
-    let listener = TcpListener::bind("127.0.0.1:19420")
-        .map_err(|e| format!("Failed to bind local auth server on :19420: {e}"))?;
-    listener.set_nonblocking(false).ok();
-
-    let login_url = format!("{}/auth/discord", signaling_url()?);
-    open::that(&login_url).map_err(|e| format!("Failed to open browser: {e}"))?;
-
-    send(tx, Update::Status("Waiting for Discord login...".into()))?;
-
-    let (mut stream, _) = listener
-        .accept()
-        .map_err(|e| format!("Auth server accept failed: {e}"))?;
-    stream.set_read_timeout(Some(Duration::from_secs(120))).ok();
-
-    let mut reader = BufReader::new(&stream);
-    let mut line = String::new();
-    reader.read_line(&mut line).ok();
-    for l in reader.by_ref().lines() {
-        let l = l.map_err(|e| e.to_string())?;
-        if l.is_empty() {
-            break;
-        }
-    }
-
-    let html = r#"<!DOCTYPE html>
-<html><head><title>Freeplay Login</title></head><body>
-<p>Logging you in to Freeplay...</p>
-<script>
-  const token = new URLSearchParams(window.location.hash.slice(1)).get('token');
-  if (token) {
-    fetch('/token', { method: 'POST', headers: {'Content-Type': 'text/plain'}, body: token })
-      .then(() => { document.body.innerHTML = '<h2>✅ Logged in! You can close this tab.</h2>'; });
-  } else {
-    document.body.innerHTML = '<h2>❌ Login failed — no token in URL.</h2>';
-  }
-</script></body></html>"#;
-
-    let response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        html.len(), html
-    );
-    stream.write_all(response.as_bytes()).ok();
-    drop(stream);
-
-    let (mut stream2, _) = listener
-        .accept()
-        .map_err(|e| format!("Token POST accept failed: {e}"))?;
-    stream2.set_read_timeout(Some(Duration::from_secs(30))).ok();
-
-    let mut reader2 = BufReader::new(&stream2);
-    let mut req_line = String::new();
-    reader2.read_line(&mut req_line).ok();
-    let mut content_length = 0usize;
-    for l in reader2.by_ref().lines() {
-        let l = l.map_err(|e| e.to_string())?;
-        if l.is_empty() {
-            break;
-        }
-        if l.to_lowercase().starts_with("content-length:") {
-            content_length = l
-                .split(':')
-                .nth(1)
-                .unwrap_or("0")
-                .trim()
-                .parse()
-                .unwrap_or(0);
-        }
-    }
-
-    let mut body = vec![0u8; content_length];
-    std::io::Read::read_exact(&mut reader2, &mut body)
-        .map_err(|e| format!("Token body read failed: {e}"))?;
-    let token = String::from_utf8(body)
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-
-    let ack = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-    stream2.write_all(ack.as_bytes()).ok();
-
-    if token.is_empty() {
-        return Err("Empty token — Discord login may have been cancelled".to_string());
-    }
-    println!("[mm] OAuth token received");
-    Ok(token)
 }
 
 // ── STUN discovery ────────────────────────────────────────────────────────────
@@ -684,6 +579,16 @@ fn http_post_json(url: &str, token: &str, body: &str) -> Result<String, String> 
     let stream = tls_connect(&host)?;
     let req = format!(
         "POST {path} HTTP/1.1\r\nHost: {host}\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    send_recv_https(stream, &req)
+}
+
+fn http_post_json_no_auth(url: &str, body: &str) -> Result<String, String> {
+    let (host, path) = parse_url(url)?;
+    let stream = tls_connect(&host)?;
+    let req = format!(
+        "POST {path} HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
     send_recv_https(stream, &req)
@@ -1574,6 +1479,22 @@ fn json_str(json: &str, key: &str) -> Option<String> {
     let start = json.find(&pat)? + pat.len();
     let end = json[start..].find('"')?;
     Some(json[start..start + end].to_string())
+}
+
+fn json_escape(s: &str) -> String {
+    let mut out = String::new();
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => {}
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 fn json_last_str(json: &str, key: &str) -> Option<String> {

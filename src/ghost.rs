@@ -566,10 +566,10 @@ fn try_upload_one(
 
 /// Drain the upload queue. Called at startup and after each match.
 ///
-/// If no JWT is cached (user not signed in), we skip the drain entirely —
+/// If no JWT is active, we skip the drain entirely —
 /// the server requires auth and retrying without it just bounces files
-/// straight back into the queue. They'll wait for the next call, which
-/// happens after Discord login completes.
+/// straight back into the queue. They'll wait for the next successful
+/// guest sign-in.
 pub fn drain_upload_queue(stats_url: &str) {
     if stats_url.is_empty() {
         return;

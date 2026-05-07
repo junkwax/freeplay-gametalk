@@ -43,6 +43,12 @@ pub struct Config {
     /// Whether Discord Rich Presence should start when configured.
     #[serde(default = "default_true")]
     pub discord_rpc_enabled: bool,
+    /// Public handle used for matchmaking, stats, and overlays.
+    #[serde(default)]
+    pub player_username: String,
+    /// Optional email used to make the guest stats identity portable.
+    #[serde(default)]
+    pub stats_email: String,
     /// Start in desktop fullscreen and keep that preference when toggled.
     #[serde(default)]
     pub fullscreen: bool,
@@ -270,6 +276,56 @@ fn apply_env_overrides(cfg: &mut Config) {
     if let Some(v) = env_value("FREEPLAY_STATS_URL") {
         cfg.stats_url = v;
     }
+    if cfg.player_username.trim().is_empty() {
+        cfg.player_username = default_username();
+    }
+}
+
+pub fn default_username() -> String {
+    let raw = std::env::var("FREEPLAY_USERNAME")
+        .ok()
+        .or_else(|| std::env::var("USERNAME").ok())
+        .or_else(|| std::env::var("USER").ok())
+        .unwrap_or_else(|| "Player".into());
+    sanitize_username(&raw).unwrap_or_else(|| "Player".into())
+}
+
+pub fn sanitize_username(raw: &str) -> Option<String> {
+    let mut out = String::new();
+    for c in raw.trim().chars() {
+        if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+            out.push(c);
+        } else if c.is_whitespace() && !out.ends_with('_') {
+            out.push('_');
+        }
+        if out.len() >= 24 {
+            break;
+        }
+    }
+    let out = out.trim_matches('_').to_string();
+    if out.len() >= 2 {
+        Some(out)
+    } else {
+        None
+    }
+}
+
+pub fn normalize_email(raw: &str) -> Option<String> {
+    let email = raw.trim().to_ascii_lowercase();
+    if email.len() > 254 {
+        return None;
+    }
+    let (local, domain) = email.split_once('@')?;
+    if local.is_empty()
+        || domain.is_empty()
+        || domain.starts_with('.')
+        || domain.ends_with('.')
+        || !domain.contains('.')
+        || email.chars().any(char::is_whitespace)
+    {
+        return None;
+    }
+    Some(email)
 }
 
 fn load_dotenv() {

@@ -50,9 +50,9 @@ pub fn run() -> i32 {
     check(
         "FREEPLAY_DISCORD_CLIENT_ID",
         discord.is_some(),
-        "required for Discord presence/login",
+        "optional for Discord Rich Presence",
         &mut ok,
-        true,
+        false,
     );
 
     let rom = crate::rom::find_rom_zip();

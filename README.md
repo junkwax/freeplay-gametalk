@@ -4,7 +4,7 @@
 ![freeplay-image](https://raw.githubusercontent.com/junkwax/freeplay-gametalk/main/screenshot.png)
 
 freeplay-gametalk is the Freeplay client package: a Rust/SDL2 arcade rollback
-client with Discord login, matchmaking, ghost recording, profile stats, and a
+client with username-based matchmaking, ghost recording, profile stats, and a
 compact in-game overlay. It wraps an FBNeo libretro core, drives the emulator
 frame by frame, and synchronizes two players with GGRS rollback netcode over
 the public `freeplay-relay` UDP path.
@@ -14,9 +14,9 @@ URLs, OAuth client IDs, tokens, or webhooks.
 
 ## Current Build
 
-- Modern SDL menu with Profile, Load Ghosts, Controls, About, and Sign Out via
-  hotkey.
-- Discord OAuth login with cached local token.
+- Modern SDL menu with Profile, Load Ghosts, Controls, Settings, and About.
+- Username-based online sign-in; Discord OAuth is not required to match.
+- Optional Stats Email setting for portable ratings/history across machines.
 - Discord Rich Presence with join/spectate support when configured.
 - Online matchmaking through a signaling service.
 - Public UDP relay path for cross-NAT online play.
@@ -40,7 +40,8 @@ URLs, OAuth client IDs, tokens, or webhooks.
   - **macOS**: `brew install sdl2 sdl2_ttf`
 - FBNeo libretro core available next to the executable
 - A legally obtained compatible ROM zip supplied by the user
-- Optional Discord application and backend services for online features
+- Optional backend services for online features
+- Optional Discord application for Rich Presence
 
 ## Configuration
 
@@ -50,12 +51,14 @@ values:
 ```env
 FREEPLAY_SIGNALING_URL=https://your-signaling-service.example.com
 FREEPLAY_STATS_URL=https://your-stats-service.example.com
+FREEPLAY_USERNAME=Player
 FREEPLAY_DISCORD_CLIENT_ID=your-discord-application-id
 FREEPLAY_DISCORD_WEBHOOK_URL=
 ```
 
 `.env` is ignored by git. Keep real service URLs, Discord IDs, and webhook URLs
-out of commits.
+out of commits. The in-app Settings screen also stores the public username and
+optional stats email in `config.toml`.
 
 `config.toml` is also ignored because it can contain local controller bindings
 and private webhook settings. The app can still run with defaults, and user
@@ -189,7 +192,8 @@ For public release builds:
 1. Download the latest `freeplay-gametalk-v<version>.zip` from GitHub Releases.
 2. Extract it, then put your legally obtained ROM zip in `roms\`.
 3. Run `freeplay.exe`.
-4. Sign in with Discord when prompted.
+4. Open Settings if you want to change your public username or add an optional
+   stats email.
 5. Select Find Match.
 6. During an online match, press `T` to chat and Enter to send.
 7. Press `F1` to leave the set.
@@ -205,6 +209,8 @@ Under the hood:
    configured backend.
 
 Stats and ghost uploads are disabled when `FREEPLAY_STATS_URL` is missing.
+Without a Stats Email, ratings are tied to the local guest name identity. Add
+the same email on another machine to keep using the same stats identity there.
 Discord presence is disabled when `FREEPLAY_DISCORD_CLIENT_ID` is missing.
 
 ## Discord Rich Presence
@@ -245,9 +251,9 @@ actions do not accidentally queue the viewer into the match.
 ## Ghosts
 
 Ghost recordings are written under `ghosts\` next to the executable. When stats
-upload is configured and the user is logged in, completed netplay recordings
-can be uploaded for community ghost playback. Local ghost files and upload
-queues are ignored by git.
+upload is configured and the client has a username identity, completed netplay
+recordings can be uploaded for community ghost playback. Local ghost files and
+upload queues are ignored by git.
 
 ## Repo Hygiene
 
