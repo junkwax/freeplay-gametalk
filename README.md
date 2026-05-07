@@ -7,7 +7,7 @@ freeplay-gametalk is the Freeplay client package: a Rust/SDL2 arcade rollback
 client with Discord login, matchmaking, ghost recording, profile stats, and a
 compact in-game overlay. It wraps an FBNeo libretro core, drives the emulator
 frame by frame, and synchronizes two players with GGRS rollback netcode over
-direct UDP or TURN relay fallback.
+the public `freeplay-relay` UDP path.
 
 This repository does not include ROM files, emulator DLLs, private service
 URLs, OAuth client IDs, tokens, or webhooks.
@@ -19,7 +19,7 @@ URLs, OAuth client IDs, tokens, or webhooks.
 - Discord OAuth login with cached local token.
 - Discord Rich Presence with join/spectate support when configured.
 - Online matchmaking through a signaling service.
-- Direct UDP hole punching with TURN fallback for stricter NATs.
+- Public UDP relay path for cross-NAT online play.
 - Best-of-session scoring and a high-resolution fight overlay rendered over
   the emulator view.
 - Profile page with rating, wins, losses, win rate, match history, and Discord
@@ -184,13 +184,25 @@ https://www.mortalkombatwarehouse.com/site/fonts/mortalkombat2.ttf
 
 ## Online Flow
 
-1. User selects Find Match.
-2. Discord login opens if no cached token exists.
-3. The client discovers its public UDP endpoint.
-4. The signaling service pairs compatible players.
-5. Peers attempt direct UDP punching.
-6. If direct UDP fails, TURN relay is used when credentials are available.
-7. Match results and spectator state are posted through the configured backend.
+For public release builds:
+
+1. Download the latest `freeplay-gametalk-v<version>.zip` from GitHub Releases.
+2. Extract it, then put your legally obtained ROM zip in `roms\`.
+3. Run `freeplay.exe`.
+4. Sign in with Discord when prompted.
+5. Select Find Match.
+6. During an online match, press `T` to chat and Enter to send.
+7. Press `F1` to leave the set.
+
+Under the hood:
+
+1. The client discovers its public UDP endpoint.
+2. The signaling service pairs compatible players.
+3. Relay credentials are minted for the shared room.
+4. Both clients send netplay packets to `freeplay-relay`, which forwards
+   traffic between the two registered peers.
+5. Match results, ghost uploads, and spectator state are posted through the
+   configured backend.
 
 Stats and ghost uploads are disabled when `FREEPLAY_STATS_URL` is missing.
 Discord presence is disabled when `FREEPLAY_DISCORD_CLIENT_ID` is missing.
@@ -219,8 +231,16 @@ Asset keys are lowercased by Discord. The client uses:
 - Join secrets for training spar invites
 - Spectate secrets for active online matches
 
-Spectate requests are routed separately from join requests. The full spectator
-viewer UI is still a follow-up feature.
+When a player is in an online match, Discord desktop can show a Watch/Spectate
+action on their profile card. Clicking it opens Freeplay through
+`xband://watch/<session>` and lands on the watch-match screen, which follows
+the live score/frame state exposed by the signaling service. This requires the
+viewer to have launched Freeplay at least once so the `xband://` protocol is
+registered locally, and it depends on Discord desktop Rich Presence being
+enabled for both users.
+
+Spectate requests are routed separately from join requests so Discord profile
+actions do not accidentally queue the viewer into the match.
 
 ## Ghosts
 

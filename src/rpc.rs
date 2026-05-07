@@ -7,10 +7,12 @@
 //! ## Interactive features
 //!
 //!   - "Join" button on the profile card when in Training mode (spar invite)
+//!   - "Spectate" / "Watch" action while a ranked match is active
 //!   - Party info during netplay (1/2 or 2/2)
 //!   - Elapsed-time timestamps during active play
 //!   - State-specific Rich Presence art assets
 //!   - Listens for `ACTIVITY_JOIN` events from Discord
+//!   - Listens for `ACTIVITY_SPECTATE` events from Discord
 //!
 //! ## Discord Developer Portal setup
 //!
@@ -172,9 +174,11 @@ impl RpcClient {
             println!("[rpc] Activity join requested — secret: {secret}");
             if let Some(room_id) = secret.strip_prefix("xband://join/") {
                 println!("[rpc] → Spar room join: room_id={room_id}");
-                if let Ok(mut slot) = spectate_slot().lock() {
+                if let Ok(mut slot) = join_slot().lock() {
                     *slot = Some(room_id.to_string());
                 }
+            } else {
+                println!("[rpc] Ignoring unknown join secret");
             }
         });
 
@@ -186,11 +190,13 @@ impl RpcClient {
                 .and_then(|v| v.as_str())
                 .unwrap_or_default();
             println!("[rpc] Spectate requested — secret: {secret}");
-            if let Some(room_id) = secret.strip_prefix("xband://watch/") {
-                println!("[rpc] → Watch match: session_id={room_id}");
-                if let Ok(mut slot) = join_slot().lock() {
-                    *slot = Some(room_id.to_string());
+            if let Some(session_id) = secret.strip_prefix("xband://watch/") {
+                println!("[rpc] → Watch match: session_id={session_id}");
+                if let Ok(mut slot) = spectate_slot().lock() {
+                    *slot = Some(session_id.to_string());
                 }
+            } else {
+                println!("[rpc] Ignoring unknown spectate secret");
             }
         });
 
@@ -290,30 +296,30 @@ impl RpcClient {
             RpcState::Menu => "In Lobby",
             RpcState::Playing => "Practice Mode",
             RpcState::Training => "Practice Mode",
-            RpcState::Matchmaking => "Searching for opponent",
-            RpcState::Hosting => "Hosting a match",
-            RpcState::Joining => "Joining a match",
-            RpcState::Netplay => "Netplay Match",
-            RpcState::NetplayVs(_) => "Netplay Match",
+            RpcState::Matchmaking => "MK2 Ranked Queue",
+            RpcState::Hosting => "Hosting MK2 Spar",
+            RpcState::Joining => "Joining MK2 Match",
+            RpcState::Netplay => "MK2 Ranked Match",
+            RpcState::NetplayVs(_) => "MK2 Ranked Match",
         };
 
         let mut state_str = match state {
             RpcState::Menu => String::new(),
             RpcState::Playing => "Offline practice".into(),
-            RpcState::Training => "Ghost training".into(),
-            RpcState::Matchmaking => "In queue".into(),
+            RpcState::Training => "Join to spar".into(),
+            RpcState::Matchmaking => "Searching for opponent".into(),
             RpcState::Hosting => "Waiting for opponent".into(),
             RpcState::Joining => "Connecting...".into(),
             RpcState::Netplay => {
                 if let Some((p1, p2)) = u.score {
-                    format!("Online | {p1}-{p2}")
+                    format!("Ranked | Set {p1}-{p2}")
                 } else {
-                    "Online".into()
+                    "Ranked online".into()
                 }
             }
             RpcState::NetplayVs(n) => {
                 if let Some((p1, p2)) = u.score {
-                    format!("vs {n} | {p1}-{p2}")
+                    format!("vs {n} | Set {p1}-{p2}")
                 } else {
                     format!("vs {n}")
                 }

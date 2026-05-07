@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.10 - 2026-05-07
+
+### Fixed
+
+- Discord Rich Presence join and spectate callbacks now route to the
+  correct in-app flows. Join opens the spar/join path; Spectate opens the
+  watch-match screen.
+
+### Changed
+
+- Discord Rich Presence text now calls out MK2 ranked queue/match state,
+  opponent name, and set score more clearly.
+- README onboarding now documents the public online flow and Discord watch
+  behavior for desktop users.
+
 ## 0.5.9 - 2026-05-07
 
 ### Added
