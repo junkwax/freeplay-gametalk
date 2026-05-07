@@ -565,7 +565,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ..
                 } if matches!(
                     state,
-                    AppState::Menu(MenuScreen::Settings { cursor: 4, .. })
+                    AppState::Menu(MenuScreen::Settings { cursor: 5, .. })
                 ) =>
                 {
                     cfg.volume_percent = cfg.volume_percent.saturating_sub(10);
@@ -589,7 +589,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ..
                 } if matches!(
                     state,
-                    AppState::Menu(MenuScreen::Settings { cursor: 4, .. })
+                    AppState::Menu(MenuScreen::Settings { cursor: 5, .. })
                 ) =>
                 {
                     cfg.volume_percent = cfg.volume_percent.saturating_add(10).min(100);
@@ -613,7 +613,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ..
                 } if matches!(
                     state,
-                    AppState::Menu(MenuScreen::Settings { cursor: 5, .. })
+                    AppState::Menu(MenuScreen::Settings { cursor: 6, .. })
                 ) =>
                 {
                     cfg.audio_buffer = cfg.audio_buffer.cycle(-1);
@@ -637,7 +637,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ..
                 } if matches!(
                     state,
-                    AppState::Menu(MenuScreen::Settings { cursor: 5, .. })
+                    AppState::Menu(MenuScreen::Settings { cursor: 6, .. })
                 ) =>
                 {
                     cfg.audio_buffer = cfg.audio_buffer.cycle(1);
@@ -661,7 +661,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ..
                 } if matches!(
                     state,
-                    AppState::Menu(MenuScreen::Settings { cursor: 6, .. })
+                    AppState::Menu(MenuScreen::Settings { cursor: 7, .. })
                 ) =>
                 {
                     cfg.video_filter = cfg.video_filter.cycle(-1);
@@ -685,7 +685,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ..
                 } if matches!(
                     state,
-                    AppState::Menu(MenuScreen::Settings { cursor: 6, .. })
+                    AppState::Menu(MenuScreen::Settings { cursor: 7, .. })
                 ) =>
                 {
                     cfg.video_filter = cfg.video_filter.cycle(1);
@@ -709,7 +709,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ..
                 } if matches!(
                     state,
-                    AppState::Menu(MenuScreen::Settings { cursor: 8, .. })
+                    AppState::Menu(MenuScreen::Settings { cursor: 9, .. })
                 ) =>
                 {
                     cfg.aspect_mode = cfg.aspect_mode.cycle(-1);
@@ -733,7 +733,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ..
                 } if matches!(
                     state,
-                    AppState::Menu(MenuScreen::Settings { cursor: 8, .. })
+                    AppState::Menu(MenuScreen::Settings { cursor: 9, .. })
                 ) =>
                 {
                     cfg.aspect_mode = cfg.aspect_mode.cycle(1);
@@ -757,7 +757,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ..
                 } if matches!(
                     state,
-                    AppState::Menu(MenuScreen::Settings { cursor: 9, .. })
+                    AppState::Menu(MenuScreen::Settings { cursor: 10, .. })
                 ) =>
                 {
                     cfg.scorebar_style = cfg.scorebar_style.cycle(-1);
@@ -781,7 +781,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ..
                 } if matches!(
                     state,
-                    AppState::Menu(MenuScreen::Settings { cursor: 9, .. })
+                    AppState::Menu(MenuScreen::Settings { cursor: 10, .. })
                 ) =>
                 {
                     cfg.scorebar_style = cfg.scorebar_style.cycle(1);
@@ -1056,6 +1056,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         cursor: 0,
                                         player_username: cfg.player_username.clone(),
                                         stats_email: cfg.stats_email.clone(),
+                                        discord_connected:
+                                            matchmaking::connected_discord_user_from_cached_token()
+                                                .is_some(),
                                         discord_rpc_enabled: cfg.discord_rpc_enabled,
                                         fullscreen: cfg.fullscreen,
                                         volume_percent: cfg.volume_percent,
@@ -1111,6 +1114,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             },
                                             player_username: cfg.player_username.clone(),
                                             stats_email: cfg.stats_email.clone(),
+                                            discord_connected: matchmaking::connected_discord_user_from_cached_token()
+                                                .is_some(),
                                             discord_rpc_enabled: cfg.discord_rpc_enabled,
                                             fullscreen: cfg.fullscreen,
                                             volume_percent: cfg.volume_percent,
@@ -1165,6 +1170,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         },
                                         player_username: cfg.player_username.clone(),
                                         stats_email: cfg.stats_email.clone(),
+                                        discord_connected:
+                                            matchmaking::connected_discord_user_from_cached_token()
+                                                .is_some(),
                                         discord_rpc_enabled: cfg.discord_rpc_enabled,
                                         fullscreen: cfg.fullscreen,
                                         volume_percent: cfg.volume_percent,
@@ -1174,6 +1182,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         aspect_mode: cfg.aspect_mode,
                                         scorebar_style: cfg.scorebar_style,
                                     });
+                                }
+                                NavResult::ConnectDiscord => {
+                                    if matchmaking::connected_discord_user_from_cached_token()
+                                        .is_some()
+                                    {
+                                        matchmaking::clear_cached_token();
+                                        discord_user = None;
+                                        discord_id = None;
+                                        toast = Some((
+                                            "Discord disconnected".into(),
+                                            Instant::now() + Duration::from_millis(2200),
+                                        ));
+                                        state = AppState::Menu(MenuScreen::Settings {
+                                            cursor: 2,
+                                            player_username: cfg.player_username.clone(),
+                                            stats_email: cfg.stats_email.clone(),
+                                            discord_connected: false,
+                                            discord_rpc_enabled: cfg.discord_rpc_enabled,
+                                            fullscreen: cfg.fullscreen,
+                                            volume_percent: cfg.volume_percent,
+                                            audio_buffer: cfg.audio_buffer,
+                                            video_filter: cfg.video_filter,
+                                            crt_corner_bend: cfg.crt_corner_bend,
+                                            aspect_mode: cfg.aspect_mode,
+                                            scorebar_style: cfg.scorebar_style,
+                                        });
+                                    } else {
+                                        let (tx, rx) = std::sync::mpsc::channel();
+                                        mm_rx = Some(rx);
+                                        matchmaking::start_discord_connect(tx);
+                                        state = AppState::Menu(MenuScreen::Matchmaking {
+                                            status: "Opening Discord login...".into(),
+                                        });
+                                    }
                                 }
                                 NavResult::ToggleDiscordRpc => {
                                     cfg.discord_rpc_enabled = !cfg.discord_rpc_enabled;
@@ -2425,6 +2467,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 if discord_id.is_none() {
                                     discord_id = matchmaking::discord_id_from_cached_token();
                                 }
+                            }
+                            Ok(matchmaking::Update::AuthConnected {
+                                username,
+                                player_id,
+                            }) => {
+                                mm_rx = None;
+                                discord_user = Some(username.clone());
+                                discord_id = Some(player_id);
+                                toast = Some((
+                                    format!("Discord connected as {username}"),
+                                    Instant::now() + Duration::from_millis(2600),
+                                ));
+                                state = AppState::Menu(MenuScreen::Settings {
+                                    cursor: 2,
+                                    player_username: cfg.player_username.clone(),
+                                    stats_email: cfg.stats_email.clone(),
+                                    discord_connected: true,
+                                    discord_rpc_enabled: cfg.discord_rpc_enabled,
+                                    fullscreen: cfg.fullscreen,
+                                    volume_percent: cfg.volume_percent,
+                                    audio_buffer: cfg.audio_buffer,
+                                    video_filter: cfg.video_filter,
+                                    crt_corner_bend: cfg.crt_corner_bend,
+                                    aspect_mode: cfg.aspect_mode,
+                                    scorebar_style: cfg.scorebar_style,
+                                });
+                                break;
                             }
                             Ok(matchmaking::Update::Connected {
                                 peer_endpoint,

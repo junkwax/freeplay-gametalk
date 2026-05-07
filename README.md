@@ -16,6 +16,8 @@ URLs, OAuth client IDs, tokens, or webhooks.
 
 - Modern SDL menu with Profile, Load Ghosts, Controls, Settings, and About.
 - Username-based online sign-in; Discord OAuth is not required to match.
+- Optional Discord account linking from Settings for players who want Discord
+  identity-backed stats/profile behavior.
 - Optional Stats Email setting for portable ratings/history across machines.
 - Discord Rich Presence with join/spectate support when configured.
 - Online matchmaking through a signaling service.
@@ -194,9 +196,12 @@ For public release builds:
 3. Run `freeplay.exe`.
 4. Open Settings if you want to change your public username or add an optional
    stats email.
-5. Select Find Match.
-6. During an online match, press `T` to chat and Enter to send.
-7. Press `F1` to leave the set.
+5. Optional: choose `Discord Account` in Settings to connect Discord. Your
+   browser opens; after authorization, close the browser tab and return to
+   Freeplay.
+6. Select Find Match.
+7. During an online match, press `T` to chat and Enter to send.
+8. Press `F1` to leave the set.
 
 Under the hood:
 
@@ -209,8 +214,9 @@ Under the hood:
    configured backend.
 
 Stats and ghost uploads are disabled when `FREEPLAY_STATS_URL` is missing.
-Without a Stats Email, ratings are tied to the local guest name identity. Add
-the same email on another machine to keep using the same stats identity there.
+Without a Stats Email or connected Discord account, ratings are tied to the
+local guest name identity. Add the same email on another machine, or connect
+the same Discord account, to keep using the same stats identity there.
 Discord presence is disabled when `FREEPLAY_DISCORD_CLIENT_ID` is missing.
 
 ## Discord Rich Presence

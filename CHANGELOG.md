@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.12 - 2026-05-07
+
+### Added
+
+- Added optional Discord account linking back into Settings. Choose
+  `Discord Account` to open the Discord OAuth flow, cache the token locally,
+  and use that identity for matchmaking/stats/profile features.
+
+### Changed
+
+- Matchmaking now prefers a connected Discord account when one is available,
+  otherwise it falls back to username-based guest sign-in. Discord remains
+  optional and is no longer required for Find Match.
+
 ## 0.5.11 - 2026-05-07
 
 ### Added

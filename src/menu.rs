@@ -86,6 +86,7 @@ pub enum MenuScreen {
         cursor: usize,
         player_username: String,
         stats_email: String,
+        discord_connected: bool,
         discord_rpc_enabled: bool,
         fullscreen: bool,
         volume_percent: u8,
@@ -215,9 +216,10 @@ pub const MAIN_ITEMS: [&str; 8] = [
     "Quit",
 ];
 
-const SETTINGS_ITEMS: [&str; 13] = [
+const SETTINGS_ITEMS: [&str; 14] = [
     "Username",
     "Stats Email",
+    "Discord Account",
     "Discord Rich Presence",
     "Fullscreen",
     "Volume",
@@ -260,6 +262,7 @@ pub enum NavResult {
     ClearAllBindings(Player),
     EditText(EditField, String),
     CommitText(EditField, String),
+    ConnectDiscord,
     /// Load a ghost file from the selected path.
     LoadGhost(String),
     /// Download a remote ghost by ghost_id, then load it.
@@ -420,6 +423,7 @@ impl AppState {
                         cursor: 0,
                         player_username: String::new(),
                         stats_email: String::new(),
+                        discord_connected: false,
                         discord_rpc_enabled: false,
                         fullscreen: false,
                         volume_percent: 100,
@@ -509,17 +513,18 @@ impl AppState {
             AppState::Menu(MenuScreen::Settings { cursor, .. }) => match cursor {
                 0 => NavResult::EditText(EditField::Username, "Username".into()),
                 1 => NavResult::EditText(EditField::StatsEmail, "Stats Email".into()),
-                2 => NavResult::ToggleDiscordRpc,
-                3 => NavResult::ToggleFullscreen,
-                4 => NavResult::AdjustVolume(10),
-                5 => NavResult::CycleAudioBuffer(1),
-                6 => NavResult::CycleVideoFilter(1),
-                7 => NavResult::ToggleCrtGlass,
-                8 => NavResult::CycleAspectMode(1),
-                9 => NavResult::CycleScorebarStyle(1),
-                10 => NavResult::LaunchDoctor,
-                11 => NavResult::OpenClipsFolder,
-                12 => NavResult::OpenLogsFolder,
+                2 => NavResult::ConnectDiscord,
+                3 => NavResult::ToggleDiscordRpc,
+                4 => NavResult::ToggleFullscreen,
+                5 => NavResult::AdjustVolume(10),
+                6 => NavResult::CycleAudioBuffer(1),
+                7 => NavResult::CycleVideoFilter(1),
+                8 => NavResult::ToggleCrtGlass,
+                9 => NavResult::CycleAspectMode(1),
+                10 => NavResult::CycleScorebarStyle(1),
+                11 => NavResult::LaunchDoctor,
+                12 => NavResult::OpenClipsFolder,
+                13 => NavResult::OpenLogsFolder,
                 _ => NavResult::Stay,
             },
             AppState::Menu(MenuScreen::TextEdit { field, value, .. }) => {
@@ -681,6 +686,7 @@ pub fn draw(
             cursor,
             player_username,
             stats_email,
+            discord_connected,
             discord_rpc_enabled,
             fullscreen,
             volume_percent,
@@ -695,6 +701,7 @@ pub fn draw(
             *cursor,
             player_username,
             stats_email,
+            *discord_connected,
             *discord_rpc_enabled,
             *fullscreen,
             *volume_percent,
@@ -2047,6 +2054,7 @@ fn draw_settings(
     cursor: usize,
     player_username: &str,
     stats_email: &str,
+    discord_connected: bool,
     discord_rpc_enabled: bool,
     fullscreen: bool,
     volume_percent: u8,
@@ -2097,22 +2105,30 @@ fn draw_settings(
                 }
                 .to_string(),
             ),
-            2 => Some(if discord_rpc_enabled { "ON" } else { "OFF" }.to_string()),
-            3 => Some(if fullscreen { "ON" } else { "OFF" }.to_string()),
-            4 => Some(format!("{volume_percent}%")),
-            5 => Some(audio_buffer.label().to_string()),
-            6 => Some(video_filter.label().to_string()),
-            7 => Some(if crt_corner_bend { "ON" } else { "OFF" }.to_string()),
-            8 => Some(aspect_mode.label().to_string()),
-            9 => Some(scorebar_style.label().to_string()),
+            2 => Some(
+                if discord_connected {
+                    "CONNECTED"
+                } else {
+                    "CONNECT"
+                }
+                .to_string(),
+            ),
+            3 => Some(if discord_rpc_enabled { "ON" } else { "OFF" }.to_string()),
+            4 => Some(if fullscreen { "ON" } else { "OFF" }.to_string()),
+            5 => Some(format!("{volume_percent}%")),
+            6 => Some(audio_buffer.label().to_string()),
+            7 => Some(video_filter.label().to_string()),
+            8 => Some(if crt_corner_bend { "ON" } else { "OFF" }.to_string()),
+            9 => Some(aspect_mode.label().to_string()),
+            10 => Some(scorebar_style.label().to_string()),
             _ => None,
         };
         if let Some(value) = value {
             let value = fit_line(font, &value, scale, (w / 2).max(120));
             let vw = font.text_width_exact(&value, scale);
             let enabled_colour = match i {
-                0 | 1 | 4 | 5 | 6 | 8 | 9 => Color::RGB(180, 205, 255),
-                _ if value == "ON" => Color::RGB(120, 230, 150),
+                0 | 1 | 5 | 6 | 7 | 9 | 10 => Color::RGB(180, 205, 255),
+                _ if value == "ON" || value == "CONNECTED" => Color::RGB(120, 230, 150),
                 _ => Color::RGB(210, 140, 140),
             };
             font.draw(canvas, &value, w - x - vw, row_y, scale, enabled_colour)?;
@@ -2123,6 +2139,7 @@ fn draw_settings(
     let notes = [
         "Doctor checks local setup in a separate window.",
         "Username is required. Email is optional for portable stats.",
+        "Discord Account is optional; connected accounts are used for online identity.",
         "Use LEFT/RIGHT on Volume and video options.",
         "Stable audio reduces crackle with a little more latency.",
         "Video Filter applies during gameplay.",
