@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.8 - 2026-05-07
+
+### Fixed
+
+- Ranked results now include a per-session `match_index`, so multiple
+  completed games in one netplay set can each count on the leaderboard
+  instead of only the first completed game being recorded.
+- Ghost uploads now mark successfully uploaded local recordings and skip
+  them during later backfill/retry scans. This prevents an already-uploaded
+  ghost from being retried and requeued after a later auth failure.
+
 ## 0.5.7 - 2026-05-07
 
 ### Added

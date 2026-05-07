@@ -452,6 +452,7 @@ macro_rules! ulog {
 }
 
 const UPLOAD_QUEUE_PATH: &str = "ghosts/upload_queue";
+const UPLOADED_MARKER_PATH: &str = "ghosts/uploaded";
 
 /// Upload a saved NetRecording .ncgh to freeplay-stats. The file is gzip-
 /// compressed and sent as a binary POST with metadata in HTTP headers.
@@ -553,6 +554,7 @@ fn try_upload_one(
                 compressed.len(),
                 resp.trim()
             );
+            mark_uploaded(ghost_path);
             true
         }
         Err(e) => {
@@ -588,6 +590,9 @@ pub fn drain_upload_queue(stats_url: &str) {
             continue;
         }
         let p = std::path::Path::new(path_str);
+        if is_uploaded(p) {
+            continue;
+        }
         let filename = p
             .file_name()
             .and_then(|n| n.to_str())
@@ -614,6 +619,9 @@ pub fn drain_upload_queue(stats_url: &str) {
 }
 
 fn enqueue_upload(path: &std::path::Path) {
+    if is_uploaded(path) {
+        return;
+    }
     let _ = std::fs::create_dir_all("ghosts");
     let entry = path.display().to_string();
     let mut existing = std::fs::read_to_string(UPLOAD_QUEUE_PATH).unwrap_or_default();
@@ -626,6 +634,39 @@ fn enqueue_upload(path: &std::path::Path) {
         let _ = std::fs::write(UPLOAD_QUEUE_PATH, existing);
         ulog!("[ghost] Queued for retry: {}", entry);
     }
+}
+
+fn upload_key(path: &std::path::Path) -> String {
+    let meta = std::fs::metadata(path).ok();
+    let len = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+    let modified = meta
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    format!("{}|{}|{}", path.display(), len, modified)
+}
+
+fn is_uploaded(path: &std::path::Path) -> bool {
+    let key = upload_key(path);
+    std::fs::read_to_string(UPLOADED_MARKER_PATH)
+        .map(|s| s.lines().any(|line| line.trim() == key))
+        .unwrap_or(false)
+}
+
+fn mark_uploaded(path: &std::path::Path) {
+    let _ = std::fs::create_dir_all("ghosts");
+    let key = upload_key(path);
+    let mut existing = std::fs::read_to_string(UPLOADED_MARKER_PATH).unwrap_or_default();
+    if existing.lines().any(|line| line.trim() == key) {
+        return;
+    }
+    if !existing.is_empty() && !existing.ends_with('\n') {
+        existing.push('\n');
+    }
+    existing.push_str(&key);
+    existing.push('\n');
+    let _ = std::fs::write(UPLOADED_MARKER_PATH, existing);
 }
 
 /// Read just the frame_count from an .ncgh header (skipping the savestate).
@@ -666,6 +707,9 @@ pub fn queue_all_local_ghosts(
     for entry in dir.filter_map(|e| e.ok()) {
         let path = entry.path();
         if path.extension().map(|x| x == "ncgh").unwrap_or(false) {
+            if is_uploaded(&path) {
+                continue;
+            }
             let frame_count = read_ncgh_frame_count(&path).unwrap_or(0);
             let filename = path
                 .file_name()

@@ -24,6 +24,7 @@ mod netcore;
 mod netplay;
 mod png;
 mod protocol;
+mod relay_socket;
 mod render;
 mod replay;
 mod retro;
@@ -31,7 +32,6 @@ mod rom;
 mod rpc;
 mod score;
 mod session;
-mod relay_socket;
 mod version;
 
 use crate::cli::{parse_args, NetMode};
@@ -162,10 +162,7 @@ fn install_panic_incident_hook() {
             .location()
             .map(|l| format!(" at {}:{}", l.file(), l.line()))
             .unwrap_or_default();
-        let mut inc = incident::Incident::new(
-            incident::KIND_PANIC,
-            format!("{summary}{location}"),
-        );
+        let mut inc = incident::Incident::new(incident::KIND_PANIC, format!("{summary}{location}"));
         inc.net_log_path = Some(std::path::PathBuf::from("freeplay-net.log"));
         let (_rom_size, rom_hash) = rom_fingerprint();
         inc.rom_hash = Some(format!("{rom_hash:016x}"));
@@ -322,6 +319,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     const NETPLAY_MATCH_LIMIT: u32 = 3;
     let mut net_match_count: u32 = 0;
+    let mut ranked_match_index: u32 = 0;
     let mut net_in_fight: bool = false;
     let mut net_teardown_reason: Option<String> = None;
     let mut net_frames_since_progress: u32 = 0;
@@ -1703,7 +1701,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         // ── Live score tracking ──────────────────────────────────────
                         let now_score = score::Score::read(c);
                         for ev in score_tracker.step(now_score) {
+                            let mut result_match_index = None;
                             if let score::ScoreEvent::MatchOver { winner, .. } = ev {
+                                ranked_match_index = ranked_match_index.saturating_add(1);
+                                result_match_index = Some(ranked_match_index);
                                 if winner == 1 {
                                     session_p1_wins += 1;
                                 } else {
@@ -1717,6 +1718,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 &cfg.discord_webhook_url,
                                 &mut net_log,
                                 mm_session_id.as_deref(),
+                                result_match_index,
                             );
                         }
 
@@ -1961,7 +1963,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if !intentional_quit && !completed_set {
                             let kind = if reason.contains("disconnected") {
                                 incident::KIND_GGRS_DISCONNECTED
-                            } else if reason.contains("timed out") || reason.contains("no progress") {
+                            } else if reason.contains("timed out") || reason.contains("no progress")
+                            {
                                 if net_frame_counter < 60 {
                                     incident::KIND_GGRS_NEVER_SYNCED
                                 } else {
@@ -2050,6 +2053,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         net_in_fight = false;
                         net_frames_since_progress = 0;
                         net_stats_next_frame = 0;
+                        ranked_match_index = 0;
                         net_spectate_next = 165;
                         net_frame_counter = 0;
                         net_runtime = NetRuntime::default();
@@ -2101,10 +2105,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let in_fight_screen = core
                     .as_ref()
                     .map(|c| {
-                        let gstate = memory::peek_u16(c, GSTATE_ADDR, memory::Endian::Little)
-                            .unwrap_or(0);
-                        let round_num = memory::peek_u16(c, 0x256D6, memory::Endian::Little)
-                            .unwrap_or(0);
+                        let gstate =
+                            memory::peek_u16(c, GSTATE_ADDR, memory::Endian::Little).unwrap_or(0);
+                        let round_num =
+                            memory::peek_u16(c, 0x256D6, memory::Endian::Little).unwrap_or(0);
                         gstate != GS_AMODE && round_num > 0
                     })
                     .unwrap_or(false);
@@ -2405,7 +2409,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 // to publish a Connected event. Server-side
                                 // queue state has it.
                                 inc.role = Some(if local_handle == 0 { "host" } else { "join" });
-                                inc.net_log_path = Some(std::path::PathBuf::from("freeplay-net.log"));
+                                inc.net_log_path =
+                                    Some(std::path::PathBuf::from("freeplay-net.log"));
                                 let (_size, hash) = rom_fingerprint();
                                 inc.rom_hash = Some(format!("{:016x}", hash));
                                 incident::submit(inc);

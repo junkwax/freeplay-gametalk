@@ -162,7 +162,10 @@ fn run(tx: &Sender<Update>) -> Result<(), String> {
         let session_id_for_update = session_id.clone();
         if let Some(turn) = match_info.turn.clone() {
             send(tx, Update::Status("Connecting via relay...".into()))?;
-            println!("[mm] using relay at {} (skipping direct P2P probe)", turn.uri);
+            println!(
+                "[mm] using relay at {} (skipping direct P2P probe)",
+                turn.uri
+            );
             return send(
                 tx,
                 Update::Connected {
@@ -246,7 +249,10 @@ fn run_join_room(tx: &Sender<Update>, room_id: &str) -> Result<(), String> {
 
     if let Some(turn) = match_info.turn.clone() {
         send(tx, Update::Status("Connecting via relay...".into()))?;
-        println!("[mm] using relay at {} (skipping direct P2P probe)", turn.uri);
+        println!(
+            "[mm] using relay at {} (skipping direct P2P probe)",
+            turn.uri
+        );
         return send(
             tx,
             Update::Connected {
@@ -837,10 +843,7 @@ fn poll_status(token: &str, session_id: &str, tx: &Sender<Update>) -> Result<Mat
                 println!(
                     "[mm] poll_status transient error ({transient_failures}/{MAX_TRANSIENT_FAILURES}): {e}"
                 );
-                send(
-                    tx,
-                    Update::Status("Reconnecting to matchmaking...".into()),
-                )?;
+                send(tx, Update::Status("Reconnecting to matchmaking...".into()))?;
                 // Linear backoff (1.5s, 3s, 4.5s, 6s, 7.5s) keeps total worst
                 // case well inside the 120s window.
                 std::thread::sleep(Duration::from_millis(1500 * transient_failures as u64));
@@ -1493,11 +1496,13 @@ pub(crate) fn http_get_bytes(url: &str) -> Result<Vec<u8>, String> {
 pub fn post_match_result(
     token: &str,
     session_id: &str,
+    match_index: u32,
     p1_score: u16,
     p2_score: u16,
 ) -> Result<(), String> {
-    let body =
-        format!(r#"{{"session_id":"{session_id}","p1_score":{p1_score},"p2_score":{p2_score}}}"#);
+    let body = format!(
+        r#"{{"session_id":"{session_id}","match_index":{match_index},"p1_score":{p1_score},"p2_score":{p2_score}}}"#
+    );
     let url = format!("{}/match/result", signaling_url()?);
     http_post_json(&url, token, &body)?;
     Ok(())

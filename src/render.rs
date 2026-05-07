@@ -500,9 +500,9 @@ pub fn draw_fight_overlay(
     style: crate::config::ScorebarStyle,
 ) -> Result<(), String> {
     match style {
-        crate::config::ScorebarStyle::Plates => draw_fight_overlay_plates(
-            canvas, font, window_w, p1_name, p2_name, p1_wins, p2_wins,
-        ),
+        crate::config::ScorebarStyle::Plates => {
+            draw_fight_overlay_plates(canvas, font, window_w, p1_name, p2_name, p1_wins, p2_wins)
+        }
         crate::config::ScorebarStyle::Centered => {
             draw_fight_overlay_centered(canvas, font, window_w, window_h, p1_name, p2_name)
         }

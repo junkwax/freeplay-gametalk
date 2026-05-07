@@ -72,7 +72,10 @@ pub fn submit(incident: Incident) {
     let token = match matchmaking::current_token() {
         Some(t) => t,
         None => {
-            println!("[incident] not signed in, skipping upload of {:?}", incident.kind);
+            println!(
+                "[incident] not signed in, skipping upload of {:?}",
+                incident.kind
+            );
             return;
         }
     };
@@ -136,7 +139,9 @@ fn build_body(i: &Incident) -> String {
     }
     s.push_str(&format!(",\"frames_advanced\":{}", i.frames_advanced));
 
-    let net_log_tail = i.net_log_path.as_deref()
+    let net_log_tail = i
+        .net_log_path
+        .as_deref()
         .and_then(read_log_tail)
         .unwrap_or_default();
     s.push_str(",\"net_log_tail\":\"");
@@ -231,7 +236,9 @@ fn http_post_json_with_auth(url: &str, body: &str, token: &str) -> Result<(), St
         .map_err(|e| format!("write body: {e}"))?;
     let mut reader = BufReader::new(tls);
     let mut status = String::new();
-    reader.read_line(&mut status).map_err(|e| format!("read: {e}"))?;
+    reader
+        .read_line(&mut status)
+        .map_err(|e| format!("read: {e}"))?;
     if !status.contains(" 200") {
         return Err(format!("HTTP {}", status.trim()));
     }

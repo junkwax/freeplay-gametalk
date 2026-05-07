@@ -195,6 +195,7 @@ pub fn handle_score_event(
     webhook_url: &str,
     net_log: &mut Option<std::fs::File>,
     session_id: Option<&str>,
+    match_index: Option<u32>,
 ) {
     use std::io::Write;
     let local_tag = match (discord_user, local_handle) {
@@ -230,8 +231,12 @@ pub fn handle_score_event(
             let who = if winner == 1 { "P1" } else { "P2" };
             let mine = if me_won(winner) { " (you)" } else { " (peer)" };
 
-            if let (Some(sid), Some(token)) = (session_id, matchmaking::current_token()) {
-                if let Err(e) = matchmaking::post_match_result(&token, sid, p1_wins, p2_wins) {
+            if let (Some(sid), Some(token), Some(match_index)) =
+                (session_id, matchmaking::current_token(), match_index)
+            {
+                if let Err(e) =
+                    matchmaking::post_match_result(&token, sid, match_index, p1_wins, p2_wins)
+                {
                     println!("[score] failed to post match result to server: {e}");
                     // Score-mismatch: server rejected because our scores
                     // disagree with the partner's report. That's the
@@ -247,12 +252,11 @@ pub fn handle_score_event(
                         inc.session_id = Some(sid.to_string());
                         inc.p1_score = Some(p1_wins);
                         inc.p2_score = Some(p2_wins);
-                        inc.net_log_path =
-                            Some(std::path::PathBuf::from("freeplay-net.log"));
+                        inc.net_log_path = Some(std::path::PathBuf::from("freeplay-net.log"));
                         crate::incident::submit(inc);
                     }
                 } else {
-                    println!("[score] posted match result to server");
+                    println!("[score] posted match result #{match_index} to server");
                 }
             }
 

@@ -20,10 +20,10 @@ use std::time::{Duration, Instant};
 
 use ggrs::{Message, NonBlockingSocket};
 
-const TAG_REGISTER:   u8 = 0x01;
+const TAG_REGISTER: u8 = 0x01;
 const TAG_REGISTERED: u8 = 0x02;
-const TAG_ERROR:      u8 = 0x03;
-const TAG_DATA:       u8 = 0x04;
+const TAG_ERROR: u8 = 0x03;
+const TAG_DATA: u8 = 0x04;
 const TAG_PEER_READY: u8 = 0x05;
 
 #[derive(Debug)]
@@ -80,7 +80,8 @@ impl RelaySocket {
         local_port: u16,
     ) -> Result<Self, RelayError> {
         // Parse "relay://host:port"
-        let after_scheme = uri.strip_prefix("relay://")
+        let after_scheme = uri
+            .strip_prefix("relay://")
             .ok_or_else(|| RelayError::BadUri(format!("missing relay:// prefix: {uri}")))?;
         let relay_addr: SocketAddr = after_scheme
             .parse()
@@ -90,7 +91,8 @@ impl RelaySocket {
         let parts: Vec<&str> = username.splitn(3, ':').collect();
         if parts.len() != 3 {
             return Err(RelayError::BadCredentialFormat(format!(
-                "expected 3-part username, got {}: {username}", parts.len()
+                "expected 3-part username, got {}: {username}",
+                parts.len()
             )));
         }
         let role: u8 = parts[0]
@@ -102,7 +104,8 @@ impl RelaySocket {
         let room_id = parts[2];
         if room_id.len() != 36 {
             return Err(RelayError::BadCredentialFormat(format!(
-                "room_id must be 36 bytes, got {}: {room_id}", room_id.len()
+                "room_id must be 36 bytes, got {}: {room_id}",
+                room_id.len()
             )));
         }
 
@@ -110,7 +113,8 @@ impl RelaySocket {
             .ok_or_else(|| RelayError::BadCredentialFormat("hmac not hex".into()))?;
         if hmac_bytes.len() != 32 {
             return Err(RelayError::BadCredentialFormat(format!(
-                "hmac must be 32 bytes, got {}", hmac_bytes.len()
+                "hmac must be 32 bytes, got {}",
+                hmac_bytes.len()
             )));
         }
 
@@ -144,25 +148,25 @@ impl RelaySocket {
                 next_send = Instant::now() + Duration::from_millis(500);
             }
             match sock.recv_from(&mut buf) {
-                Ok((n, _from)) if n >= 1 => {
-                    match buf[0] {
-                        TAG_REGISTERED => registered = true,
-                        TAG_PEER_READY => peer_ready = true,
-                        TAG_ERROR if n >= 3 => {
-                            let code = buf[1];
-                            let msg_len = buf[2] as usize;
-                            let msg = if n >= 3 + msg_len {
-                                String::from_utf8_lossy(&buf[3..3 + msg_len]).to_string()
-                            } else {
-                                String::new()
-                            };
-                            return Err(RelayError::ServerError { code, msg });
-                        }
-                        _ => {}
+                Ok((n, _from)) if n >= 1 => match buf[0] {
+                    TAG_REGISTERED => registered = true,
+                    TAG_PEER_READY => peer_ready = true,
+                    TAG_ERROR if n >= 3 => {
+                        let code = buf[1];
+                        let msg_len = buf[2] as usize;
+                        let msg = if n >= 3 + msg_len {
+                            String::from_utf8_lossy(&buf[3..3 + msg_len]).to_string()
+                        } else {
+                            String::new()
+                        };
+                        return Err(RelayError::ServerError { code, msg });
                     }
-                }
+                    _ => {}
+                },
                 Ok(_) => {}
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut => {}
+                Err(e)
+                    if e.kind() == io::ErrorKind::WouldBlock
+                        || e.kind() == io::ErrorKind::TimedOut => {}
                 Err(e) => return Err(RelayError::Recv(e)),
             }
             if registered && peer_ready {
@@ -233,32 +237,30 @@ impl NonBlockingSocket<SocketAddr> for RelaySocket {
         let mut buf = [0u8; 2048];
         loop {
             match self.sock.recv_from(&mut buf) {
-                Ok((n, _from)) if n >= 1 => {
-                    match buf[0] {
-                        TAG_DATA => {
-                            let payload = &buf[1..n];
-                            if let Ok(m) = bincode::deserialize::<Message>(payload) {
-                                out.push((self.peer_label, m));
-                            }
+                Ok((n, _from)) if n >= 1 => match buf[0] {
+                    TAG_DATA => {
+                        let payload = &buf[1..n];
+                        if let Ok(m) = bincode::deserialize::<Message>(payload) {
+                            out.push((self.peer_label, m));
                         }
-                        TAG_PEER_READY => {
-                            if let Ok(mut g) = self.peer_ready.lock() {
-                                *g = true;
-                            }
-                        }
-                        TAG_ERROR if n >= 3 => {
-                            let code = buf[1];
-                            let msg_len = buf[2] as usize;
-                            let msg = if n >= 3 + msg_len {
-                                String::from_utf8_lossy(&buf[3..3 + msg_len]).to_string()
-                            } else {
-                                String::new()
-                            };
-                            println!("[relay] error {code}: {msg}");
-                        }
-                        _ => {}
                     }
-                }
+                    TAG_PEER_READY => {
+                        if let Ok(mut g) = self.peer_ready.lock() {
+                            *g = true;
+                        }
+                    }
+                    TAG_ERROR if n >= 3 => {
+                        let code = buf[1];
+                        let msg_len = buf[2] as usize;
+                        let msg = if n >= 3 + msg_len {
+                            String::from_utf8_lossy(&buf[3..3 + msg_len]).to_string()
+                        } else {
+                            String::new()
+                        };
+                        println!("[relay] error {code}: {msg}");
+                    }
+                    _ => {}
+                },
                 Ok(_) => {}
                 Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => break,
                 Err(_) => break,
