@@ -147,6 +147,32 @@ fn finish_clip_recording(recorder: clip::ClipRecorder) -> String {
     }
 }
 
+fn install_panic_incident_hook() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        default_hook(info);
+        let summary = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "panic".to_string()
+        };
+        let location = info
+            .location()
+            .map(|l| format!(" at {}:{}", l.file(), l.line()))
+            .unwrap_or_default();
+        let mut inc = incident::Incident::new(
+            incident::KIND_PANIC,
+            format!("{summary}{location}"),
+        );
+        inc.net_log_path = Some(std::path::PathBuf::from("freeplay-net.log"));
+        let (_rom_size, rom_hash) = rom_fingerprint();
+        inc.rom_hash = Some(format!("{rom_hash:016x}"));
+        incident::submit_now(&inc);
+    }));
+}
+
 #[allow(static_mut_refs)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     if cli::doctor_requested() {
@@ -223,6 +249,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     config::set_signaling_url(cfg.signaling_url.clone());
     crate::rpc::set_discord_client_id(cfg.discord_client_id.clone());
+    install_panic_incident_hook();
     let mut state = AppState::default();
     let rom_present = || rom::find_rom_zip().is_some();
 

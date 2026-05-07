@@ -28,6 +28,7 @@ pub const KIND_GGRS_DISCONNECTED: &str = "ggrs_disconnected";
 pub const KIND_GGRS_NEVER_SYNCED: &str = "ggrs_never_synced";
 pub const KIND_MATCH_ENDED_EARLY: &str = "match_ended_early";
 pub const KIND_SCORE_REJECTED: &str = "score_rejected";
+pub const KIND_PANIC: &str = "panic";
 
 /// All the state we capture for one incident. Most fields are optional
 /// because the early-failure cases don't have all the context yet
@@ -82,6 +83,21 @@ pub fn submit(incident: Incident) {
             println!("[incident] uploaded kind={}", incident.kind);
         }
     });
+}
+
+/// Synchronous upload for process panic hooks. Panics usually terminate the
+/// process immediately after the hook returns, so the normal background
+/// thread path may not get CPU time to finish.
+pub fn submit_now(incident: &Incident) {
+    let Some(token) = matchmaking::current_token() else {
+        println!("[incident] not signed in, skipping panic upload");
+        return;
+    };
+    if let Err(e) = submit_blocking(incident, &token) {
+        println!("[incident] panic upload failed: {e}");
+    } else {
+        println!("[incident] uploaded panic");
+    }
 }
 
 fn submit_blocking(incident: &Incident, token: &str) -> Result<(), String> {

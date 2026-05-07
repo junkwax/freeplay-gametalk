@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.7 - 2026-05-07
+
+### Added
+
+- Installed a process panic hook that uploads a `panic` incident when a
+  logged-in client crashes from a Rust panic. The signaling server then
+  stores the private log bundle in GCS and opens/comments on the
+  matching GitHub issue.
+
 ## 0.5.6 - 2026-05-07
 
 ### Fixed
