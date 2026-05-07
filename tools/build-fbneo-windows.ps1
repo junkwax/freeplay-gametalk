@@ -1,38 +1,40 @@
-# Build the FBNeo libretro core for Windows into .\cores\fbneo_libretro.dll.
-# Requires git plus MSYS2/MinGW make tooling on PATH (`make` or `mingw32-make`).
+# Ensure the FBNeo libretro core for Windows exists at .\cores\fbneo_libretro.dll.
+# CI downloads the official libretro buildbot artifact because upstream FBNeo
+# source layout/build requirements can drift. Local devs can still keep their
+# own core in .\cores or next to the exe.
 
 $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
-$VendorDir = Join-Path $Root "vendor"
-$FbneoDir = Join-Path $VendorDir "FBNeo"
 $CoresDir = Join-Path $Root "cores"
 $OutCore = Join-Path $CoresDir "fbneo_libretro.dll"
+$ZipPath = Join-Path $env:TEMP "fbneo_libretro.dll.zip"
+$ExtractDir = Join-Path $env:TEMP "fbneo-libretro-core"
+$BuildbotUrl = "https://buildbot.libretro.com/nightly/windows/x86_64/latest/fbneo_libretro.dll.zip"
 
-New-Item -ItemType Directory -Force -Path $VendorDir | Out-Null
 New-Item -ItemType Directory -Force -Path $CoresDir | Out-Null
 
-if (-not (Test-Path $FbneoDir)) {
-    git clone https://github.com/finalburnneo/FBNeo.git $FbneoDir
-} else {
-    git -C $FbneoDir pull --ff-only
+if (Test-Path $OutCore) {
+    Write-Host "FBNeo core already present: $OutCore"
+    exit 0
 }
 
-$make = (Get-Command mingw32-make -ErrorAction SilentlyContinue)
-if (-not $make) {
-    $make = Get-Command make -ErrorAction Stop
-}
+Write-Host "Downloading FBNeo libretro core from $BuildbotUrl"
+Remove-Item $ZipPath -ErrorAction SilentlyContinue
+Remove-Item $ExtractDir -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force -Path $ExtractDir | Out-Null
 
-& $make.Source -C (Join-Path $FbneoDir "src\burner\libretro") "-j$([Environment]::ProcessorCount)"
+Invoke-WebRequest -Uri $BuildbotUrl -OutFile $ZipPath
+Expand-Archive -Path $ZipPath -DestinationPath $ExtractDir -Force
 
-$built = Get-ChildItem -Path (Join-Path $FbneoDir "src\burner\libretro") -Recurse -File |
-    Where-Object { $_.Name -match 'fbneo.*libretro.*\.(dll|DLL)$' -or $_.Name -eq "fbneo_libretro.dll" } |
+$built = Get-ChildItem -Path $ExtractDir -Recurse -File |
+    Where-Object { $_.Name -eq "fbneo_libretro.dll" } |
     Sort-Object LastWriteTime -Descending |
     Select-Object -First 1
 
 if (-not $built) {
-    throw "FBNeo build finished, but fbneo_libretro.dll was not found."
+    throw "Downloaded FBNeo archive did not contain fbneo_libretro.dll."
 }
 
 Copy-Item $built.FullName $OutCore -Force
-Write-Host "Built $OutCore"
+Write-Host "Installed $OutCore"

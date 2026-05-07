@@ -1,6 +1,6 @@
 [package]
 name = "freeplay-gametalk"
-version = "0.5.5"
+version = "0.5.6"
 edition = "2021"
 
 [[bin]]

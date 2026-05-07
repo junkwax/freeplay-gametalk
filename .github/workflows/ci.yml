@@ -29,15 +29,6 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - uses: msys2/setup-msys2@v2
-        with:
-          msystem: MINGW64
-          update: true
-          install: >-
-            git
-            make
-            mingw-w64-x86_64-gcc
-
       - name: Install SDL2 runtime/link dependencies
         shell: pwsh
         run: |

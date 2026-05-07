@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.6 - 2026-05-07
+
+### Fixed
+
+- Windows CI now downloads the official libretro buildbot
+  `fbneo_libretro.dll` artifact instead of building from upstream source.
+  The v0.5.5 Windows release job failed because the cloned source tree no
+  longer had the expected `src/burner/libretro` build path.
+
 ## 0.5.5 - 2026-05-07
 
 ### Fixed
