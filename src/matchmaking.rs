@@ -52,6 +52,13 @@ pub enum LiveMatchesUpdate {
     Error(String),
 }
 
+#[derive(Debug)]
+pub enum UsernameCheckUpdate {
+    Available(String),
+    Taken(String),
+    Error(String),
+}
+
 #[derive(Debug, Clone)]
 pub struct TurnConnectInfo {
     pub uri: String,
@@ -109,11 +116,36 @@ pub fn start_discord_connect(tx: Sender<Update>) {
     });
 }
 
+#[allow(dead_code)]
 pub fn start(tx: Sender<Update>) {
     std::thread::spawn(move || {
         if let Err(e) = run(&tx) {
             let _ = tx.send(Update::Error(e));
         }
+    });
+}
+
+pub fn start_guest(tx: Sender<Update>) {
+    std::thread::spawn(move || {
+        if let Err(e) = run_guest(&tx) {
+            let _ = tx.send(Update::Error(e));
+        }
+    });
+}
+
+pub fn check_username_available(
+    stats_url: String,
+    username: String,
+    tx: Sender<UsernameCheckUpdate>,
+) {
+    std::thread::spawn(move || {
+        let result = check_username_available_inner(&stats_url, &username);
+        let update = match result {
+            Ok(true) => UsernameCheckUpdate::Available(username),
+            Ok(false) => UsernameCheckUpdate::Taken(username),
+            Err(e) => UsernameCheckUpdate::Error(e),
+        };
+        let _ = tx.send(update);
     });
 }
 
@@ -127,6 +159,7 @@ pub fn start_join_room(tx: Sender<Update>, room_id: String) {
     });
 }
 
+#[allow(dead_code)]
 fn run(tx: &Sender<Update>) -> Result<(), String> {
     let mut maybe_session_id: Option<String> = None;
 
@@ -147,6 +180,106 @@ fn run(tx: &Sender<Update>) -> Result<(), String> {
         if let Err(e) = cancel_match(&token, "self-cleanup") {
             // 404 on self-cleanup is the common case: no prior session.
             // Anything else is logged but not fatal.
+            if !e.contains("404") {
+                println!("[mm] pre-LFG cancel: {e}");
+            }
+        }
+
+        send(tx, Update::Status("Discovering network...".into()))?;
+        let stun_endpoint = stun_discover(GAME_PORT).map_err(|e| format!("STUN failed: {e}"))?;
+        println!("[mm] public endpoint: {stun_endpoint}");
+
+        send(tx, Update::Status("Entering queue...".into()))?;
+        let (session_id, already_matched) = match lfg(&token, &stun_endpoint) {
+            Ok(v) => v,
+            Err(e) => {
+                if e.contains("401") || e.contains("Unauthorized") || e.contains("Invalid token") {
+                    clear_cached_token();
+                    return Err(format!("Login expired, please try again: {e}"));
+                }
+                return Err(e);
+            }
+        };
+        maybe_session_id = Some(session_id.clone());
+
+        let match_info = if already_matched {
+            poll_status(&token, &session_id, tx)?
+        } else {
+            send(tx, Update::Status("Waiting for opponent...".into()))?;
+            poll_status(&token, &session_id, tx)?
+        };
+
+        if match_info.turn.is_some() {
+            println!("[mm] TURN fallback available");
+        }
+
+        let session_id_for_update = session_id.clone();
+        if let Some(turn) = match_info.turn.clone() {
+            send(tx, Update::Status("Connecting via relay...".into()))?;
+            println!(
+                "[mm] using relay at {} (skipping direct P2P probe)",
+                turn.uri
+            );
+            return send(
+                tx,
+                Update::Connected {
+                    peer_endpoint: match_info.peer_endpoint.clone(),
+                    is_host: match_info.role == "host",
+                    turn: Some(turn),
+                    session_id: session_id_for_update,
+                    room_id: match_info.room_id.clone(),
+                    peer_username: match_info.peer_username.clone(),
+                },
+            );
+        }
+
+        send(tx, Update::Status("Connecting to opponent...".into()))?;
+        match hole_punch(&match_info.peer_endpoint, match_info.punch_at_ms) {
+            Ok(peer_addr) => {
+                println!("[mm] direct P2P established: {peer_addr}");
+                send(
+                    tx,
+                    Update::Connected {
+                        peer_endpoint: peer_addr.to_string(),
+                        is_host: match_info.role == "host",
+                        turn: None,
+                        session_id: session_id_for_update,
+                        room_id: match_info.room_id.clone(),
+                        peer_username: match_info.peer_username.clone(),
+                    },
+                )
+            }
+            Err(punch_err) => Err(format!(
+                "Direct P2P failed and no TURN relay configured: {punch_err}"
+            )),
+        }
+    })();
+
+    if outcome.is_err() {
+        if let Some(sid) = &maybe_session_id {
+            if let Some(tok) = current_token() {
+                println!("[mm] cancelling match on server");
+                if let Err(e) = cancel_match(&tok, sid) {
+                    println!("[mm] cancel failed (queue slot may linger): {e}");
+                }
+            }
+        }
+    }
+    outcome
+}
+
+fn run_guest(tx: &Sender<Update>) -> Result<(), String> {
+    send(tx, Update::Status("Signing in as guest...".into()))?;
+    let token = guest_login()?;
+    set_current_token(&token);
+    run_with_token(tx, token)
+}
+
+fn run_with_token(tx: &Sender<Update>, token: String) -> Result<(), String> {
+    let mut maybe_session_id: Option<String> = None;
+
+    let outcome = (|| -> Result<(), String> {
+        if let Err(e) = cancel_match(&token, "self-cleanup") {
             if !e.contains("404") {
                 println!("[mm] pre-LFG cancel: {e}");
             }
@@ -432,6 +565,33 @@ fn guest_login() -> Result<String, String> {
     json_str(&resp, "token").ok_or_else(|| format!("guest auth missing token: {resp}"))
 }
 
+fn check_username_available_inner(stats_url: &str, username: &str) -> Result<bool, String> {
+    let username = crate::config::sanitize_username(username)
+        .ok_or_else(|| "Username must be 2-24 letters/numbers".to_string())?;
+    let stats_url = stats_url.trim_end_matches('/');
+    if stats_url.is_empty() {
+        return Err("Stats service is not configured; cannot verify username".into());
+    }
+    let guest_id = format!("guest-name:{}", sha256_hex(username.as_bytes()));
+    let url = format!("{stats_url}/player/{guest_id}");
+    let (status, body) = http_get_no_auth_status(&url)?;
+    match status {
+        200 => Ok(false),
+        404 => Ok(true),
+        0 => Err("Stats service returned an invalid response".into()),
+        500..=599 => Err(format!(
+            "Stats service unavailable while checking username: {status}"
+        )),
+        _ => {
+            if body.trim().is_empty() {
+                Err(format!("Username check failed with HTTP {status}"))
+            } else {
+                Err(format!("Username check failed with HTTP {status}: {body}"))
+            }
+        }
+    }
+}
+
 fn current_or_cached_token() -> Option<String> {
     current_token().or_else(|| {
         let path = token_cache_path()?;
@@ -534,6 +694,97 @@ fn rom_short_hash() -> String {
         h = h.wrapping_mul(0x100000001b3);
     }
     format!("{:08x}", (h >> 32) as u32)
+}
+
+fn sha256_hex(input: &[u8]) -> String {
+    const H0: [u32; 8] = [
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+        0x5be0cd19,
+    ];
+    const K: [u32; 64] = [
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
+    ];
+
+    let mut h = H0;
+    let bit_len = (input.len() as u64) * 8;
+    let mut data = input.to_vec();
+    data.push(0x80);
+    while data.len() % 64 != 56 {
+        data.push(0);
+    }
+    data.extend_from_slice(&bit_len.to_be_bytes());
+
+    for chunk in data.chunks(64) {
+        let mut w = [0u32; 64];
+        for (i, word) in w.iter_mut().take(16).enumerate() {
+            let j = i * 4;
+            *word = u32::from_be_bytes([chunk[j], chunk[j + 1], chunk[j + 2], chunk[j + 3]]);
+        }
+        for i in 16..64 {
+            let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
+            let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
+            w[i] = w[i - 16]
+                .wrapping_add(s0)
+                .wrapping_add(w[i - 7])
+                .wrapping_add(s1);
+        }
+
+        let mut a = h[0];
+        let mut b = h[1];
+        let mut c = h[2];
+        let mut d = h[3];
+        let mut e = h[4];
+        let mut f = h[5];
+        let mut g = h[6];
+        let mut hh = h[7];
+
+        for i in 0..64 {
+            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let ch = (e & f) ^ ((!e) & g);
+            let temp1 = hh
+                .wrapping_add(s1)
+                .wrapping_add(ch)
+                .wrapping_add(K[i])
+                .wrapping_add(w[i]);
+            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let maj = (a & b) ^ (a & c) ^ (b & c);
+            let temp2 = s0.wrapping_add(maj);
+
+            hh = g;
+            g = f;
+            f = e;
+            e = d.wrapping_add(temp1);
+            d = c;
+            c = b;
+            b = a;
+            a = temp1.wrapping_add(temp2);
+        }
+
+        h[0] = h[0].wrapping_add(a);
+        h[1] = h[1].wrapping_add(b);
+        h[2] = h[2].wrapping_add(c);
+        h[3] = h[3].wrapping_add(d);
+        h[4] = h[4].wrapping_add(e);
+        h[5] = h[5].wrapping_add(f);
+        h[6] = h[6].wrapping_add(g);
+        h[7] = h[7].wrapping_add(hh);
+    }
+
+    let mut out = String::with_capacity(64);
+    for word in h {
+        use std::fmt::Write;
+        let _ = write!(&mut out, "{word:08x}");
+    }
+    out
 }
 
 // ── Optional Discord OAuth ────────────────────────────────────────────────────
@@ -784,6 +1035,13 @@ fn http_get_no_auth(url: &str) -> Result<String, String> {
     send_recv_https(stream, &req)
 }
 
+fn http_get_no_auth_status(url: &str) -> Result<(u16, String), String> {
+    let (host, path) = parse_url(url)?;
+    let stream = tls_connect(&host)?;
+    let req = format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
+    send_recv_https_status(stream, &req)
+}
+
 fn parse_url(url: &str) -> Result<(String, String), String> {
     let url = url.trim_start_matches("https://");
     let slash = url.find('/').unwrap_or(url.len());
@@ -796,7 +1054,18 @@ fn parse_url(url: &str) -> Result<(String, String), String> {
     Ok((host, path))
 }
 
-fn send_recv_https(mut stream: Box<dyn ReadWrite>, req: &str) -> Result<String, String> {
+fn send_recv_https(stream: Box<dyn ReadWrite>, req: &str) -> Result<String, String> {
+    let (status, response) = send_recv_https_status(stream, req)?;
+    if status == 401 || status == 403 {
+        return Err(format!("401 Unauthorized: {response}"));
+    }
+    Ok(response)
+}
+
+fn send_recv_https_status(
+    mut stream: Box<dyn ReadWrite>,
+    req: &str,
+) -> Result<(u16, String), String> {
     stream
         .write_all(req.as_bytes())
         .map_err(|e| e.to_string())?;
@@ -806,7 +1075,11 @@ fn send_recv_https(mut stream: Box<dyn ReadWrite>, req: &str) -> Result<String, 
     reader
         .read_line(&mut status_line)
         .map_err(|e| e.to_string())?;
-    let is_auth_error = status_line.contains("401") || status_line.contains("403");
+    let status = status_line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse::<u16>().ok())
+        .unwrap_or(0);
 
     let mut content_length = 0usize;
     loop {
@@ -831,10 +1104,7 @@ fn send_recv_https(mut stream: Box<dyn ReadWrite>, req: &str) -> Result<String, 
     std::io::Read::read_exact(&mut reader, &mut body).map_err(|e| e.to_string())?;
     let response = String::from_utf8_lossy(&body).to_string();
 
-    if is_auth_error {
-        return Err(format!("401 Unauthorized: {response}"));
-    }
-    Ok(response)
+    Ok((status, response))
 }
 
 trait ReadWrite: std::io::Read + std::io::Write + Send {}
@@ -1497,6 +1767,15 @@ pub fn download_ghost(
         let url = format!("{stats_url}/ghosts/download/{ghost_id}");
         match http_get_bytes(&url) {
             Ok(bytes) => {
+                if let Some(parent) = std::path::Path::new(&local_path).parent() {
+                    if let Err(e) = std::fs::create_dir_all(parent) {
+                        let _ = tx.send(GhostDownloadUpdate::Error {
+                            ghost_id,
+                            message: format!("create {}: {e}", parent.display()),
+                        });
+                        return;
+                    }
+                }
                 if let Err(e) = std::fs::write(&local_path, &bytes) {
                     let _ = tx.send(GhostDownloadUpdate::Error {
                         ghost_id,
@@ -1540,10 +1819,11 @@ pub(crate) fn http_get_bytes(url: &str) -> Result<Vec<u8>, String> {
         return Err(format!("HTTP {}", status_line.trim()));
     }
 
-    // Skip headers, capturing Content-Length if present. Stop at the blank
+    // Skip headers, capturing Content-Length/Encoding if present. Stop at the blank
     // line. We don't support chunked encoding here — the stats service
     // returns a finite Content-Length for binary payloads.
     let mut content_length: Option<usize> = None;
+    let mut content_encoding = String::new();
     loop {
         let mut line = String::new();
         reader.read_line(&mut line).map_err(|e| e.to_string())?;
@@ -1556,6 +1836,13 @@ pub(crate) fn http_get_bytes(url: &str) -> Result<Vec<u8>, String> {
                 .split(':')
                 .nth(1)
                 .and_then(|s| s.trim().parse().ok());
+        } else if trimmed.to_lowercase().starts_with("content-encoding:") {
+            content_encoding = trimmed
+                .split(':')
+                .nth(1)
+                .unwrap_or_default()
+                .trim()
+                .to_ascii_lowercase();
         }
     }
 
@@ -1566,7 +1853,16 @@ pub(crate) fn http_get_bytes(url: &str) -> Result<Vec<u8>, String> {
     } else {
         reader.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
     }
-    Ok(bytes)
+    if content_encoding == "gzip" {
+        let mut decoder = flate2::read::GzDecoder::new(bytes.as_slice());
+        let mut decoded = Vec::new();
+        decoder
+            .read_to_end(&mut decoded)
+            .map_err(|e| format!("gzip decode: {e}"))?;
+        Ok(decoded)
+    } else {
+        Ok(bytes)
+    }
 }
 
 pub fn post_match_result(
@@ -1735,4 +2031,17 @@ fn json_f64(json: &str, key: &str) -> Option<f64> {
         })
         .unwrap_or(rest.len());
     rest[..end].parse().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sha256_hex;
+
+    #[test]
+    fn sha256_hex_matches_known_vector() {
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
 }

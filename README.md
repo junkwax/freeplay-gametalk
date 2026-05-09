@@ -16,8 +16,8 @@ URLs, OAuth client IDs, tokens, or webhooks.
 
 - Modern SDL menu with Profile, Load Ghosts, Controls, Settings, and About.
 - Username-based online sign-in; Discord OAuth is not required to match.
-- Optional Discord account linking from Settings for players who want Discord
-  identity-backed stats/profile behavior.
+- Optional Discord account linking from Settings for profile lookup and
+  account display.
 - Optional Stats Email setting for portable ratings/history across machines.
 - Discord Rich Presence with join/spectate support when configured.
 - Online matchmaking through a signaling service.
@@ -26,9 +26,30 @@ URLs, OAuth client IDs, tokens, or webhooks.
   the emulator view.
 - Profile page with rating, wins, losses, win rate, match history, and Discord
   avatar support when available.
-- Ghost recording, upload/download support, local ghost playback, and practice
+- Ghost recording, upload/download support, local ghost playback, and lab play
   drone mode.
 - Package script that creates a distributable zip without ROMs or secrets.
+
+## Release Notes
+
+### 0.5.12 - 2026-05-09
+
+- Renamed Practice surfaces to Lab and fixed Lab overlays lingering after game
+  completion.
+- Reworked Load Ghosts into a logic-driven P2 ghost opponent: P1 stays live,
+  the ghost selects its recorded character, and combat uses reactive behavior
+  instead of full replay.
+- Fixed ghost loading from the menu, including local `ghost.bin`, remote
+  downloads, gzip decoding, visible download/load status, and entering gameplay
+  after load.
+- Prevented ghost playback from pressing coin, and stripped Start/Coin from
+  reactive combat logic.
+- Added player-name entry before Find Match, username availability checks, and
+  generated default Wu-style names.
+- Improved controller navigation/back behavior in menus and added controller
+  send/close paths for chat.
+- Kept chat usable after a match ends and made offline F1 toggle hitboxes
+  instead of exiting Lab.
 
 ## Requirements
 
@@ -59,7 +80,7 @@ FREEPLAY_DISCORD_WEBHOOK_URL=
 ```
 
 `.env` is ignored by git. Keep real service URLs, Discord IDs, and webhook URLs
-out of commits. The in-app Settings screen also stores the public username and
+out of commits. The in-app Settings screen also stores the saved player name and
 optional stats email in `config.toml`.
 
 `config.toml` is also ignored because it can contain local controller bindings
@@ -199,8 +220,8 @@ For public release builds:
 5. Optional: choose `Discord Account` in Settings to connect Discord. Your
    browser opens; after authorization, close the browser tab and return to
    Freeplay.
-6. Select Find Match.
-7. During an online match, press `T` to chat and Enter to send.
+6. Select Find Match, confirm a player name, then enter the queue.
+7. During an online match, press `T` to chat, Enter/Start to send, or Esc/B/Back to close.
 8. Press `F1` to leave the set.
 
 Under the hood:
@@ -214,9 +235,8 @@ Under the hood:
    configured backend.
 
 Stats and ghost uploads are disabled when `FREEPLAY_STATS_URL` is missing.
-Without a Stats Email or connected Discord account, ratings are tied to the
-local guest name identity. Add the same email on another machine, or connect
-the same Discord account, to keep using the same stats identity there.
+Without a Stats Email, ratings are tied to the confirmed player-name identity.
+Add the same email on another machine to keep using the same stats identity there.
 Discord presence is disabled when `FREEPLAY_DISCORD_CLIENT_ID` is missing.
 
 ## Discord Rich Presence
@@ -237,10 +257,10 @@ spectate
 
 Asset keys are lowercased by Discord. The client uses:
 
-- Stable elapsed timers for active play/training/netplay sessions
+- Stable elapsed timers for active play/lab/netplay sessions
 - State-specific small art
 - Live opponent and score text during netplay
-- Join secrets for training spar invites
+- Join secrets for lab spar invites
 - Spectate secrets for active online matches
 
 When a player is in an online match, Discord desktop can show a Watch/Spectate

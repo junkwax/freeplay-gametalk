@@ -284,9 +284,7 @@ fn apply_env_overrides(cfg: &mut Config) {
 pub fn default_username() -> String {
     let raw = std::env::var("FREEPLAY_USERNAME")
         .ok()
-        .or_else(|| std::env::var("USERNAME").ok())
-        .or_else(|| std::env::var("USER").ok())
-        .unwrap_or_else(|| "Player".into());
+        .unwrap_or_else(crate::wuname::random_username);
     sanitize_username(&raw).unwrap_or_else(|| "Player".into())
 }
 

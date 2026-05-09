@@ -294,8 +294,8 @@ impl RpcClient {
 
         let details = match state {
             RpcState::Menu => "In Lobby",
-            RpcState::Playing => "Practice Mode",
-            RpcState::Training => "Practice Mode",
+            RpcState::Playing => "Lab Mode",
+            RpcState::Training => "Lab Mode",
             RpcState::Matchmaking => "MK2 Ranked Queue",
             RpcState::Hosting => "Hosting MK2 Spar",
             RpcState::Joining => "Joining MK2 Match",
@@ -305,7 +305,7 @@ impl RpcClient {
 
         let mut state_str = match state {
             RpcState::Menu => String::new(),
-            RpcState::Playing => "Offline practice".into(),
+            RpcState::Playing => "Offline lab".into(),
             RpcState::Training => "Join to spar".into(),
             RpcState::Matchmaking => "Searching for opponent".into(),
             RpcState::Hosting => "Waiting for opponent".into(),
@@ -357,10 +357,10 @@ impl RpcClient {
 
     fn small_asset_for(&self, u: &RpcUpdate) -> Option<(&'static str, &'static str)> {
         if u.ghost_playback || u.ghost_recording {
-            return Some(("ghost", "Ghost Training"));
+            return Some(("ghost", "Ghost Lab"));
         }
         match &u.state {
-            RpcState::Training => Some(("training", "Training Mode")),
+            RpcState::Training => Some(("training", "Lab Mode")),
             RpcState::Matchmaking => Some(("matchmaking", "Finding Match")),
             RpcState::Netplay | RpcState::NetplayVs(_) => Some(("netplay", "Online Match")),
             RpcState::Joining => Some(("matchmaking", "Connecting")),

@@ -22,7 +22,9 @@ use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-use crate::retro::{Core, INPUT_STATE};
+use crate::retro::{
+    Core, INPUT_STATE, RETRO_DEVICE_ID_JOYPAD_SELECT, RETRO_DEVICE_ID_JOYPAD_START,
+};
 
 /// Persistent counter of how many times we've recorded vs each peer.
 /// Used to cap netplay auto-capture at N sessions per opponent.
@@ -157,6 +159,27 @@ fn unpack(bits: [u16; 2]) -> [[bool; 16]; 2] {
         }
     }
     out
+}
+
+pub fn without_coin(bits: u16) -> u16 {
+    bits & !(1u16 << RETRO_DEVICE_ID_JOYPAD_SELECT)
+}
+
+pub fn without_system_buttons(bits: u16) -> u16 {
+    without_coin(bits) & !(1u16 << RETRO_DEVICE_ID_JOYPAD_START)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ghost_filters_coin_without_touching_start() {
+        let coin = 1u16 << RETRO_DEVICE_ID_JOYPAD_SELECT;
+        let start = 1u16 << RETRO_DEVICE_ID_JOYPAD_START;
+        assert_eq!(without_coin(coin | start), start);
+        assert_eq!(without_system_buttons(coin | start), 0);
+    }
 }
 
 /// Active recording session. Captures an initial savestate on creation and
@@ -352,7 +375,8 @@ impl Playback {
         if self.cursor >= self.inputs.len() {
             return false;
         }
-        let s = unpack(self.inputs[self.cursor]);
+        let frame = self.inputs[self.cursor];
+        let s = unpack([without_coin(frame[0]), without_coin(frame[1])]);
         unsafe {
             if ports & 0b01 != 0 {
                 INPUT_STATE[0] = s[0];

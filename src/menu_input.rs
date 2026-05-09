@@ -85,6 +85,9 @@ pub fn is_cancel(ev: &Event) -> bool {
         Event::KeyDown {
             keycode: Some(Keycode::Escape),
             ..
+        } | Event::ControllerButtonDown {
+            button: sdl2::controller::Button::B | sdl2::controller::Button::Back,
+            ..
         }
     )
 }

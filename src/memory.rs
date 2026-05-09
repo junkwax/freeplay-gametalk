@@ -1,4 +1,4 @@
-//! Game RAM access for Training Mode and address archaeology.
+//! Game RAM access for Lab Mode and address archaeology.
 //!
 //! Wraps `retro_get_memory_data(RETRO_MEMORY_SYSTEM_RAM)` with typed
 //! peek/poke, a frame-level `PokeList` for "every frame write X to Y",

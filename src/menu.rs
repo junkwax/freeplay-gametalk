@@ -62,6 +62,13 @@ pub enum MenuScreen {
     Matchmaking {
         status: String,
     },
+    /// Pre-match username gate. The player must confirm a unique guest name
+    /// before entering the public matchmaking queue.
+    MatchUsername {
+        value: String,
+        status: String,
+        checking: bool,
+    },
     /// Browse local + remote ghost recordings. Local entries populate
     /// synchronously from the `ghosts/` directory on entry; remote entries
     /// stream in from `freeplay-stats /ghosts/list` as the fetch completes.
@@ -96,7 +103,7 @@ pub enum MenuScreen {
         aspect_mode: AspectMode,
         scorebar_style: ScorebarStyle,
     },
-    /// Practice/training helpers backed by RAM pokes already used by F-keys.
+    /// Lab helpers backed by RAM pokes already used by F-keys.
     Training {
         cursor: usize,
         hitboxes: bool,
@@ -207,7 +214,7 @@ impl Default for AppState {
 /// from the public menu for now to keep the first-run footprint focused.
 pub const MAIN_ITEMS: [&str; 8] = [
     "Find Match",
-    "Practice",
+    "Lab",
     "Profile",
     "Load Ghosts",
     "Controls",
@@ -238,7 +245,12 @@ pub enum NavResult {
     Stay,
     StartGame,
     /// Launch automated matchmaking via the signaling server.
+    #[allow(dead_code)]
     StartMatchmaking,
+    /// Ask main.rs to open the username gate with the current config value.
+    OpenUsernameEntry,
+    /// Validate the typed name before matchmaking starts.
+    SubmitUsername(String),
     /// Open the Profile screen — main.rs kicks off a background fetch from
     /// freeplay-stats and updates the screen state as the response lands.
     OpenProfile,
@@ -380,13 +392,10 @@ impl AppState {
                     if !rom_present {
                         return NavResult::Stay;
                     }
-                    *self = AppState::Menu(MenuScreen::Matchmaking {
-                        status: "Starting...".to_string(),
-                    });
-                    NavResult::StartMatchmaking
+                    NavResult::OpenUsernameEntry
                 }
                 1 => {
-                    // Practice
+                    // Lab
                     if !rom_present {
                         return NavResult::Stay;
                     }
@@ -510,6 +519,15 @@ impl AppState {
                 });
                 NavResult::Stay
             }
+            AppState::Menu(MenuScreen::MatchUsername {
+                value, checking, ..
+            }) => {
+                if checking {
+                    NavResult::Stay
+                } else {
+                    NavResult::SubmitUsername(value)
+                }
+            }
             AppState::Menu(MenuScreen::Settings { cursor, .. }) => match cursor {
                 0 => NavResult::EditText(EditField::Username, "Username".into()),
                 1 => NavResult::EditText(EditField::StatsEmail, "Stats Email".into()),
@@ -552,6 +570,7 @@ impl AppState {
             | AppState::Menu(MenuScreen::TestResult { .. })
             | AppState::Menu(MenuScreen::SessionEnded { .. })
             | AppState::Menu(MenuScreen::Matchmaking { .. })
+            | AppState::Menu(MenuScreen::MatchUsername { .. })
             | AppState::Menu(MenuScreen::GhostSelect { .. })
             | AppState::Menu(MenuScreen::Profile { .. })
             | AppState::Menu(MenuScreen::Leaderboard { .. })
@@ -595,6 +614,14 @@ impl AppState {
                     value.push(c);
                 }
             }
+        } else if let AppState::Menu(MenuScreen::MatchUsername { value, .. }) = self {
+            for c in s.chars() {
+                if (c.is_ascii_alphanumeric() || c == '_' || c == '-' || c.is_whitespace())
+                    && value.len() < 24
+                {
+                    value.push(c);
+                }
+            }
         }
     }
 
@@ -606,6 +633,8 @@ impl AppState {
         {
             ip_text.pop();
         } else if let AppState::Menu(MenuScreen::TextEdit { value, .. }) = self {
+            value.pop();
+        } else if let AppState::Menu(MenuScreen::MatchUsername { value, .. }) = self {
             value.pop();
         }
     }
@@ -675,9 +704,24 @@ pub fn draw(
         AppState::Menu(MenuScreen::Matchmaking { status }) => {
             draw_matchmaking(canvas, font, status, w, h)?
         }
+        AppState::Menu(MenuScreen::MatchUsername {
+            value,
+            status,
+            checking,
+        }) => draw_match_username(canvas, font, value, status, *checking, w, h)?,
         AppState::Menu(MenuScreen::GhostSelect {
-            cursor, entries, ..
-        }) => draw_ghost_select(canvas, font, *cursor, entries, w, h)?,
+            cursor,
+            entries,
+            download_status,
+        }) => draw_ghost_select(
+            canvas,
+            font,
+            *cursor,
+            entries,
+            download_status.as_deref(),
+            w,
+            h,
+        )?,
         AppState::Menu(MenuScreen::Profile { state }) => draw_profile(canvas, font, state, w, h)?,
         AppState::Menu(MenuScreen::Leaderboard { state }) => {
             draw_leaderboard(canvas, font, state, w, h)?
@@ -1406,19 +1450,12 @@ fn draw_about(canvas: &mut Canvas<Window>, font: &mut Font, w: i32, h: i32) -> R
 
     draw_panel(canvas, left_x, y, col_w, 224, Color::RGBA(15, 16, 24, 220))?;
     draw_panel(canvas, right_x, y, col_w, 224, Color::RGBA(15, 16, 24, 220))?;
-    font.draw(
-        canvas,
-        "PRACTICE HOTKEYS",
-        left_x + 14,
-        y + 12,
-        body,
-        header,
-    )?;
+    font.draw(canvas, "LAB HOTKEYS", left_x + 14, y + 12, body, header)?;
     font.draw(canvas, "NETPLAY", right_x + 14, y + 12, body, header)?;
     y += 44;
 
     let left = [
-        "F2   Hitbox overlay",
+        "F1   Hitbox overlay",
         "F3   Infinite health",
         "F4   Freeze timer",
         "F6   Ghost record",
@@ -1902,7 +1939,7 @@ fn draw_matchmaking(
     )?;
     y += 36 * scale as i32;
 
-    let hint = "Using your Settings username for online play";
+    let hint = "Using your confirmed player name for online play";
     let hw = font.text_width_exact(hint, small);
     font.draw(
         canvas,
@@ -1914,6 +1951,116 @@ fn draw_matchmaking(
     )?;
 
     let footer = "ESC Cancel";
+    let fw = font.text_width_exact(footer, small);
+    font.draw(
+        canvas,
+        footer,
+        (w - fw) / 2,
+        h - 28,
+        small,
+        Color::RGB(100, 100, 100),
+    )?;
+    Ok(())
+}
+
+fn draw_match_username(
+    canvas: &mut Canvas<Window>,
+    font: &mut Font,
+    value: &str,
+    status: &str,
+    checking: bool,
+    w: i32,
+    h: i32,
+) -> Result<(), String> {
+    draw_title(canvas, font, "FIND MATCH", w, h)?;
+    let scale = body_scale(h);
+    let small = small_scale(h);
+    let panel_w = (w - 72).clamp(260, 520);
+    let panel_x = (w - panel_w) / 2;
+    let mut y = (h / 2) - 56;
+
+    let label = "PLAYER NAME";
+    font.draw(canvas, label, panel_x, y, small, Color::RGB(155, 165, 195))?;
+    y += 20 * small as i32;
+
+    let box_h = 34 * scale as i32;
+    draw_panel(
+        canvas,
+        panel_x,
+        y,
+        panel_w,
+        box_h,
+        Color::RGBA(15, 18, 30, 230),
+    )?;
+    canvas.set_draw_color(if checking {
+        Color::RGB(90, 105, 145)
+    } else {
+        Color::RGB(150, 180, 255)
+    });
+    canvas.draw_rect(Rect::new(panel_x, y, panel_w as u32, box_h as u32))?;
+
+    let blink_on = (std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        / 400)
+        % 2
+        == 0;
+    let shown = if blink_on && !checking {
+        format!("{value}_")
+    } else {
+        value.to_string()
+    };
+    let clipped = fit_line(font, &shown, scale, panel_w - 24);
+    font.draw(
+        canvas,
+        &clipped,
+        panel_x + 12,
+        y + 8,
+        scale,
+        Color::RGB(245, 245, 250),
+    )?;
+    y += box_h + 16;
+
+    let dots = if checking {
+        match (std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+            / 500)
+            % 4
+        {
+            0 => "",
+            1 => ".",
+            2 => "..",
+            _ => "...",
+        }
+    } else {
+        ""
+    };
+    let status = fit_line(font, &format!("{status}{dots}"), small, w - 40);
+    let status_w = font.text_width_exact(&status, small);
+    font.draw(
+        canvas,
+        &status,
+        (w - status_w) / 2,
+        y,
+        small,
+        if status.to_ascii_lowercase().contains("taken")
+            || status.to_ascii_lowercase().contains("invalid")
+            || status.to_ascii_lowercase().contains("verify")
+        {
+            Color::RGB(235, 120, 105)
+        } else {
+            Color::RGB(180, 190, 215)
+        },
+    )?;
+
+    let footer = if checking {
+        "Checking..."
+    } else {
+        "ENTER Find Match   ESC Back"
+    };
     let fw = font.text_width_exact(footer, small);
     font.draw(
         canvas,
@@ -2139,7 +2286,7 @@ fn draw_settings(
     let notes = [
         "Doctor checks local setup in a separate window.",
         "Username is required. Email is optional for portable stats.",
-        "Discord Account is optional; connected accounts are used for online identity.",
+        "Find Match uses the confirmed player name for online identity.",
         "Use LEFT/RIGHT on Volume and video options.",
         "Stable audio reduces crackle with a little more latency.",
         "Video Filter applies during gameplay.",
@@ -2218,7 +2365,7 @@ fn draw_training(
     w: i32,
     h: i32,
 ) -> Result<(), String> {
-    draw_title(canvas, font, "TRAINING", w, h)?;
+    draw_title(canvas, font, "LAB", w, h)?;
     let scale = body_scale(h).saturating_sub(1).max(1);
     let small = small_scale(h);
     let x = (w / 8).max(42);
@@ -2265,7 +2412,7 @@ fn draw_training(
     y += TRAINING_ITEMS.len() as i32 * row_h + 20;
     let notes = [
         "These helpers are disabled during online matches.",
-        "F2/F3/F4 still toggle them while playing.",
+        "F1/F3/F4 still toggle them while playing.",
     ];
     for note in notes {
         font.draw(canvas, note, x, y, small, Color::RGB(130, 140, 165))?;
@@ -2608,6 +2755,7 @@ fn draw_ghost_select(
     font: &mut Font,
     cursor: usize,
     entries: &[GhostEntry],
+    download_status: Option<&str>,
     w: i32,
     h: i32,
 ) -> Result<(), String> {
@@ -2740,7 +2888,24 @@ fn draw_ghost_select(
         }
     }
 
-    let footer = "ESC Back   Enter Load";
+    if let Some(status) = download_status {
+        let status = fit_line(font, status, small, w - 48);
+        let sw = font.text_width_exact(&status, small);
+        font.draw(
+            canvas,
+            &status,
+            (w - sw) / 2,
+            h - 54,
+            small,
+            if status.starts_with("Error:") {
+                Color::RGB(235, 120, 105)
+            } else {
+                Color::RGB(190, 200, 235)
+            },
+        )?;
+    }
+
+    let footer = "B/ESC Back   A/ENTER Load";
     let fw = font.text_width_exact(footer, small);
     font.draw(
         canvas,

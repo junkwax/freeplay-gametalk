@@ -33,6 +33,7 @@ mod rpc;
 mod score;
 mod session;
 mod version;
+mod wuname;
 
 use crate::cli::{parse_args, NetMode};
 use crate::controllers::{assign_pad, open_initial_controllers, pad_owner, Pads};
@@ -59,6 +60,8 @@ use sdl2::render::BlendMode;
 use sdl2::surface::Surface;
 use sdl2::video::FullscreenType;
 use std::time::{Duration, Instant};
+
+const CHAT_MAX_LINES: usize = 8;
 
 #[cfg(target_os = "windows")]
 fn launch_debugger() -> std::io::Result<()> {
@@ -94,6 +97,74 @@ fn toast_payload(toast: &Option<(String, Instant)>) -> Option<menu::Toast<'_>> {
         message,
         remaining_ms: until.saturating_duration_since(Instant::now()).as_millis(),
     })
+}
+
+fn push_chat_line(lines: &mut Vec<String>, line: String) {
+    lines.push(line);
+    if lines.len() > CHAT_MAX_LINES {
+        let overflow = lines.len() - CHAT_MAX_LINES;
+        lines.drain(0..overflow);
+    }
+}
+
+fn close_chat(chat_open: &mut bool, chat_draft: &mut String) {
+    *chat_open = false;
+    chat_draft.clear();
+    input::clear_all_inputs();
+}
+
+fn send_chat_draft(
+    relay_chat: Option<&relay_socket::RelayChatHandle>,
+    chat_lines: &mut Vec<String>,
+    discord_user: Option<&str>,
+    chat_draft: &str,
+) {
+    let msg = chat_draft.trim().to_string();
+    if msg.is_empty() {
+        return;
+    }
+    if let Some(chat) = relay_chat {
+        match chat.send(&msg) {
+            Ok(()) => {
+                let who = discord_user.unwrap_or("You");
+                push_chat_line(chat_lines, format!("{who}: {msg}"));
+            }
+            Err(e) => push_chat_line(chat_lines, format!("Chat send failed: {e}")),
+        }
+    }
+}
+
+fn toggle_hitbox_view(trainer: &mut memory::PokeList, toast: &mut Option<(String, Instant)>) {
+    let on = !trainer.is_enabled("hitboxes");
+    trainer.set_enabled("hitboxes", on);
+    println!("[trainer] Hitbox view: {}", if on { "ON" } else { "OFF" });
+    *toast = Some((
+        format!("Hitbox view {}", if on { "ON" } else { "OFF" }),
+        Instant::now() + Duration::from_millis(1800),
+    ));
+}
+
+const GHOST_P2_MASK: u8 = 0b10;
+
+fn ghost_target_port(mask: u8) -> usize {
+    if mask & 0b10 != 0 {
+        1
+    } else {
+        0
+    }
+}
+
+fn start_logic_ghost_opponent(
+    pb: ghost::Playback,
+    ghost_port_mask: &mut u8,
+    ghost_playback: &mut Option<ghost::Playback>,
+    drone_runner: &mut Option<drone::DroneRunner>,
+) {
+    *ghost_port_mask = GHOST_P2_MASK;
+    let target_port = ghost_target_port(*ghost_port_mask);
+    let index = drone::DroneIndex::build(&pb, target_port);
+    *drone_runner = Some(drone::DroneRunner::new(index, target_port));
+    *ghost_playback = Some(pb);
 }
 
 fn apply_volume(samples: &[i16], volume_percent: u8) -> Vec<i16> {
@@ -345,6 +416,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut chat_lines: Vec<String> = Vec::new();
 
     let mut mm_rx: Option<std::sync::mpsc::Receiver<matchmaking::Update>> = None;
+    let mut username_check_rx: Option<std::sync::mpsc::Receiver<matchmaking::UsernameCheckUpdate>> =
+        None;
     let mut mm_session_id: Option<String> = None;
     let mut rpc_client = if cfg.discord_rpc_enabled {
         rpc::RpcClient::init()
@@ -395,6 +468,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 state,
                 AppState::Menu(menu::MenuScreen::TestIp { editing: true, .. })
                     | AppState::Menu(menu::MenuScreen::TextEdit { .. })
+                    | AppState::Menu(menu::MenuScreen::MatchUsername {
+                        checking: false,
+                        ..
+                    })
             )
         {
             video_subsystem.text_input().start();
@@ -881,6 +958,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         state,
                         AppState::Menu(menu::MenuScreen::TestIp { editing: true, .. })
                             | AppState::Menu(menu::MenuScreen::TextEdit { .. })
+                            | AppState::Menu(menu::MenuScreen::MatchUsername {
+                                checking: false,
+                                ..
+                            })
                     ) =>
                 {
                     state.text_input(&text);
@@ -892,17 +973,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     state,
                     AppState::Menu(menu::MenuScreen::TestIp { editing: true, .. })
                         | AppState::Menu(menu::MenuScreen::TextEdit { .. })
+                        | AppState::Menu(menu::MenuScreen::MatchUsername {
+                            checking: false,
+                            ..
+                        })
                 ) =>
                 {
                     state.text_backspace();
                 }
 
                 _ if matches!(state, AppState::Menu(MenuScreen::Matchmaking { .. })) => {
-                    if let Event::KeyDown {
-                        keycode: Some(Keycode::Escape),
-                        ..
-                    } = event
-                    {
+                    if is_cancel(&event) {
                         println!("[mm] matchmaking canceled by user");
                         mm_rx = None;
                         state = AppState::Menu(MenuScreen::Main { cursor: 0 });
@@ -936,11 +1017,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
 
-                // Open GitHub on Enter from About screen
-                Event::KeyDown {
-                    keycode: Some(Keycode::Return),
-                    ..
-                } if matches!(state, AppState::Menu(MenuScreen::About)) => {
+                _ if matches!(state, AppState::Menu(MenuScreen::About))
+                    && matches!(event_to_menu_nav(&event), Some(MenuNav::Accept)) =>
+                {
                     let _ = open::that("https://github.com/junkwax/freeplay-gametalk");
                 }
 
@@ -985,6 +1064,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         }
                                     }
                                 }
+                                NavResult::OpenUsernameEntry => {
+                                    let value = config::sanitize_username(&cfg.player_username)
+                                        .unwrap_or_else(config::default_username);
+                                    state = AppState::Menu(MenuScreen::MatchUsername {
+                                        value,
+                                        status: "Choose a public player name".into(),
+                                        checking: false,
+                                    });
+                                }
+                                NavResult::SubmitUsername(value) => {
+                                    match config::sanitize_username(&value) {
+                                        Some(username) => {
+                                            let (tx, rx) = std::sync::mpsc::channel();
+                                            username_check_rx = Some(rx);
+                                            matchmaking::check_username_available(
+                                                cfg.stats_url.clone(),
+                                                username.clone(),
+                                                tx,
+                                            );
+                                            state = AppState::Menu(MenuScreen::MatchUsername {
+                                                value: username,
+                                                status: "Checking username".into(),
+                                                checking: true,
+                                            });
+                                        }
+                                        None => {
+                                            state = AppState::Menu(MenuScreen::MatchUsername {
+                                                value,
+                                                status:
+                                                    "Invalid name: use 2-24 letters, numbers, _ or -"
+                                                        .into(),
+                                                checking: false,
+                                            });
+                                        }
+                                    }
+                                }
                                 NavResult::StartMatchmaking => {
                                     cfg.player_username =
                                         config::sanitize_username(&cfg.player_username)
@@ -996,11 +1111,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     );
                                     let (tx, rx) = std::sync::mpsc::channel();
                                     mm_rx = Some(rx);
-                                    matchmaking::start(tx);
+                                    matchmaking::start_guest(tx);
                                 }
                                 NavResult::OpenGhostSelect => {
                                     let (tx, rx) = std::sync::mpsc::channel();
                                     ghost_list_rx = Some(rx);
+                                    if let AppState::Menu(menu::MenuScreen::GhostSelect {
+                                        ref mut download_status,
+                                        ..
+                                    }) = state
+                                    {
+                                        if cfg.stats_url.trim().is_empty() {
+                                            *download_status = None;
+                                        } else {
+                                            *download_status =
+                                                Some("Loading shared ghosts...".into());
+                                        }
+                                    }
                                     let rh = rom_fingerprint().1;
                                     let rom_hash = format!("{:016x}", rh);
                                     matchmaking::fetch_ghost_list(
@@ -1510,12 +1637,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             Ok(pb) => {
                                                 if pb.prime(c) {
                                                     println!(
-                                                        "[ghost] Loaded: {} frames",
+                                                        "[ghost] Loaded logic opponent: {} frames",
                                                         pb.frame_count()
                                                     );
-                                                    ghost_port_mask = 0b10;
-                                                    ghost_playback = Some(pb);
-                                                    drone_runner = None;
+                                                    start_logic_ghost_opponent(
+                                                        pb,
+                                                        &mut ghost_port_mask,
+                                                        &mut ghost_playback,
+                                                        &mut drone_runner,
+                                                    );
+                                                    input::clear_all_inputs();
+                                                    auto_start_done = false;
+                                                    auto_start_frame = 0;
                                                     state = AppState::Playing;
                                                 } else {
                                                     println!(
@@ -1566,48 +1699,48 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         repeat: false,
                         ..
                     } if chat_open => {
-                        chat_open = false;
-                        chat_draft.clear();
-                        input::clear_all_inputs();
+                        close_chat(&mut chat_open, &mut chat_draft);
                     }
                     Event::KeyDown {
                         keycode: Some(Keycode::Return),
                         repeat: false,
                         ..
                     } if chat_open => {
-                        let msg = chat_draft.trim().to_string();
-                        if !msg.is_empty() {
-                            if let Some(chat) = relay_chat.as_ref() {
-                                match chat.send(&msg) {
-                                    Ok(()) => {
-                                        let who = discord_user.as_deref().unwrap_or("You");
-                                        chat_lines.push(format!("{who}: {msg}"));
-                                        if chat_lines.len() > 8 {
-                                            chat_lines.remove(0);
-                                        }
-                                    }
-                                    Err(e) => {
-                                        chat_lines.push(format!("Chat send failed: {e}"));
-                                        if chat_lines.len() > 8 {
-                                            chat_lines.remove(0);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        chat_open = false;
-                        chat_draft.clear();
-                        input::clear_all_inputs();
+                        send_chat_draft(
+                            relay_chat.as_ref(),
+                            &mut chat_lines,
+                            discord_user.as_deref(),
+                            &chat_draft,
+                        );
+                        close_chat(&mut chat_open, &mut chat_draft);
+                    }
+                    Event::ControllerButtonDown {
+                        button: sdl2::controller::Button::Start,
+                        ..
+                    } if chat_open => {
+                        send_chat_draft(
+                            relay_chat.as_ref(),
+                            &mut chat_lines,
+                            discord_user.as_deref(),
+                            &chat_draft,
+                        );
+                        close_chat(&mut chat_open, &mut chat_draft);
+                    }
+                    Event::ControllerButtonDown {
+                        button: sdl2::controller::Button::B | sdl2::controller::Button::Back,
+                        ..
+                    } if chat_open => {
+                        close_chat(&mut chat_open, &mut chat_draft);
                     }
                     Event::KeyDown {
                         keycode: Some(Keycode::F1),
+                        repeat: false,
                         ..
                     } => {
                         if net_session.is_some() {
                             net_teardown_reason = Some("you quit the match".into());
                         } else {
-                            input::clear_all_inputs();
-                            state = AppState::Menu(MenuScreen::Main { cursor: 0 });
+                            toggle_hitbox_view(&mut trainer, &mut toast);
                         }
                     }
                     Event::KeyDown {
@@ -1639,8 +1772,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             drone_runner = None;
                             println!("[drone] Disabled — sequential ghost playback");
                         } else {
-                            let index = drone::DroneIndex::build(ghost_playback.as_ref().unwrap());
-                            drone_runner = Some(drone::DroneRunner::new(index));
+                            let target_port = ghost_target_port(ghost_port_mask);
+                            let index = drone::DroneIndex::build(
+                                ghost_playback.as_ref().unwrap(),
+                                target_port,
+                            );
+                            drone_runner = Some(drone::DroneRunner::new(index, target_port));
                             println!("[drone] Enabled — posture-reactive playback");
                         }
                     }
@@ -1649,13 +1786,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         repeat: false,
                         ..
                     } if net_session.is_none() => {
-                        let on = !trainer.is_enabled("hitboxes");
-                        trainer.set_enabled("hitboxes", on);
-                        println!("[trainer] Hitbox view: {}", if on { "ON" } else { "OFF" });
-                        toast = Some((
-                            format!("Hitbox view {}", if on { "ON" } else { "OFF" }),
-                            Instant::now() + Duration::from_millis(1800),
-                        ));
+                        toggle_hitbox_view(&mut trainer, &mut toast);
                     }
                     Event::KeyDown {
                         keycode: Some(Keycode::F3),
@@ -1696,11 +1827,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             println!("[ghost] Recording disabled in netplay mode.");
                         } else if let Some(rec) = ghost_recording.take() {
                             match rec.save(&ghost_path) {
-                                Ok(_) => println!(
-                                    "[ghost] Saved {} frames to {}",
-                                    rec.frame_count(),
-                                    ghost_path.display()
-                                ),
+                                Ok(_) => {
+                                    println!(
+                                        "[ghost] Saved {} frames to {}",
+                                        rec.frame_count(),
+                                        ghost_path.display()
+                                    );
+                                    let _ = std::fs::create_dir_all("ghosts");
+                                    let ts = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .map(|d| d.as_secs())
+                                        .unwrap_or(0);
+                                    let library_path = std::path::Path::new("ghosts")
+                                        .join(format!("local_{ts}.ncgh"));
+                                    match rec.save(&library_path) {
+                                        Ok(()) => println!(
+                                            "[ghost] Added local recording to {}",
+                                            library_path.display()
+                                        ),
+                                        Err(e) => println!(
+                                            "[ghost] Library save failed {}: {e}",
+                                            library_path.display()
+                                        ),
+                                    }
+                                }
                                 Err(e) => println!("[ghost] Save failed: {}", e),
                             }
                         } else if ghost_playback.is_some() {
@@ -1733,6 +1883,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             pb.frame_count()
                                         );
                                         ghost_port_mask = 0b11;
+                                        drone_runner = None;
                                         ghost_playback = Some(pb);
                                     } else {
                                         println!("[ghost] Anchor state rejected by core.");
@@ -1765,11 +1916,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 Ok(pb) => {
                                     if pb.prime(c) {
                                         println!(
-                                            "[ghost] Play vs ghost: {} frames, you are P1...",
+                                            "[ghost] Logic ghost loaded: {} frames, you are P1...",
                                             pb.frame_count()
                                         );
-                                        ghost_port_mask = 0b10;
-                                        ghost_playback = Some(pb);
+                                        start_logic_ghost_opponent(
+                                            pb,
+                                            &mut ghost_port_mask,
+                                            &mut ghost_playback,
+                                            &mut drone_runner,
+                                        );
+                                        input::clear_all_inputs();
+                                        auto_start_done = false;
+                                        auto_start_frame = 0;
                                     } else {
                                         println!("[ghost] Anchor state rejected by core.");
                                     }
@@ -1960,10 +2118,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if let Some(chat) = relay_chat.as_ref() {
                             let who = peer_name.as_deref().unwrap_or("Opponent");
                             for msg in chat.drain() {
-                                chat_lines.push(format!("{who}: {msg}"));
-                                if chat_lines.len() > 8 {
-                                    chat_lines.remove(0);
-                                }
+                                push_chat_line(&mut chat_lines, format!("{who}: {msg}"));
                             }
                         }
 
@@ -2055,16 +2210,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         if let Some(pb) = ghost_playback.as_mut() {
                             if let Some(drone) = drone_runner.as_mut() {
-                                // Drone mode: pick posture-matched inputs
-                                let gs = drone::GameState::read(c);
-                                let p1_input = drone.next_input(&gs);
-                                unsafe {
-                                    for b in 0..16 {
-                                        // Inject drone's P1 inputs, keep human P2 inputs
-                                        if (ghost_port_mask & 0b01) != 0 {
-                                            INPUT_STATE[0][b] = (p1_input >> b) & 1 != 0;
+                                let gstate =
+                                    memory::peek_u16(c, GSTATE_ADDR, memory::Endian::Little)
+                                        .unwrap_or(0);
+                                let p1_hp = memory::peek_u16(c, P1_HP_ADDR, memory::Endian::Little)
+                                    .unwrap_or(0);
+                                let fight_loaded =
+                                    matches!(gstate, GS_FIGHTING | 0x03) && p1_hp > 0;
+                                if fight_loaded {
+                                    let gs = drone::GameState::read(c);
+                                    let ghost_input = drone.next_input(&gs);
+                                    let target_port = ghost_target_port(ghost_port_mask);
+                                    unsafe {
+                                        for b in 0..16 {
+                                            INPUT_STATE[target_port][b] =
+                                                (ghost_input >> b) & 1 != 0;
                                         }
                                     }
+                                } else if !pb.inject_next(ghost_port_mask) {
+                                    pb.rewind_inputs();
+                                    let _ = pb.inject_next(ghost_port_mask);
                                 }
                             } else {
                                 // Normal ghost playback
@@ -2333,20 +2498,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     cfg.aspect_mode,
                     cfg.crt_corner_bend,
                 )?;
-                // Draw modern fight overlay only while a round is loaded. round_num
-                // (0x256D6) ticks to 1 as soon as the round-intro sequence starts —
-                // earlier than gstate=0x02 transitioning or HP being written, so the
-                // HUD appears with the round intro rather than only after "FIGHT".
-                // It returns to 0 on attract / VS / character select, which keeps
-                // the HUD off those screens.
+                // Draw the fight overlay only once fighters have spawned. gstate=0x02
+                // covers both the VS screen and actual combat; P1 HP is zero on VS
+                // and populated when the round intro loads. This also turns the
+                // names off after arcade endings/game-over flows.
                 let in_fight_screen = core
                     .as_ref()
                     .map(|c| {
                         let gstate =
                             memory::peek_u16(c, GSTATE_ADDR, memory::Endian::Little).unwrap_or(0);
-                        let round_num =
-                            memory::peek_u16(c, 0x256D6, memory::Endian::Little).unwrap_or(0);
-                        gstate != GS_AMODE && round_num > 0
+                        let p1_hp =
+                            memory::peek_u16(c, P1_HP_ADDR, memory::Endian::Little).unwrap_or(0);
+                        matches!(gstate, GS_FIGHTING | 0x03) && p1_hp > 0
                     })
                     .unwrap_or(false);
                 if in_fight_screen {
@@ -2386,7 +2549,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             Some(local_name)
                         }
                     } else {
-                        Some("Practice")
+                        Some("Lab")
                     };
                     canvas.set_logical_size(0, 0)?;
                     let (win_w, win_h) = canvas.output_size().unwrap_or((1200, 762));
@@ -2436,17 +2599,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         )
                         .map_err(|e| format!("recording indicator: {e}"))?;
                     }
-                    if net_session.is_some() && (chat_open || !chat_lines.is_empty()) {
-                        draw_chat_overlay(
-                            &mut canvas,
-                            &mut font,
-                            win_w as i32,
-                            win_h as i32,
-                            &chat_lines,
-                            if chat_open { Some(&chat_draft) } else { None },
-                        )
-                        .map_err(|e| format!("chat overlay: {e}"))?;
-                    }
+                    canvas.set_logical_size(LOGICAL_W as u32, LOGICAL_H as u32)?;
+                }
+                if net_session.is_some() && (chat_open || !chat_lines.is_empty()) {
+                    canvas.set_logical_size(0, 0)?;
+                    let (win_w, win_h) = canvas.output_size().unwrap_or((1200, 762));
+                    draw_chat_overlay(
+                        &mut canvas,
+                        &mut font,
+                        win_w as i32,
+                        win_h as i32,
+                        &chat_lines,
+                        if chat_open { Some(&chat_draft) } else { None },
+                    )
+                    .map_err(|e| format!("chat overlay: {e}"))?;
                     canvas.set_logical_size(LOGICAL_W as u32, LOGICAL_H as u32)?;
                 }
                 canvas.present();
@@ -2747,10 +2913,76 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if matches!(
                     state,
                     AppState::Menu(menu::MenuScreen::TestIp { editing: true, .. })
+                        | AppState::Menu(menu::MenuScreen::TextEdit { .. })
+                        | AppState::Menu(menu::MenuScreen::MatchUsername {
+                            checking: false,
+                            ..
+                        })
                 ) {
                     video_subsystem.text_input().start();
                 } else {
                     video_subsystem.text_input().stop();
+                }
+
+                if let Some(rx) = &username_check_rx {
+                    if matches!(
+                        state,
+                        AppState::Menu(menu::MenuScreen::MatchUsername { .. })
+                    ) {
+                        match rx.try_recv() {
+                            Ok(matchmaking::UsernameCheckUpdate::Available(username)) => {
+                                cfg.player_username = username.clone();
+                                config::save(&cfg);
+                                matchmaking::set_guest_profile(
+                                    username.clone(),
+                                    cfg.stats_email.clone(),
+                                );
+                                let (tx, rx) = std::sync::mpsc::channel();
+                                mm_rx = Some(rx);
+                                matchmaking::start_guest(tx);
+                                state = AppState::Menu(MenuScreen::Matchmaking {
+                                    status: format!("Entering queue as {username}"),
+                                });
+                                username_check_rx = None;
+                            }
+                            Ok(matchmaking::UsernameCheckUpdate::Taken(username)) => {
+                                state = AppState::Menu(MenuScreen::MatchUsername {
+                                    value: username,
+                                    status: "That name is already taken".into(),
+                                    checking: false,
+                                });
+                                username_check_rx = None;
+                            }
+                            Ok(matchmaking::UsernameCheckUpdate::Error(message)) => {
+                                let value = if let AppState::Menu(MenuScreen::MatchUsername {
+                                    value,
+                                    ..
+                                }) = &state
+                                {
+                                    value.clone()
+                                } else {
+                                    cfg.player_username.clone()
+                                };
+                                state = AppState::Menu(MenuScreen::MatchUsername {
+                                    value,
+                                    status: message,
+                                    checking: false,
+                                });
+                                username_check_rx = None;
+                            }
+                            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                                username_check_rx = None;
+                                state = AppState::Menu(MenuScreen::MatchUsername {
+                                    value: cfg.player_username.clone(),
+                                    status: "Username check stopped".into(),
+                                    checking: false,
+                                });
+                            }
+                        }
+                    } else {
+                        username_check_rx = None;
+                    }
                 }
 
                 if matches!(state, AppState::Menu(menu::MenuScreen::LiveMatches { .. }))
@@ -2803,6 +3035,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     path,
                                 })
                                 .collect();
+                        }
+                        if std::path::Path::new("ghost.bin").exists() {
+                            entries.push(menu::GhostEntry::Local {
+                                filename: "ghost.bin".into(),
+                                path: "ghost.bin".into(),
+                            });
                         }
                     }
                 }
@@ -2986,11 +3224,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Drain the ghost-list fetcher channel.
                 if let Some(rx) = &ghost_list_rx {
                     if let AppState::Menu(menu::MenuScreen::GhostSelect {
-                        ref mut entries, ..
+                        ref mut entries,
+                        ref mut download_status,
+                        ..
                     }) = state
                     {
                         match rx.try_recv() {
                             Ok(matchmaking::GhostListUpdate::Loaded(ghosts)) => {
+                                let loaded_count = ghosts.len();
                                 let existing: std::collections::HashSet<String> = entries
                                     .iter()
                                     .filter_map(|e| match e {
@@ -3003,10 +3244,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         entries.push(menu::GhostEntry::Remote(meta));
                                     }
                                 }
+                                if loaded_count == 0 && entries.is_empty() {
+                                    *download_status = Some("No shared ghosts found".into());
+                                } else {
+                                    *download_status = None;
+                                }
                                 ghost_list_rx = None;
                             }
                             Ok(matchmaking::GhostListUpdate::Error(e)) => {
                                 println!("[ghost] list fetch failed: {e}");
+                                *download_status = Some(format!("Error: {e}"));
                                 ghost_list_rx = None;
                             }
                             Err(std::sync::mpsc::TryRecvError::Empty) => {}
@@ -3022,35 +3269,48 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Drain the ghost download channel.
                 if let Some(rx) = &ghost_download_rx {
                     if let AppState::Menu(menu::MenuScreen::GhostSelect {
-                        ref mut cursor,
                         ref mut download_status,
                         ..
                     }) = state
                     {
                         match rx.try_recv() {
                             Ok(matchmaking::GhostDownloadUpdate::Saved { local_path, .. }) => {
-                                *download_status = None;
                                 ghost_download_rx = None;
-                                // Load the downloaded ghost
+                                *download_status = Some("Loading ghost...".into());
+                                ensure_core_loaded(&mut core, &mut audio_queue, &audio_subsystem)?;
                                 if let Some(c) = &core {
                                     match ghost::Playback::load(&local_path) {
                                         Ok(pb) => {
                                             if pb.prime(c) {
                                                 println!(
-                                                    "[ghost] Loaded remote: {} frames",
+                                                    "[ghost] Loaded remote logic opponent: {} frames",
                                                     pb.frame_count()
                                                 );
-                                                ghost_port_mask = 0b10;
-                                                ghost_playback = Some(pb);
-                                                *cursor = 3;
-                                                state =
-                                                    AppState::Menu(MenuScreen::Main { cursor: 5 });
+                                                start_logic_ghost_opponent(
+                                                    pb,
+                                                    &mut ghost_port_mask,
+                                                    &mut ghost_playback,
+                                                    &mut drone_runner,
+                                                );
+                                                input::clear_all_inputs();
+                                                auto_start_done = false;
+                                                auto_start_frame = 0;
+                                                state = AppState::Playing;
                                             } else {
                                                 println!("[ghost] Anchor state rejected.");
+                                                *download_status =
+                                                    Some("Error: anchor state rejected".into());
                                             }
                                         }
-                                        Err(e) => println!("[ghost] Load failed: {e}"),
+                                        Err(e) => {
+                                            println!("[ghost] Load failed: {e}");
+                                            *download_status =
+                                                Some(format!("Error: ghost load failed: {e}"));
+                                        }
                                     }
+                                } else {
+                                    *download_status =
+                                        Some("Error: emulator core is not loaded".into());
                                 }
                             }
                             Ok(matchmaking::GhostDownloadUpdate::Error { message, .. }) => {
