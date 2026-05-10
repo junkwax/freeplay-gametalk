@@ -53,8 +53,8 @@ URLs, OAuth client IDs, tokens, or webhooks.
 - `F6`: start/stop local ghost recording.
 - `F8`: full ghost playback from `ghost.bin`.
 - `F10`: toggle reactive drone behavior while a ghost playback is active.
-- `F11`: show/hide the Lab assist panel, including P1 input history.
 - `F12`: play against a logic-driven P2 ghost opponent.
+- `F11`: show/hide the Lab assist panel, including P1 input history.
 - `Ctrl+R`: start/stop MP4 clip recording.
 - `Ctrl+F`: cycle video filter.
 - `Ctrl+A`: cycle aspect mode.
@@ -180,8 +180,8 @@ published as a GitHub Release.
 Create and publish a release by pushing a version tag:
 
 ```powershell
-git tag v0.5.15
-git push origin v0.5.15
+git tag v0.5.16
+git push origin v0.5.16
 ```
 
 The release workflow fails if the pushed tag does not match the version in

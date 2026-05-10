@@ -580,23 +580,19 @@ pub fn draw_lab_assist_overlay(
     history: &crate::input_history::InputHistory,
 ) -> Result<(), String> {
     let scale = 1;
-    let pad = 10;
-    let line_h = 18;
+    let pad = 8;
+    let line_h = 16;
     let box_w = 238;
     let x = window_w - box_w - 18;
-    let mut y = 72;
+    let mut y = ((window_h as f32) * 0.18).round() as i32;
+    y = y.clamp(118, 150);
 
     let hotkeys = [
-        "F1  HITBOXES",
-        "F2  HITBOXES",
-        "F3  HEALTH",
-        "F4  TIMER",
-        "F5  SAVE RESET",
-        "F6  RECORD GHOST",
-        "F7  LOAD RESET",
-        "F8  FULL GHOST",
-        "F11 HIDE HELP",
-        "F12 VS GHOST",
+        ("F1/2 BOXES", "F3 HEALTH"),
+        ("F4 TIMER", "F5 SAVE"),
+        ("F7 LOAD", "F6 REC GHOST"),
+        ("F8 PLAY GHOST", "F10 GHOST AI"),
+        ("F12 VS GHOST", "F11 HIDE"),
     ];
     let hotkey_h = pad * 2 + line_h * (hotkeys.len() as i32 + 1);
     canvas.set_draw_color(Color::RGBA(8, 10, 18, 190));
@@ -612,11 +608,20 @@ pub fn draw_lab_assist_overlay(
         Color::RGBA(255, 210, 90, 240),
     )?;
     let mut row_y = y + pad + line_h;
-    for row in hotkeys {
+    let col2_x = x + 118;
+    for (left, right) in hotkeys {
         font.draw_overlay(
             canvas,
-            row,
+            left,
             x + pad,
+            row_y,
+            scale,
+            Color::RGBA(210, 220, 245, 225),
+        )?;
+        font.draw_overlay(
+            canvas,
+            right,
+            col2_x,
             row_y,
             scale,
             Color::RGBA(210, 220, 245, 225),
@@ -626,12 +631,12 @@ pub fn draw_lab_assist_overlay(
 
     let rows: Vec<String> = history
         .entries()
-        .take(8)
+        .take(6)
         .map(|entry| {
             format!(
-                "{:<18} {:>3}f",
+                "{:<13} {:>3}",
                 crate::input_history::format_bits(entry.bits),
-                entry.frames.min(999)
+                format_input_frames(entry.frames)
             )
         })
         .collect();
@@ -675,6 +680,14 @@ pub fn draw_lab_assist_overlay(
         }
     }
     Ok(())
+}
+
+fn format_input_frames(frames: u32) -> String {
+    if frames > 99 {
+        "99+".into()
+    } else {
+        format!("{frames}f")
+    }
 }
 
 fn draw_fight_overlay_plates(

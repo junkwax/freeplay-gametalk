@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.16 - 2026-05-10
+
+### Fixed
+
+- Restored Lab hitbox display by poking the correct MK2 `f_colbox` RAM offset
+  and applying trainer flags before the emulated frame runs.
+- Made broken shared ghost downloads fail cleanly by removing unavailable
+  remote entries from Load Ghosts instead of leaving a raw HTTP 404 on screen.
+
+### Changed
+
+- Tightened the in-game Lab assist panel with lower placement, two-column
+  hotkeys, grouped save/load actions, grouped ghost actions, and capped
+  input-history frame labels.
+
 ## 0.5.12 - 2026-05-07
 
 ### Added

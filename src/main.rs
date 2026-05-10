@@ -386,6 +386,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     const GHOST_CAP_PER_PEER: u32 = 3;
     let mut ghost_library = ghost::Library::load_default();
     let mut net_recording: Option<ghost::NetRecording> = None;
+    // MK2 `f_colbox` lives at 0x22576c in the 68000 map, which is 0x2576c
+    // in FBNeo SYSTEM_RAM. Poking this before retro_run enables the boxes
+    // for the frame being drawn.
+    const HITBOX_FLAG_ADDR: usize = 0x2576C;
 
     let mut trainer = memory::PokeList::new();
     trainer.add(
@@ -407,12 +411,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     trainer.add_with_release(
         "hitboxes",
         memory::Poke::U16 {
-            addr: 0x2576E,
+            addr: HITBOX_FLAG_ADDR,
             value: 0x0001,
             endian: memory::Endian::Little,
         },
         memory::Poke::U16 {
-            addr: 0x2576E,
+            addr: HITBOX_FLAG_ADDR,
             value: 0x0000,
             endian: memory::Endian::Little,
         },
@@ -2487,6 +2491,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 rewind_test = None;
                             }
                         }
+                        trainer.apply(c);
                         unsafe {
                             (c.run)();
                         }
@@ -3520,6 +3525,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Drain the ghost download channel.
                 if let Some(rx) = &ghost_download_rx {
                     if let AppState::Menu(menu::MenuScreen::GhostSelect {
+                        ref mut cursor,
+                        ref mut entries,
                         ref mut download_status,
                         ..
                     }) = state
@@ -3565,8 +3572,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         Some("Error: emulator core is not loaded".into());
                                 }
                             }
-                            Ok(matchmaking::GhostDownloadUpdate::Error { message, .. }) => {
-                                *download_status = Some(format!("Error: {message}"));
+                            Ok(matchmaking::GhostDownloadUpdate::Error { ghost_id, message }) => {
+                                if message.contains("404") {
+                                    entries.retain(|entry| match entry {
+                                        menu::GhostEntry::Remote(meta) => meta.ghost_id != ghost_id,
+                                        _ => true,
+                                    });
+                                    if entries.is_empty() {
+                                        *cursor = 0;
+                                    } else if *cursor >= entries.len() {
+                                        *cursor = entries.len() - 1;
+                                    }
+                                    *download_status =
+                                        Some("Shared ghost is no longer available".into());
+                                } else {
+                                    *download_status = Some(format!("Error: {message}"));
+                                }
                                 ghost_download_rx = None;
                             }
                             Err(std::sync::mpsc::TryRecvError::Empty) => {}
