@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.18 - 2026-05-10
+
+### Fixed
+
+- Anchored the Lab hotkeys and P1 input-history panels together in the lower
+  right corner and prevented hotkey labels or frame counts from overlapping.
+- Rendered in-game toast feedback during play so `F2` and other Lab toggles
+  visibly report their new state.
+
+### Changed
+
+- Added live `ON`/`OFF` state text for Lab hitboxes, health, and timer in the
+  Lab assist hotkey panel.
+
 ## 0.5.17 - 2026-05-10
 
 ### Changed

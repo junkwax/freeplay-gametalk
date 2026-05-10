@@ -578,24 +578,57 @@ pub fn draw_lab_assist_overlay(
     window_w: i32,
     window_h: i32,
     history: &crate::input_history::InputHistory,
+    hitboxes_on: bool,
+    health_on: bool,
+    timer_on: bool,
 ) -> Result<(), String> {
     let scale = 1;
     let pad = 8;
     let line_h = 16;
-    let box_w = 238;
-    let x = window_w - box_w - 18;
-    let mut y = ((window_h as f32) * 0.18).round() as i32;
-    y = y.clamp(118, 150);
-
-    let hotkeys = [
-        ("F2 BOXES", "F3 HEALTH"),
-        ("F4 TIMER", ""),
-        ("F6 LOAD", "F7 SAVE"),
-        ("F8 LOAD GHOST", "F9 SAVE GHOST"),
-        ("F10 GHOST AI", "F11 HIDE"),
-        ("F12 VS GHOST", ""),
+    let hotkeys = vec![
+        format!("F2  BOXES {}", if hitboxes_on { "ON" } else { "OFF" }),
+        format!("F3  HEALTH {}", if health_on { "ON" } else { "OFF" }),
+        format!("F4  TIMER {}", if timer_on { "ON" } else { "OFF" }),
+        "F6  LOAD RESET".to_string(),
+        "F7  SAVE RESET".to_string(),
+        "F8  LOAD GHOST".to_string(),
+        "F9  SAVE GHOST".to_string(),
+        "F10 GHOST AI".to_string(),
+        "F11 HIDE HELP".to_string(),
+        "F12 VS GHOST".to_string(),
     ];
     let hotkey_h = pad * 2 + line_h * (hotkeys.len() as i32 + 1);
+    let rows: Vec<(String, String)> = history
+        .entries()
+        .take(6)
+        .map(|entry| {
+            (
+                crate::input_history::format_bits(entry.bits),
+                format_input_frames(entry.frames),
+            )
+        })
+        .collect();
+    let input_rows = rows.len().max(1);
+    let input_h = pad * 2 + line_h * (input_rows as i32 + 1);
+    let mut content_w = font.text_width_overlay("LAB HOTKEYS", scale);
+    content_w = content_w.max(font.text_width_overlay("P1 INPUTS", scale));
+    for line in &hotkeys {
+        content_w = content_w.max(font.text_width_overlay(line, scale));
+    }
+    for (input, frames) in &rows {
+        let row_w =
+            font.text_width_overlay(input, scale) + 48 + font.text_width_overlay(frames, scale);
+        content_w = content_w.max(row_w);
+    }
+    let box_w = (content_w + pad * 2).clamp(196, 286);
+    let x = window_w - box_w - 18;
+    let gap = 8;
+    let bottom_margin = 28;
+    let min_y = 74;
+    let stacked_h = hotkey_h + gap + input_h;
+    let mut y = (window_h - stacked_h - bottom_margin).max(min_y);
+    let input_y = y + hotkey_h + gap;
+
     canvas.set_draw_color(Color::RGBA(8, 10, 18, 190));
     canvas.fill_rect(Rect::new(x, y, box_w as u32, hotkey_h as u32))?;
     canvas.set_draw_color(Color::RGBA(95, 130, 210, 180));
@@ -609,48 +642,25 @@ pub fn draw_lab_assist_overlay(
         Color::RGBA(255, 210, 90, 240),
     )?;
     let mut row_y = y + pad + line_h;
-    let col2_x = x + 118;
-    for (left, right) in hotkeys {
+    for line in hotkeys {
+        let clipped = fit_overlay_text(font, &line, scale, box_w - pad * 2);
         font.draw_overlay(
             canvas,
-            left,
+            &clipped,
             x + pad,
             row_y,
             scale,
             Color::RGBA(210, 220, 245, 225),
         )?;
-        if !right.is_empty() {
-            font.draw_overlay(
-                canvas,
-                right,
-                col2_x,
-                row_y,
-                scale,
-                Color::RGBA(210, 220, 245, 225),
-            )?;
-        }
         row_y += line_h;
     }
 
-    let rows: Vec<String> = history
-        .entries()
-        .take(6)
-        .map(|entry| {
-            format!(
-                "{:<13} {:>3}",
-                crate::input_history::format_bits(entry.bits),
-                format_input_frames(entry.frames)
-            )
-        })
-        .collect();
-    let input_rows = rows.len().max(1);
-    let box_h = pad * 2 + line_h * (input_rows as i32 + 1);
-    y = (y + hotkey_h + 10).min(window_h - box_h - 24).max(72);
+    y = input_y;
 
     canvas.set_draw_color(Color::RGBA(8, 10, 18, 190));
-    canvas.fill_rect(Rect::new(x, y, box_w as u32, box_h as u32))?;
+    canvas.fill_rect(Rect::new(x, y, box_w as u32, input_h as u32))?;
     canvas.set_draw_color(Color::RGBA(95, 130, 210, 180));
-    canvas.draw_rect(Rect::new(x, y, box_w as u32, box_h as u32))?;
+    canvas.draw_rect(Rect::new(x, y, box_w as u32, input_h as u32))?;
     font.draw_overlay(
         canvas,
         "P1 INPUTS",
@@ -670,11 +680,23 @@ pub fn draw_lab_assist_overlay(
             Color::RGBA(150, 165, 195, 180),
         )?;
     } else {
-        for row in rows {
+        let frame_right = x + box_w - pad;
+        let input_max_w = box_w - pad * 2 - 48;
+        for (input, frames) in rows {
+            let clipped = fit_overlay_text(font, &input, scale, input_max_w);
             font.draw_overlay(
                 canvas,
-                &row,
+                &clipped,
                 x + pad,
+                row_y,
+                scale,
+                Color::RGBA(230, 238, 255, 230),
+            )?;
+            let frame_w = font.text_width_overlay(&frames, scale);
+            font.draw_overlay(
+                canvas,
+                &frames,
+                frame_right - frame_w,
                 row_y,
                 scale,
                 Color::RGBA(230, 238, 255, 230),

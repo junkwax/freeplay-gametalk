@@ -871,7 +871,7 @@ pub fn draw(
     Ok(())
 }
 
-fn draw_toast(
+pub(crate) fn draw_toast(
     canvas: &mut Canvas<Window>,
     font: &mut Font,
     toast: &Toast<'_>,

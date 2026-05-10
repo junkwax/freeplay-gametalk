@@ -56,7 +56,7 @@ use crate::session::{
 
 use sdl2::audio::AudioQueue;
 use sdl2::event::Event;
-use sdl2::keyboard::{Keycode, Mod};
+use sdl2::keyboard::{Keycode, Mod, Scancode};
 use sdl2::pixels::{Color, PixelFormatEnum};
 use sdl2::render::BlendMode;
 use sdl2::surface::Surface;
@@ -1907,10 +1907,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     Event::KeyDown {
-                        keycode: Some(Keycode::F2),
+                        keycode,
+                        scancode,
                         repeat: false,
                         ..
-                    } if net_session.is_none() && match_replay_playback.is_none() => {
+                    } if net_session.is_none()
+                        && match_replay_playback.is_none()
+                        && (keycode == Some(Keycode::F2) || scancode == Some(Scancode::F2)) =>
+                    {
                         toggle_hitbox_view(&mut trainer, &mut toast);
                     }
                     Event::KeyDown {
@@ -2844,6 +2848,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         win_w as i32,
                         win_h as i32,
                         &input_history,
+                        trainer.is_enabled("hitboxes"),
+                        trainer.is_enabled("p1_health"),
+                        trainer.is_enabled("freeze_timer"),
                     )
                     .map_err(|e| format!("lab assist overlay: {e}"))?;
                     canvas.set_logical_size(LOGICAL_W as u32, LOGICAL_H as u32)?;
@@ -2860,6 +2867,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if chat_open { Some(&chat_draft) } else { None },
                     )
                     .map_err(|e| format!("chat overlay: {e}"))?;
+                    canvas.set_logical_size(LOGICAL_W as u32, LOGICAL_H as u32)?;
+                }
+                if let Some(toast) = toast_payload(&toast) {
+                    canvas.set_logical_size(0, 0)?;
+                    let (win_w, win_h) = canvas.output_size().unwrap_or((1200, 762));
+                    menu::draw_toast(&mut canvas, &mut font, &toast, win_w as i32, win_h as i32)
+                        .map_err(|e| format!("toast overlay: {e}"))?;
                     canvas.set_logical_size(LOGICAL_W as u32, LOGICAL_H as u32)?;
                 }
                 canvas.present();
