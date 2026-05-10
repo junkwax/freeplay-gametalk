@@ -11,6 +11,7 @@
 use crate::dlog;
 use crate::ghost;
 use crate::input;
+use crate::match_replay;
 use crate::memory;
 use crate::netplay;
 use crate::retro::{self, SILENT_MODE};
@@ -116,6 +117,7 @@ pub fn step_netplay_frame(
     sess: &mut netplay::Session,
     local_handle: usize,
     net_recording: &mut Option<ghost::NetRecording>,
+    replay_recording: &mut Option<match_replay::Recording>,
     net_log: &mut Option<std::fs::File>,
     runtime: &mut NetRuntime,
 ) -> NetStepStats {
@@ -347,6 +349,9 @@ pub fn step_netplay_frame(
                 apply_snapshot(Player::P2, p2_bits);
                 if is_last {
                     if let Some(rec) = net_recording.as_mut() {
+                        rec.record_confirmed_frame(core, p1_bits, p2_bits);
+                    }
+                    if let Some(rec) = replay_recording.as_mut() {
                         rec.record_confirmed_frame(core, p1_bits, p2_bits);
                     }
                 }

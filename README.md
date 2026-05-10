@@ -14,7 +14,8 @@ URLs, OAuth client IDs, tokens, or webhooks.
 
 ## Current Build
 
-- Modern SDL menu with Profile, Load Ghosts, Controls, Settings, and About.
+- Modern SDL menu with Profile, Load Ghosts, Watch Replays, Controls,
+  Settings, and About.
 - Username-based online sign-in; Discord OAuth is not required to match.
 - Optional Discord account linking from Settings for profile lookup and
   account display.
@@ -26,19 +27,26 @@ URLs, OAuth client IDs, tokens, or webhooks.
   the emulator view.
 - Profile page with rating, wins, losses, win rate, match history, and Discord
   avatar support when available.
-- Ghost recording, upload/download support, local ghost playback, and lab play
-  drone mode.
+- Ghost recording, upload/download support, local ghost playback, full match
+  replay viewing, and lab play drone mode.
 - Package script that creates a distributable zip without ROMs or secrets.
 
 ## Release Notes
 
-### 0.5.12 - 2026-05-09
+### 0.5.14 - 2026-05-10
 
 - Renamed Practice surfaces to Lab and fixed Lab overlays lingering after game
   completion.
+- Bumped the build to v0.5.14 and made release pushes validate that the git tag
+  matches `Cargo.toml`, while local/CI builds refresh the displayed git revision
+  when the branch moves.
 - Reworked Load Ghosts into a logic-driven P2 ghost opponent: P1 stays live,
   the ghost selects its recorded character, and combat uses reactive behavior
   instead of full replay.
+- Added a toggleable Lab assist panel on F11 with hotkeys and P1 input history,
+  plus F5/F7 save/load reset points for fast setup repetition.
+- Added local full-match replays under `replays\` with a Watch Replays menu,
+  separate from ghost opponent recordings.
 - Fixed ghost loading from the menu, including local `ghost.bin`, remote
   downloads, gzip decoding, visible download/load status, and entering gameplay
   after load.
@@ -50,6 +58,44 @@ URLs, OAuth client IDs, tokens, or webhooks.
   send/close paths for chat.
 - Kept chat usable after a match ends and made offline F1 toggle hitboxes
   instead of exiting Lab.
+
+## Hotkeys
+
+### Menus
+
+- `Up`/`Down` or controller D-pad: move selection.
+- `Enter`, numpad `Enter`, controller `A`, or controller `Start`: confirm.
+- `Esc`, controller `B`, or controller `Back`: go back/cancel.
+- `Tab`, `Left`/`Right`, or controller D-pad left/right: switch P1/P2 on
+  screens that support it.
+- `Shift+D`: open Doctor from menu screens.
+
+### Lab And Local Play
+
+- `Esc`: return to the main menu.
+- `F1` or `F2`: toggle hitbox overlay.
+- `F3`: toggle infinite health.
+- `F4`: toggle freeze timer.
+- `F5`: save the current Lab reset point.
+- `F7`: load the saved Lab reset point.
+- `F6`: start/stop local ghost recording.
+- `F8`: full ghost playback from `ghost.bin`.
+- `F10`: toggle reactive drone behavior while a ghost playback is active.
+- `F11`: show/hide the Lab assist panel, including P1 input history.
+- `F12`: play against a logic-driven P2 ghost opponent.
+- `Ctrl+R`: start/stop MP4 clip recording.
+- `Ctrl+F`: cycle video filter.
+- `Ctrl+A`: cycle aspect mode.
+
+### Online And Replay
+
+- `T`: open online chat.
+- `Enter` or controller `Start`: send chat.
+- `Esc`, controller `B`, or controller `Back`: close chat.
+- `F1`: leave an online set gracefully.
+- `Esc`: stop full replay playback and return to Watch Replays.
+- `Shift+F11`: dump SYSTEM_RAM for diagnostics.
+- `F9`: run the rewind determinism test.
 
 ## Requirements
 
@@ -162,9 +208,13 @@ published as a GitHub Release.
 Create and publish a release by pushing a version tag:
 
 ```powershell
-git tag v0.4.3
-git push origin v0.4.3
+git tag v0.5.14
+git push origin v0.5.14
 ```
+
+The release workflow fails if the pushed tag does not match the version in
+`Cargo.toml`, so every released build gets a new version and every commit build
+gets a distinct git revision in the app footer/logged metadata.
 
 You can also run the **Release** workflow manually from GitHub Actions and
 provide a tag. The workflow builds packages for all three platforms, uploads
@@ -222,7 +272,8 @@ For public release builds:
    Freeplay.
 6. Select Find Match, confirm a player name, then enter the queue.
 7. During an online match, press `T` to chat, Enter/Start to send, or Esc/B/Back to close.
-8. Press `F1` to leave the set.
+8. Completed sets save local full-match replays; use Watch Replays to review.
+9. Press `F1` to leave the set.
 
 Under the hood:
 
@@ -288,6 +339,7 @@ The repository intentionally ignores:
 - ROM zips and generated release zips
 - SDL/FBNeo runtime binaries in `src\`
 - local logs, save states, ghosts, and tokens
+- local match replays
 - `.env` and local `config.toml`
 - local agent notes and scratch scripts
 - `Cargo.lock`

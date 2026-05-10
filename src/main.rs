@@ -15,7 +15,9 @@ mod font;
 mod ghost;
 mod incident;
 mod input;
+mod input_history;
 mod log;
+mod match_replay;
 mod matchmaking;
 mod memory;
 mod menu;
@@ -43,8 +45,8 @@ use crate::menu::{AppState, MenuScreen, NavResult, LOGICAL_H, LOGICAL_W};
 use crate::menu_input::{capture_rebind, event_to_menu_nav, is_cancel, is_clear, MenuNav};
 use crate::netcore::{reset_for_netplay, step_netplay_frame, NetRuntime};
 use crate::render::{
-    draw_chat_overlay, draw_emu_frame, draw_fight_overlay, ensure_core_loaded, format_probe_result,
-    route_player,
+    draw_chat_overlay, draw_emu_frame, draw_fight_overlay, draw_lab_assist_overlay,
+    ensure_core_loaded, format_probe_result, route_player,
 };
 use crate::retro::*;
 use crate::session::{
@@ -165,6 +167,47 @@ fn start_logic_ghost_opponent(
     let index = drone::DroneIndex::build(&pb, target_port);
     *drone_runner = Some(drone::DroneRunner::new(index, target_port));
     *ghost_playback = Some(pb);
+}
+
+fn replay_names(
+    local_handle: usize,
+    local_name: Option<&str>,
+    peer_name: Option<&str>,
+) -> (String, String) {
+    let local = local_name.unwrap_or("You").to_string();
+    let peer = peer_name.unwrap_or("Opponent").to_string();
+    if local_handle == 0 {
+        (local, peer)
+    } else {
+        (peer, local)
+    }
+}
+
+fn refresh_replay_select(state: &mut AppState, status: Option<String>) {
+    if let AppState::Menu(MenuScreen::ReplaySelect {
+        entries,
+        status: screen_status,
+        ..
+    }) = state
+    {
+        *entries = match_replay::list_replays()
+            .into_iter()
+            .map(|meta| menu::ReplayEntry {
+                filename: meta.filename,
+                path: meta.path,
+                p1_name: meta.p1_name,
+                p2_name: meta.p2_name,
+                frame_count: meta.frame_count,
+            })
+            .collect();
+        *screen_status = status.or_else(|| {
+            if entries.is_empty() {
+                Some("No saved replays found".into())
+            } else {
+                None
+            }
+        });
+    }
 }
 
 fn apply_volume(samples: &[i16], volume_percent: u8) -> Vec<i16> {
@@ -328,10 +371,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut core: Option<retro::Core> = None;
     let mut audio_queue: Option<AudioQueue<i16>> = None;
-    let mut _save_slot: Option<Vec<u8>> = None;
+    let mut lab_save_slot: Option<Vec<u8>> = None;
     let mut rewind_test: Option<replay::RewindTest> = None;
+    let mut input_history = input_history::InputHistory::new();
+    let mut lab_assist_visible = true;
     let mut ghost_recording: Option<ghost::Recording> = None;
     let mut ghost_playback: Option<ghost::Playback> = None;
+    let mut match_replay_recording: Option<match_replay::Recording> = None;
+    let mut match_replay_playback: Option<match_replay::Playback> = None;
     let mut clip_recorder: Option<clip::ClipRecorder> = None;
     let mut ghost_port_mask: u8 = 0b11;
     let mut drone_runner: Option<drone::DroneRunner> = None;
@@ -1035,6 +1082,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         &mut audio_queue,
                                         &audio_subsystem,
                                     )?;
+                                    input_history.clear();
+                                    match_replay_playback = None;
                                     if net_session.is_none() {
                                         if let NetMode::P2P {
                                             player,
@@ -1055,6 +1104,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                         *peer,
                                                         GHOST_CAP_PER_PEER,
                                                     );
+                                                    let (p1, p2) = replay_names(
+                                                        local_handle,
+                                                        discord_user.as_deref(),
+                                                        peer_name.as_deref(),
+                                                    );
+                                                    match_replay_recording =
+                                                        Some(match_replay::Recording::new(p1, p2));
                                                     net_log = open_net_log();
                                                 }
                                                 Err(e) => {
@@ -1135,6 +1191,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         rom_hash,
                                         tx,
                                     );
+                                }
+                                NavResult::OpenReplaySelect => {
+                                    refresh_replay_select(&mut state, None);
                                 }
                                 NavResult::DownloadGhost(ghost_id) => {
                                     let local_path = format!("ghosts/remote_{ghost_id}.ncgh");
@@ -1646,6 +1705,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                         &mut ghost_playback,
                                                         &mut drone_runner,
                                                     );
+                                                    match_replay_playback = None;
                                                     input::clear_all_inputs();
                                                     auto_start_done = false;
                                                     auto_start_frame = 0;
@@ -1655,18 +1715,61 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                         "[ghost] Anchor state rejected by core."
                                                     );
                                                     state = AppState::Menu(MenuScreen::Main {
-                                                        cursor: 5,
+                                                        cursor: 3,
                                                     });
                                                 }
                                             }
                                             Err(e) => {
                                                 println!("[ghost] Load failed: {e}");
                                                 state =
-                                                    AppState::Menu(MenuScreen::Main { cursor: 5 });
+                                                    AppState::Menu(MenuScreen::Main { cursor: 3 });
                                             }
                                         }
                                     } else {
-                                        state = AppState::Menu(MenuScreen::Main { cursor: 5 });
+                                        state = AppState::Menu(MenuScreen::Main { cursor: 3 });
+                                    }
+                                }
+                                NavResult::LoadReplay(path) => {
+                                    ensure_core_loaded(
+                                        &mut core,
+                                        &mut audio_queue,
+                                        &audio_subsystem,
+                                    )?;
+                                    if let Some(c) = &core {
+                                        match match_replay::Playback::load(&path) {
+                                            Ok(pb) => {
+                                                if pb.prime(c) {
+                                                    println!(
+                                                        "[replay] Playing {} frames: {} vs {}",
+                                                        pb.frame_count(),
+                                                        pb.p1_name(),
+                                                        pb.p2_name()
+                                                    );
+                                                    match_replay_playback = Some(pb);
+                                                    ghost_playback = None;
+                                                    ghost_recording = None;
+                                                    drone_runner = None;
+                                                    input_history.clear();
+                                                    input::clear_all_inputs();
+                                                    state = AppState::Playing;
+                                                } else {
+                                                    println!(
+                                                        "[replay] Anchor state rejected by core."
+                                                    );
+                                                    refresh_replay_select(
+                                                        &mut state,
+                                                        Some("Error: replay state rejected".into()),
+                                                    );
+                                                }
+                                            }
+                                            Err(e) => {
+                                                println!("[replay] Load failed: {e}");
+                                                refresh_replay_select(
+                                                    &mut state,
+                                                    Some(format!("Error: replay load failed: {e}")),
+                                                );
+                                            }
+                                        }
                                     }
                                 }
                             },
@@ -1678,6 +1781,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 _ if state == AppState::Playing => match event {
+                    Event::KeyDown {
+                        keycode: Some(Keycode::Escape),
+                        repeat: false,
+                        ..
+                    } if match_replay_playback.is_some() => {
+                        match_replay_playback = None;
+                        input::clear_all_inputs();
+                        state = AppState::Menu(MenuScreen::ReplaySelect {
+                            cursor: 0,
+                            entries: vec![],
+                            status: Some("Replay stopped".into()),
+                        });
+                        refresh_replay_select(&mut state, Some("Replay stopped".into()));
+                    }
                     Event::KeyDown {
                         keycode: Some(Keycode::T),
                         repeat: false,
@@ -1746,7 +1863,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Event::KeyDown {
                         keycode: Some(Keycode::Escape),
                         ..
-                    } if net_session.is_none() => {
+                    } if net_session.is_none() && match_replay_playback.is_none() => {
                         input::clear_all_inputs();
                         state = AppState::Menu(MenuScreen::Main { cursor: 0 });
                     }
@@ -1754,7 +1871,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         keycode: Some(Keycode::F9),
                         repeat: false,
                         ..
-                    } if net_session.is_none() => {
+                    } if net_session.is_none() && match_replay_playback.is_none() => {
                         if core.is_some() && rewind_test.is_none() {
                             println!(
                                 "[rewind] Starting rewind test — recording {} frames...",
@@ -1767,7 +1884,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         keycode: Some(Keycode::F10),
                         repeat: false,
                         ..
-                    } if net_session.is_none() && ghost_playback.is_some() => {
+                    } if net_session.is_none()
+                        && match_replay_playback.is_none()
+                        && ghost_playback.is_some() =>
+                    {
                         if drone_runner.is_some() {
                             drone_runner = None;
                             println!("[drone] Disabled — sequential ghost playback");
@@ -1785,14 +1905,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         keycode: Some(Keycode::F2),
                         repeat: false,
                         ..
-                    } if net_session.is_none() => {
+                    } if net_session.is_none() && match_replay_playback.is_none() => {
                         toggle_hitbox_view(&mut trainer, &mut toast);
                     }
                     Event::KeyDown {
                         keycode: Some(Keycode::F3),
                         repeat: false,
                         ..
-                    } if net_session.is_none() => {
+                    } if net_session.is_none() && match_replay_playback.is_none() => {
                         let on = !trainer.is_enabled("p1_health");
                         trainer.set_enabled("p1_health", on);
                         trainer.set_enabled("p2_health", on);
@@ -1809,7 +1929,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         keycode: Some(Keycode::F4),
                         repeat: false,
                         ..
-                    } if net_session.is_none() => {
+                    } if net_session.is_none() && match_replay_playback.is_none() => {
                         let on = !trainer.is_enabled("freeze_timer");
                         trainer.set_enabled("freeze_timer", on);
                         println!("[trainer] Freeze timer: {}", if on { "ON" } else { "OFF" });
@@ -1819,11 +1939,65 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ));
                     }
                     Event::KeyDown {
+                        keycode: Some(Keycode::F5),
+                        repeat: false,
+                        ..
+                    } if net_session.is_none() && match_replay_playback.is_none() => {
+                        if let Some(c) = &core {
+                            match c.save_state() {
+                                Some(blob) => {
+                                    let bytes = blob.len();
+                                    lab_save_slot = Some(blob);
+                                    println!("[lab] Saved reset point ({bytes} bytes)");
+                                    toast = Some((
+                                        "Lab reset point saved".into(),
+                                        Instant::now() + Duration::from_millis(1800),
+                                    ));
+                                }
+                                None => {
+                                    toast = Some((
+                                        "Lab save failed".into(),
+                                        Instant::now() + Duration::from_millis(2200),
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    Event::KeyDown {
+                        keycode: Some(Keycode::F7),
+                        repeat: false,
+                        ..
+                    } if net_session.is_none() && match_replay_playback.is_none() => {
+                        if let (Some(c), Some(slot)) = (&core, lab_save_slot.as_ref()) {
+                            if c.load_state(slot) {
+                                input::clear_all_inputs();
+                                input_history.clear();
+                                println!("[lab] Reset to saved point");
+                                toast = Some((
+                                    "Lab reset loaded".into(),
+                                    Instant::now() + Duration::from_millis(1800),
+                                ));
+                            } else {
+                                toast = Some((
+                                    "Lab reset failed".into(),
+                                    Instant::now() + Duration::from_millis(2200),
+                                ));
+                            }
+                        } else {
+                            toast = Some((
+                                "No lab reset point saved".into(),
+                                Instant::now() + Duration::from_millis(1800),
+                            ));
+                        }
+                    }
+                    Event::KeyDown {
                         keycode: Some(Keycode::F6),
                         repeat: false,
                         ..
                     } => {
-                        if net_session.is_some() {
+                        if match_replay_playback.is_some() {
+                            println!("[replay] Ghost recording disabled during replay playback.");
+                        } else if net_session.is_some() {
                             println!("[ghost] Recording disabled in netplay mode.");
                         } else if let Some(rec) = ghost_recording.take() {
                             match rec.save(&ghost_path) {
@@ -1867,7 +2041,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         repeat: false,
                         ..
                     } => {
-                        if net_session.is_some() {
+                        if match_replay_playback.is_some() {
+                            println!("[replay] Ghost playback disabled during replay playback.");
+                        } else if net_session.is_some() {
                             println!("[ghost] Playback disabled in netplay mode.");
                         } else if ghost_recording.is_some() {
                             println!("[ghost] Can't play back while recording.");
@@ -1898,7 +2074,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         repeat: false,
                         ..
                     } => {
-                        if net_session.is_some() {
+                        if match_replay_playback.is_some() {
+                            println!("[replay] Ghost opponent disabled during replay playback.");
+                        } else if net_session.is_some() {
                             println!("[ghost] Playback disabled in netplay mode.");
                         } else if ghost_recording.is_some() {
                             println!("[ghost] Can't play back while recording.");
@@ -1925,6 +2103,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             &mut ghost_playback,
                                             &mut drone_runner,
                                         );
+                                        match_replay_playback = None;
                                         input::clear_all_inputs();
                                         auto_start_done = false;
                                         auto_start_frame = 0;
@@ -1938,9 +2117,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     Event::KeyDown {
                         keycode: Some(Keycode::F11),
+                        keymod,
                         repeat: false,
                         ..
-                    } if net_session.is_none() => {
+                    } if net_session.is_none()
+                        && match_replay_playback.is_none()
+                        && keymod.intersects(Mod::LSHIFTMOD | Mod::RSHIFTMOD) =>
+                    {
                         if let Some(c) = &core {
                             if let Some(snap) = memory::snapshot(c) {
                                 let ts = std::time::SystemTime::now()
@@ -1958,6 +2141,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 println!("[F11] Core exposed no SYSTEM_RAM");
                             }
                         }
+                    }
+                    Event::KeyDown {
+                        keycode: Some(Keycode::F11),
+                        repeat: false,
+                        ..
+                    } if net_session.is_none() && match_replay_playback.is_none() => {
+                        lab_assist_visible = !lab_assist_visible;
+                        toast = Some((
+                            format!(
+                                "Lab assist {}",
+                                if lab_assist_visible { "ON" } else { "OFF" }
+                            ),
+                            Instant::now() + Duration::from_millis(1800),
+                        ));
                     }
                     Event::KeyDown {
                         keycode: Some(k),
@@ -2112,6 +2309,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             sess,
                             local_handle,
                             &mut net_recording,
+                            &mut match_replay_recording,
                             &mut net_log,
                             &mut net_runtime,
                         );
@@ -2190,8 +2388,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                             }
                         }
+                    } else if let Some(pb) = match_replay_playback.as_mut() {
+                        if !pb.inject_next() {
+                            println!("[replay] Playback complete ({} frames).", pb.frame_count());
+                            match_replay_playback = None;
+                            input::clear_all_inputs();
+                            state = AppState::Menu(MenuScreen::ReplaySelect {
+                                cursor: 0,
+                                entries: vec![],
+                                status: Some("Replay complete".into()),
+                            });
+                            refresh_replay_select(&mut state, Some("Replay complete".into()));
+                        } else {
+                            unsafe {
+                                (c.run)();
+                            }
+                        }
                     } else {
                         input::commit_live_to_state();
+                        input_history.step(input::snapshot_player(Player::P1));
                         if !auto_start_done {
                             let gstate = memory::peek_u16(c, GSTATE_ADDR, memory::Endian::Little)
                                 .unwrap_or(0);
@@ -2288,7 +2503,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     .unwrap_or(0);
                                 let outcome = if p1_hp > p2_hp { "won" } else { "lost" };
                                 let msg = format!(
-                                    "🎮 **Ghost Match Result** — Player {} (P1 HP: 0x{p1_hp:04X} | P2 HP: 0x{p2_hp:04X})",
+                                    "Ghost Match Result - Player {} (P1 HP: 0x{p1_hp:04X} | P2 HP: 0x{p2_hp:04X})",
                                     outcome
                                 );
                                 println!("[ghost] Match end: {msg}");
@@ -2300,7 +2515,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             ghost_in_fight = false;
                         }
                     }
-                    if net_session.is_none() {
+                    if matches!(state, AppState::Playing)
+                        && net_session.is_none()
+                        && match_replay_playback.is_none()
+                    {
                         trainer.apply(c);
                     }
                     if let Some(q) = &audio_queue {
@@ -2446,6 +2664,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             discord_id.as_deref(),
                             &format!("{:016x}", rom_hash_u64),
                         );
+                        match_replay::finalize_recording(&mut match_replay_recording);
                         net_session = None;
                         net_match_count = 0;
                         net_in_fight = false;
@@ -2464,7 +2683,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         peer_name = None;
                         auto_start_done = false;
                         auto_start_frame = 0;
-                        _save_slot = None;
+                        lab_save_slot = None;
                         ghost_recording = None;
                         ghost_playback = None;
                         if let Some(recorder) = clip_recorder.take() {
@@ -2528,6 +2747,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         } else {
                             peer_name.as_deref()
                         }
+                    } else if let Some(pb) = match_replay_playback.as_ref() {
+                        Some(pb.p1_name())
                     } else if ghost_playback.is_some()
                         && (ghost_port_mask & 0b01) != 0
                         && (ghost_port_mask & 0b10) == 0
@@ -2542,6 +2763,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         } else {
                             peer_name.as_deref()
                         }
+                    } else if let Some(pb) = match_replay_playback.as_ref() {
+                        Some(pb.p2_name())
                     } else if ghost_playback.is_some() {
                         if (ghost_port_mask & 0b10) != 0 {
                             Some(ghost_name)
@@ -2599,6 +2822,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         )
                         .map_err(|e| format!("recording indicator: {e}"))?;
                     }
+                    canvas.set_logical_size(LOGICAL_W as u32, LOGICAL_H as u32)?;
+                }
+                if net_session.is_none() && match_replay_playback.is_none() && lab_assist_visible {
+                    canvas.set_logical_size(0, 0)?;
+                    let (win_w, win_h) = canvas.output_size().unwrap_or((1200, 762));
+                    draw_lab_assist_overlay(
+                        &mut canvas,
+                        &mut font,
+                        win_w as i32,
+                        win_h as i32,
+                        &input_history,
+                    )
+                    .map_err(|e| format!("lab assist overlay: {e}"))?;
                     canvas.set_logical_size(LOGICAL_W as u32, LOGICAL_H as u32)?;
                 }
                 if net_session.is_some() && (chat_open || !chat_lines.is_empty()) {
@@ -2691,11 +2927,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     reset_for_netplay(
                                         c,
                                         &mut trainer,
-                                        &mut _save_slot,
+                                        &mut lab_save_slot,
                                         &mut ghost_playback,
                                         &mut ghost_recording,
                                     );
                                 }
+                                match_replay_playback = None;
+                                input_history.clear();
 
                                 local_handle = if is_host { 0 } else { 1 };
                                 let mut log = open_net_log();
@@ -2802,6 +3040,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             stun_peer,
                                             GHOST_CAP_PER_PEER,
                                         );
+                                        let (p1, p2) = replay_names(
+                                            local_handle,
+                                            discord_user.as_deref(),
+                                            peer_name.as_deref(),
+                                        );
+                                        match_replay_recording =
+                                            Some(match_replay::Recording::new(p1, p2));
                                         net_log = log;
                                         let who = discord_user.as_deref().unwrap_or("Anonymous");
                                         let role = if local_handle == 0 { "P1" } else { "P2" };
@@ -3292,6 +3537,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     &mut ghost_playback,
                                                     &mut drone_runner,
                                                 );
+                                                match_replay_playback = None;
                                                 input::clear_all_inputs();
                                                 auto_start_done = false;
                                                 auto_start_frame = 0;

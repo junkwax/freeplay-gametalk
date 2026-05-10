@@ -78,6 +78,13 @@ pub enum MenuScreen {
         entries: Vec<GhostEntry>,
         download_status: Option<String>,
     },
+    /// Browse locally saved full match replays. These are deterministic set
+    /// replays and are intentionally separate from ghost opponent files.
+    ReplaySelect {
+        cursor: usize,
+        entries: Vec<ReplayEntry>,
+        status: Option<String>,
+    },
     /// Player rating + recent matches fetched from freeplay-stats. Loads
     /// asynchronously — main.rs swaps the inner state as the fetch completes.
     Profile {
@@ -150,6 +157,15 @@ pub enum GhostEntry {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReplayEntry {
+    pub filename: String,
+    pub path: String,
+    pub p1_name: String,
+    pub p2_name: String,
+    pub frame_count: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProfileScreenState {
     /// No active player identity is available yet.
     NotLoggedIn,
@@ -212,11 +228,12 @@ impl Default for AppState {
 ///
 /// Watch Live, Leaderboard, and Training are still implemented, but are hidden
 /// from the public menu for now to keep the first-run footprint focused.
-pub const MAIN_ITEMS: [&str; 8] = [
+pub const MAIN_ITEMS: [&str; 9] = [
     "Find Match",
     "Lab",
     "Profile",
     "Load Ghosts",
+    "Watch Replays",
     "Controls",
     "Settings",
     "About",
@@ -303,6 +320,10 @@ pub enum NavResult {
     /// Open Training helper menu.
     #[allow(dead_code)]
     OpenTraining,
+    /// Enter the local full-replay browser.
+    OpenReplaySelect,
+    /// Load and play a full deterministic match replay.
+    LoadReplay(String),
     /// Toggle named training helper.
     ToggleTraining(&'static str),
     /// Launch the external setup diagnostics window.
@@ -323,6 +344,9 @@ impl AppState {
                 *cursor = cursor.saturating_sub(1);
             }
             AppState::Menu(MenuScreen::GhostSelect { cursor, .. }) => {
+                *cursor = cursor.saturating_sub(1);
+            }
+            AppState::Menu(MenuScreen::ReplaySelect { cursor, .. }) => {
                 *cursor = cursor.saturating_sub(1);
             }
             AppState::Menu(MenuScreen::LiveMatches { cursor, .. }) => {
@@ -351,6 +375,13 @@ impl AppState {
                 }
             }
             AppState::Menu(MenuScreen::GhostSelect {
+                cursor, entries, ..
+            }) => {
+                if *cursor + 1 < entries.len() {
+                    *cursor += 1;
+                }
+            }
+            AppState::Menu(MenuScreen::ReplaySelect {
                 cursor, entries, ..
             }) => {
                 if *cursor + 1 < entries.len() {
@@ -419,6 +450,15 @@ impl AppState {
                     NavResult::OpenGhostSelect
                 }
                 4 => {
+                    // Watch Replays
+                    *self = AppState::Menu(MenuScreen::ReplaySelect {
+                        cursor: 0,
+                        entries: vec![],
+                        status: None,
+                    });
+                    NavResult::OpenReplaySelect
+                }
+                5 => {
                     // Controls
                     *self = AppState::Menu(MenuScreen::Controls {
                         cursor: 0,
@@ -426,7 +466,7 @@ impl AppState {
                     });
                     NavResult::Stay
                 }
-                5 => {
+                6 => {
                     // Settings
                     *self = AppState::Menu(MenuScreen::Settings {
                         cursor: 0,
@@ -444,12 +484,12 @@ impl AppState {
                     });
                     NavResult::OpenSettings
                 }
-                6 => {
+                7 => {
                     // About
                     *self = AppState::Menu(MenuScreen::About);
                     NavResult::Stay
                 }
-                7 => NavResult::Quit,
+                8 => NavResult::Quit,
                 _ => NavResult::Stay,
             },
             AppState::Menu(MenuScreen::Controls { cursor, player }) => {
@@ -476,6 +516,15 @@ impl AppState {
                         GhostEntry::Local { path, .. } => NavResult::LoadGhost(path.clone()),
                         GhostEntry::Remote(meta) => NavResult::DownloadGhost(meta.ghost_id.clone()),
                     }
+                } else {
+                    NavResult::Stay
+                }
+            }
+            AppState::Menu(MenuScreen::ReplaySelect {
+                cursor, entries, ..
+            }) => {
+                if let Some(entry) = entries.get(cursor) {
+                    NavResult::LoadReplay(entry.path.clone())
                 } else {
                     NavResult::Stay
                 }
@@ -572,6 +621,7 @@ impl AppState {
             | AppState::Menu(MenuScreen::Matchmaking { .. })
             | AppState::Menu(MenuScreen::MatchUsername { .. })
             | AppState::Menu(MenuScreen::GhostSelect { .. })
+            | AppState::Menu(MenuScreen::ReplaySelect { .. })
             | AppState::Menu(MenuScreen::Profile { .. })
             | AppState::Menu(MenuScreen::Leaderboard { .. })
             | AppState::Menu(MenuScreen::Settings { .. })
@@ -722,6 +772,11 @@ pub fn draw(
             w,
             h,
         )?,
+        AppState::Menu(MenuScreen::ReplaySelect {
+            cursor,
+            entries,
+            status,
+        }) => draw_replay_select(canvas, font, *cursor, entries, status.as_deref(), w, h)?,
         AppState::Menu(MenuScreen::Profile { state }) => draw_profile(canvas, font, state, w, h)?,
         AppState::Menu(MenuScreen::Leaderboard { state }) => {
             draw_leaderboard(canvas, font, state, w, h)?
@@ -1411,8 +1466,8 @@ fn draw_about(canvas: &mut Canvas<Window>, font: &mut Font, w: i32, h: i32) -> R
     draw_title(canvas, font, "ABOUT", w, h)?;
     let body = body_scale(h);
     let small = small_scale(h);
-    let content_scale = small;
-    let line_h = 18 * content_scale as i32;
+    let content_scale = 1;
+    let line_h = 18;
     let title_rule_y = 24 + (24 * title_scale(h) as i32);
     let content_x = (w / 12).max(42);
     let content_w = w - content_x * 2;
@@ -1448,23 +1503,23 @@ fn draw_about(canvas: &mut Canvas<Window>, font: &mut Font, w: i32, h: i32) -> R
     let header = Color::RGB(220, 200, 120);
     let body_c = Color::RGB(190, 190, 200);
 
-    draw_panel(canvas, left_x, y, col_w, 224, Color::RGBA(15, 16, 24, 220))?;
-    draw_panel(canvas, right_x, y, col_w, 224, Color::RGBA(15, 16, 24, 220))?;
-    font.draw(canvas, "LAB HOTKEYS", left_x + 14, y + 12, body, header)?;
-    font.draw(canvas, "NETPLAY", right_x + 14, y + 12, body, header)?;
-    y += 44;
-
     let left = [
         "F1   Hitbox overlay",
+        "F2   Hitbox overlay",
         "F3   Infinite health",
         "F4   Freeze timer",
+        "F5   Save lab reset",
         "F6   Ghost record",
+        "F7   Load lab reset",
         "F8   Ghost playback",
+        "F11  Show/hide lab assist",
+        "F12  Play vs ghost",
+        "F10  Toggle ghost drone",
         "Ctrl+R Record clip",
         "Ctrl+F Video filter",
         "Ctrl+A Aspect",
-        "F12  Play vs ghost",
-        "F10  Drone during ghost",
+        "F9   Rewind test",
+        "Shift+F11 Dump RAM",
     ];
     let right = [
         "Auto-skip attract on both sides",
@@ -1476,11 +1531,42 @@ fn draw_about(canvas: &mut Canvas<Window>, font: &mut Font, w: i32, h: i32) -> R
         "F1 exits online gracefully",
         "Logs: freeplay-net.log",
         "",
+        "Replays save after sets",
+        "Watch Replays from menu",
+        "",
+        "T opens chat online",
+        "Enter/Start sends chat",
+        "Esc/B/Back closes chat",
     ];
-    for (l, r) in left.iter().zip(right.iter()) {
-        font.draw(canvas, l, left_x + 18, y, content_scale, body_c)?;
-        if !r.is_empty() {
-            font.draw(canvas, r, right_x + 18, y, content_scale, body_c)?;
+    let panel_h = 54 + left.len().max(right.len()) as i32 * line_h;
+    draw_panel(
+        canvas,
+        left_x,
+        y,
+        col_w,
+        panel_h,
+        Color::RGBA(15, 16, 24, 220),
+    )?;
+    draw_panel(
+        canvas,
+        right_x,
+        y,
+        col_w,
+        panel_h,
+        Color::RGBA(15, 16, 24, 220),
+    )?;
+    font.draw(canvas, "LAB HOTKEYS", left_x + 14, y + 12, body, header)?;
+    font.draw(canvas, "NETPLAY", right_x + 14, y + 12, body, header)?;
+    y += 44;
+
+    for i in 0..left.len().max(right.len()) {
+        if let Some(l) = left.get(i) {
+            font.draw(canvas, l, left_x + 18, y, content_scale, body_c)?;
+        }
+        if let Some(r) = right.get(i) {
+            if !r.is_empty() {
+                font.draw(canvas, r, right_x + 18, y, content_scale, body_c)?;
+            }
         }
         y += line_h;
     }
@@ -2412,7 +2498,8 @@ fn draw_training(
     y += TRAINING_ITEMS.len() as i32 * row_h + 20;
     let notes = [
         "These helpers are disabled during online matches.",
-        "F1/F3/F4 still toggle them while playing.",
+        "F1/F2/F3/F4 toggle training overlays while playing.",
+        "F5/F7 save/load Lab reset points; F11 shows Lab assist.",
     ];
     for note in notes {
         font.draw(canvas, note, x, y, small, Color::RGB(130, 140, 165))?;
@@ -2918,12 +3005,190 @@ fn draw_ghost_select(
     Ok(())
 }
 
+fn draw_replay_select(
+    canvas: &mut Canvas<Window>,
+    font: &mut Font,
+    cursor: usize,
+    entries: &[ReplayEntry],
+    status: Option<&str>,
+    w: i32,
+    h: i32,
+) -> Result<(), String> {
+    draw_title(canvas, font, "WATCH REPLAY", w, h)?;
+    let small = small_scale(h);
+    let cx = w / 2;
+    let content_x = (w / 12).max(42);
+    let content_w = w - content_x * 2;
+    let row_h = 34 * small as i32;
+    let mut y = 112;
+
+    if entries.is_empty() {
+        draw_panel(
+            canvas,
+            content_x,
+            y - 14,
+            content_w,
+            92,
+            Color::RGBA(15, 16, 24, 225),
+        )?;
+        let msg = status.unwrap_or("No saved replays found");
+        let msg = fit_line(font, msg, small, content_w - 24);
+        let tw = font.text_width_exact(&msg, small);
+        font.draw(
+            canvas,
+            &msg,
+            cx - tw / 2,
+            y,
+            small,
+            Color::RGB(180, 180, 200),
+        )?;
+        y += 24 * small as i32;
+        let hint = "Completed online sets save here automatically";
+        let hw = font.text_width_exact(hint, small);
+        font.draw(
+            canvas,
+            hint,
+            cx - hw / 2,
+            y,
+            small,
+            Color::RGB(140, 140, 160),
+        )?;
+    } else {
+        let header = format!("{} replays available", entries.len());
+        font.draw(
+            canvas,
+            &header,
+            content_x,
+            y - 24,
+            small,
+            Color::RGB(150, 156, 176),
+        )?;
+
+        let max_visible = ((h - y - 62) / row_h).max(4) as usize;
+        let start = if cursor >= max_visible {
+            cursor - max_visible + 1
+        } else {
+            0
+        };
+        let end = (start + max_visible).min(entries.len());
+
+        for i in start..end {
+            let selected = i == cursor;
+            let entry = &entries[i];
+            let display = fit_line(
+                font,
+                &format!("{} vs {}", entry.p1_name, entry.p2_name),
+                small,
+                content_w - 220,
+            );
+            let subtitle = {
+                let time = parse_replay_time(&entry.filename);
+                if time.is_empty() {
+                    format!("{} frames", entry.frame_count)
+                } else {
+                    format!("{} frames \u{2022} {time}", entry.frame_count)
+                }
+            };
+            let bg = if selected {
+                Color::RGBA(30, 44, 56, 235)
+            } else {
+                Color::RGBA(15, 16, 24, 215)
+            };
+            canvas.set_draw_color(bg);
+            canvas.fill_rect(Rect::new(
+                content_x,
+                y - 4,
+                content_w as u32,
+                (row_h - 4) as u32,
+            ))?;
+            canvas.set_draw_color(if selected {
+                Color::RGB(100, 210, 255)
+            } else {
+                Color::RGBA(70, 72, 88, 220)
+            });
+            canvas.fill_rect(Rect::new(content_x, y - 4, 3, (row_h - 4) as u32))?;
+            font.draw(
+                canvas,
+                "LOCAL",
+                content_x + 12,
+                y,
+                small,
+                Color::RGB(130, 136, 152),
+            )?;
+            font.draw(
+                canvas,
+                &display,
+                content_x + 86,
+                y,
+                small,
+                if selected {
+                    Color::RGB(190, 235, 255)
+                } else {
+                    Color::RGB(220, 222, 232)
+                },
+            )?;
+            let sw = font.text_width_exact(&subtitle, small);
+            font.draw(
+                canvas,
+                &subtitle,
+                content_x + content_w - sw - 14,
+                y,
+                small,
+                Color::RGB(130, 136, 152),
+            )?;
+            y += row_h;
+        }
+    }
+
+    if let Some(status) = status.filter(|_| !entries.is_empty()) {
+        let status = fit_line(font, status, small, w - 48);
+        let sw = font.text_width_exact(&status, small);
+        font.draw(
+            canvas,
+            &status,
+            (w - sw) / 2,
+            h - 54,
+            small,
+            Color::RGB(190, 200, 235),
+        )?;
+    }
+
+    let footer = "B/ESC Back   A/ENTER Watch";
+    let fw = font.text_width_exact(footer, small);
+    font.draw(
+        canvas,
+        footer,
+        (w - fw) / 2,
+        h - 28,
+        small,
+        Color::RGB(100, 100, 100),
+    )?;
+    Ok(())
+}
+
 fn strip_ncgh(s: &str) -> String {
     if s.ends_with(".ncgh") {
         s[..s.len() - 5].to_string()
     } else {
         s.to_string()
     }
+}
+
+fn strip_ncrp(s: &str) -> String {
+    if s.ends_with(".ncrp") {
+        s[..s.len() - 5].to_string()
+    } else {
+        s.to_string()
+    }
+}
+
+fn parse_replay_time(filename: &str) -> String {
+    let base = strip_ncrp(filename);
+    let ts = base.split('_').next().unwrap_or("");
+    if let Ok(n) = ts.parse::<u64>() {
+        return format!("Recorded {}", chrono_prelude(n as i64));
+    }
+    String::new()
 }
 
 fn parse_ghost_time(filename: &str) -> String {

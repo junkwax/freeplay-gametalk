@@ -98,6 +98,8 @@ ghost.bin
 ghosts/
 ghost_library.json
 *.ncgh
+replays/
+*.ncrp
 *.state
 clips/
 

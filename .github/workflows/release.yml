@@ -26,8 +26,30 @@ env:
   FBNEO_REF: master
 
 jobs:
+  validate-version:
+    name: Validate release version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure tag matches Cargo.toml
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          tag="${REF_NAME}"
+          if [ "$EVENT_NAME" != "push" ]; then tag="${INPUT_TAG}"; fi
+          version="$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "([^"]+)"/\1/')"
+          expected="v${version}"
+          if [ "$tag" != "$expected" ]; then
+            echo "Release tag ${tag} does not match Cargo.toml version ${version}; expected ${expected}." >&2
+            exit 1
+          fi
+
   windows:
     name: Windows release package
+    needs: validate-version
     runs-on: windows-latest
     env:
       VCPKG_DEFAULT_TRIPLET: x64-windows
@@ -124,6 +146,7 @@ jobs:
 
   linux:
     name: Linux release package
+    needs: validate-version
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -188,6 +211,7 @@ jobs:
 
   macos:
     name: macOS release package
+    needs: validate-version
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4

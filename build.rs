@@ -11,17 +11,12 @@ fn main() {
     let (y, m, d) = civil_date(secs);
     println!("cargo:rustc-env=FREEPLAY_BUILD_DATE={y:04}-{m:02}-{d:02}");
 
-    // Best-effort git short hash. Silently absent if git isn't available.
-    if let Ok(out) = std::process::Command::new("git")
-        .args(["rev-parse", "--short", "HEAD"])
-        .output()
-    {
-        if out.status.success() {
-            let hash = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !hash.is_empty() {
-                println!("cargo:rustc-env=FREEPLAY_GIT_HASH={hash}");
-            }
+    // Best-effort git revision. Silently absent if git isn't available.
+    if let Some(mut hash) = git_output(["rev-parse", "--short", "HEAD"]) {
+        if git_is_dirty() {
+            hash.push_str("-dirty");
         }
+        println!("cargo:rustc-env=FREEPLAY_GIT_HASH={hash}");
     }
 
     // Tell the linker where to find SDL2.lib / SDL2_ttf.lib on Windows.
@@ -34,6 +29,41 @@ fn main() {
     // src changes for the main build, but build scripts need explicit hints.
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src");
+    print_git_rerun_hints();
+}
+
+fn git_output<const N: usize>(args: [&str; N]) -> Option<String> {
+    let out = std::process::Command::new("git").args(args).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let value = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!value.is_empty()).then_some(value)
+}
+
+fn git_is_dirty() -> bool {
+    !git_status_ok(["diff", "--quiet"]) || !git_status_ok(["diff", "--cached", "--quiet"])
+}
+
+fn git_status_ok<const N: usize>(args: [&str; N]) -> bool {
+    std::process::Command::new("git")
+        .args(args)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(true)
+}
+
+fn print_git_rerun_hints() {
+    println!("cargo:rerun-if-changed=.git/HEAD");
+    println!("cargo:rerun-if-changed=.git/index");
+
+    let head = match std::fs::read_to_string(".git/HEAD") {
+        Ok(head) => head,
+        Err(_) => return,
+    };
+    if let Some(reference) = head.trim().strip_prefix("ref: ") {
+        println!("cargo:rerun-if-changed=.git/{reference}");
+    }
 }
 
 fn embed_windows_icon() {

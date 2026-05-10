@@ -572,6 +572,111 @@ pub fn draw_chat_overlay(
     Ok(())
 }
 
+pub fn draw_lab_assist_overlay(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    font: &mut Font,
+    window_w: i32,
+    window_h: i32,
+    history: &crate::input_history::InputHistory,
+) -> Result<(), String> {
+    let scale = 1;
+    let pad = 10;
+    let line_h = 18;
+    let box_w = 238;
+    let x = window_w - box_w - 18;
+    let mut y = 72;
+
+    let hotkeys = [
+        "F1  HITBOXES",
+        "F2  HITBOXES",
+        "F3  HEALTH",
+        "F4  TIMER",
+        "F5  SAVE RESET",
+        "F6  RECORD GHOST",
+        "F7  LOAD RESET",
+        "F8  FULL GHOST",
+        "F11 HIDE HELP",
+        "F12 VS GHOST",
+    ];
+    let hotkey_h = pad * 2 + line_h * (hotkeys.len() as i32 + 1);
+    canvas.set_draw_color(Color::RGBA(8, 10, 18, 190));
+    canvas.fill_rect(Rect::new(x, y, box_w as u32, hotkey_h as u32))?;
+    canvas.set_draw_color(Color::RGBA(95, 130, 210, 180));
+    canvas.draw_rect(Rect::new(x, y, box_w as u32, hotkey_h as u32))?;
+    font.draw_overlay(
+        canvas,
+        "LAB HOTKEYS",
+        x + pad,
+        y + pad,
+        scale,
+        Color::RGBA(255, 210, 90, 240),
+    )?;
+    let mut row_y = y + pad + line_h;
+    for row in hotkeys {
+        font.draw_overlay(
+            canvas,
+            row,
+            x + pad,
+            row_y,
+            scale,
+            Color::RGBA(210, 220, 245, 225),
+        )?;
+        row_y += line_h;
+    }
+
+    let rows: Vec<String> = history
+        .entries()
+        .take(8)
+        .map(|entry| {
+            format!(
+                "{:<18} {:>3}f",
+                crate::input_history::format_bits(entry.bits),
+                entry.frames.min(999)
+            )
+        })
+        .collect();
+    let input_rows = rows.len().max(1);
+    let box_h = pad * 2 + line_h * (input_rows as i32 + 1);
+    y = (y + hotkey_h + 10).min(window_h - box_h - 24).max(72);
+
+    canvas.set_draw_color(Color::RGBA(8, 10, 18, 190));
+    canvas.fill_rect(Rect::new(x, y, box_w as u32, box_h as u32))?;
+    canvas.set_draw_color(Color::RGBA(95, 130, 210, 180));
+    canvas.draw_rect(Rect::new(x, y, box_w as u32, box_h as u32))?;
+    font.draw_overlay(
+        canvas,
+        "P1 INPUTS",
+        x + pad,
+        y + pad,
+        scale,
+        Color::RGBA(255, 210, 90, 240),
+    )?;
+    let mut row_y = y + pad + line_h;
+    if rows.is_empty() {
+        font.draw_overlay(
+            canvas,
+            "NO INPUT",
+            x + pad,
+            row_y,
+            scale,
+            Color::RGBA(150, 165, 195, 180),
+        )?;
+    } else {
+        for row in rows {
+            font.draw_overlay(
+                canvas,
+                &row,
+                x + pad,
+                row_y,
+                scale,
+                Color::RGBA(230, 238, 255, 230),
+            )?;
+            row_y += line_h;
+        }
+    }
+    Ok(())
+}
+
 fn draw_fight_overlay_plates(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     font: &mut Font,

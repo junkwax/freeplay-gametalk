@@ -8,7 +8,7 @@
 // ## RAM addresses (MK2 T-Unit 3.0, FBNeo SYSTEM_RAM, little-endian)
 //
 // These offsets are derived from the MK2 source tree. If addresses change
-// between ROM revisions, press F11 to dump RAM, move char, dump again,
+// between ROM revisions, press Shift+F11 to dump RAM, move char, dump again,
 // and diff with `python ram_diff.py before.bin after.bin`.
 //
 //   P1_X        = 0x253E8  s16   horizontal position
