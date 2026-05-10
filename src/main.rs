@@ -386,9 +386,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     const GHOST_CAP_PER_PEER: u32 = 3;
     let mut ghost_library = ghost::Library::load_default();
     let mut net_recording: Option<ghost::NetRecording> = None;
-    // MK2 `f_colbox` lives at 0x22576c in the 68000 map, which is 0x2576c
-    // in FBNeo SYSTEM_RAM. Match the debugger's `w@0x22576c=1` 68k word write.
-    const HITBOX_FLAG_ADDR: usize = 0x2576C;
+    // This flag has historically worked at this FBNeo SYSTEM_RAM offset. Keep
+    // it in sync with netcore::reset_for_netplay, which clears the same slot.
+    const HITBOX_FLAG_ADDR: usize = 0x2576E;
 
     let mut trainer = memory::PokeList::new();
     trainer.add(
@@ -412,12 +412,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         memory::Poke::U16 {
             addr: HITBOX_FLAG_ADDR,
             value: 0x0001,
-            endian: memory::Endian::Big,
+            endian: memory::Endian::Little,
         },
         memory::Poke::U16 {
             addr: HITBOX_FLAG_ADDR,
             value: 0x0000,
-            endian: memory::Endian::Big,
+            endian: memory::Endian::Little,
         },
     );
     trainer.add_with_release(

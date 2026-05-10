@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.20 - 2026-05-10
+
+### Fixed
+
+- Added proper header-to-body padding in the in-game Lab hotkeys and P1 input
+  panels so the first row no longer overlaps the yellow headers.
+- Restored the Lab hitbox flag to the old working `0x2576E` RAM slot used by
+  earlier builds and the netplay reset path.
+
 ## 0.5.19 - 2026-05-10
 
 ### Fixed

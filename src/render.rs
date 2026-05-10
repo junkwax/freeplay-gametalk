@@ -586,6 +586,7 @@ pub fn draw_lab_assist_overlay(
     let body_scale = 1;
     let pad = 8;
     let line_h = 16;
+    let header_gap = 30;
     let hotkeys = vec![
         format!("F2  BOXES {}", if hitboxes_on { "ON" } else { "OFF" }),
         format!("F3  HEALTH {}", if health_on { "ON" } else { "OFF" }),
@@ -598,7 +599,7 @@ pub fn draw_lab_assist_overlay(
         "F11 HIDE HELP".to_string(),
         "F12 VS GHOST".to_string(),
     ];
-    let hotkey_h = pad * 2 + line_h * (hotkeys.len() as i32 + 1);
+    let hotkey_h = pad * 2 + header_gap + line_h * hotkeys.len() as i32;
     let rows: Vec<(String, String)> = history
         .entries()
         .take(6)
@@ -610,7 +611,7 @@ pub fn draw_lab_assist_overlay(
         })
         .collect();
     let input_rows = rows.len().max(1);
-    let input_h = pad * 2 + line_h * (input_rows as i32 + 1);
+    let input_h = pad * 2 + header_gap + line_h * input_rows as i32;
     let mut content_w = font.text_width_overlay("LAB HOTKEYS", header_scale);
     content_w = content_w.max(font.text_width_overlay("P1 INPUTS", header_scale));
     for line in &hotkeys {
@@ -643,7 +644,7 @@ pub fn draw_lab_assist_overlay(
         header_scale,
         Color::RGBA(255, 210, 90, 240),
     )?;
-    let mut row_y = y + pad + line_h;
+    let mut row_y = y + pad + header_gap;
     for line in hotkeys {
         let clipped = fit_text_exact(font, &line, body_scale, box_w - pad * 2);
         font.draw(
@@ -671,7 +672,7 @@ pub fn draw_lab_assist_overlay(
         header_scale,
         Color::RGBA(255, 210, 90, 240),
     )?;
-    let mut row_y = y + pad + line_h;
+    let mut row_y = y + pad + header_gap;
     if rows.is_empty() {
         font.draw(
             canvas,
