@@ -180,8 +180,8 @@ published as a GitHub Release.
 Create and publish a release by pushing a version tag:
 
 ```powershell
-git tag v0.5.18
-git push origin v0.5.18
+git tag v0.5.19
+git push origin v0.5.19
 ```
 
 The release workflow fails if the pushed tag does not match the version in

@@ -582,7 +582,8 @@ pub fn draw_lab_assist_overlay(
     health_on: bool,
     timer_on: bool,
 ) -> Result<(), String> {
-    let scale = 1;
+    let header_scale = 1;
+    let body_scale = 1;
     let pad = 8;
     let line_h = 16;
     let hotkeys = vec![
@@ -610,14 +611,15 @@ pub fn draw_lab_assist_overlay(
         .collect();
     let input_rows = rows.len().max(1);
     let input_h = pad * 2 + line_h * (input_rows as i32 + 1);
-    let mut content_w = font.text_width_overlay("LAB HOTKEYS", scale);
-    content_w = content_w.max(font.text_width_overlay("P1 INPUTS", scale));
+    let mut content_w = font.text_width_overlay("LAB HOTKEYS", header_scale);
+    content_w = content_w.max(font.text_width_overlay("P1 INPUTS", header_scale));
     for line in &hotkeys {
-        content_w = content_w.max(font.text_width_overlay(line, scale));
+        content_w = content_w.max(font.text_width_exact(line, body_scale));
     }
     for (input, frames) in &rows {
-        let row_w =
-            font.text_width_overlay(input, scale) + 48 + font.text_width_overlay(frames, scale);
+        let row_w = font.text_width_exact(input, body_scale)
+            + 48
+            + font.text_width_exact(frames, body_scale);
         content_w = content_w.max(row_w);
     }
     let box_w = (content_w + pad * 2).clamp(196, 286);
@@ -638,18 +640,18 @@ pub fn draw_lab_assist_overlay(
         "LAB HOTKEYS",
         x + pad,
         y + pad,
-        scale,
+        header_scale,
         Color::RGBA(255, 210, 90, 240),
     )?;
     let mut row_y = y + pad + line_h;
     for line in hotkeys {
-        let clipped = fit_overlay_text(font, &line, scale, box_w - pad * 2);
-        font.draw_overlay(
+        let clipped = fit_text_exact(font, &line, body_scale, box_w - pad * 2);
+        font.draw(
             canvas,
             &clipped,
             x + pad,
             row_y,
-            scale,
+            body_scale,
             Color::RGBA(210, 220, 245, 225),
         )?;
         row_y += line_h;
@@ -666,39 +668,39 @@ pub fn draw_lab_assist_overlay(
         "P1 INPUTS",
         x + pad,
         y + pad,
-        scale,
+        header_scale,
         Color::RGBA(255, 210, 90, 240),
     )?;
     let mut row_y = y + pad + line_h;
     if rows.is_empty() {
-        font.draw_overlay(
+        font.draw(
             canvas,
             "NO INPUT",
             x + pad,
             row_y,
-            scale,
+            body_scale,
             Color::RGBA(150, 165, 195, 180),
         )?;
     } else {
         let frame_right = x + box_w - pad;
         let input_max_w = box_w - pad * 2 - 48;
         for (input, frames) in rows {
-            let clipped = fit_overlay_text(font, &input, scale, input_max_w);
-            font.draw_overlay(
+            let clipped = fit_text_exact(font, &input, body_scale, input_max_w);
+            font.draw(
                 canvas,
                 &clipped,
                 x + pad,
                 row_y,
-                scale,
+                body_scale,
                 Color::RGBA(230, 238, 255, 230),
             )?;
-            let frame_w = font.text_width_overlay(&frames, scale);
-            font.draw_overlay(
+            let frame_w = font.text_width_exact(&frames, body_scale);
+            font.draw(
                 canvas,
                 &frames,
                 frame_right - frame_w,
                 row_y,
-                scale,
+                body_scale,
                 Color::RGBA(230, 238, 255, 230),
             )?;
             row_y += line_h;
@@ -914,6 +916,28 @@ fn fit_overlay_text(font: &mut Font, text: &str, scale: u32, max_w: i32) -> Stri
     for ch in text.chars() {
         let candidate = format!("{out}{ch}...");
         if font.text_width_overlay(&candidate, scale) > max_w {
+            break;
+        }
+        out.push(ch);
+    }
+
+    if out.is_empty() {
+        "...".to_string()
+    } else {
+        out.push_str("...");
+        out
+    }
+}
+
+fn fit_text_exact(font: &mut Font, text: &str, scale: u32, max_w: i32) -> String {
+    if font.text_width_exact(text, scale) <= max_w {
+        return text.to_string();
+    }
+
+    let mut out = String::new();
+    for ch in text.chars() {
+        let candidate = format!("{out}{ch}...");
+        if font.text_width_exact(&candidate, scale) > max_w {
             break;
         }
         out.push(ch);

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.19 - 2026-05-10
+
+### Fixed
+
+- Fixed the Lab hitbox overlay poke to match the 68000 word write used by the
+  debugger, restoring the green MK2 collision boxes when `F2` is enabled.
+- Changed the Lab assist body rows under `LAB HOTKEYS` and `P1 INPUTS` to use
+  the cleaner menu font style from the About screen.
+
 ## 0.5.18 - 2026-05-10
 
 ### Fixed
