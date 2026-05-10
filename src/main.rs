@@ -386,9 +386,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     const GHOST_CAP_PER_PEER: u32 = 3;
     let mut ghost_library = ghost::Library::load_default();
     let mut net_recording: Option<ghost::NetRecording> = None;
-    // This flag has historically worked at this FBNeo SYSTEM_RAM offset. Keep
-    // it in sync with netcore::reset_for_netplay, which clears the same slot.
-    const HITBOX_FLAG_ADDR: usize = 0x2576E;
+    // Current mk2.map: f_colbox bit 0x0112bb90 -> MAME byte 0x225772,
+    // which maps to FBNeo SYSTEM_RAM offset 0x25772.
+    const HITBOX_FLAG_ADDR: usize = 0x25772;
 
     let mut trainer = memory::PokeList::new();
     trainer.add(

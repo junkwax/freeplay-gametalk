@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.21 - 2026-05-10
+
+### Fixed
+
+- Updated the Lab hitbox overlay flag to the current `mk2.map` derived
+  `f_colbox` RAM offset (`0x25772`), matching `w@0x225772=1` from
+  `hitbox_info.py`.
+
 ## 0.5.20 - 2026-05-10
 
 ### Fixed

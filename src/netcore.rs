@@ -47,7 +47,7 @@ pub fn reset_for_netplay(
     ghost_recording: &mut Option<ghost::Recording>,
 ) {
     use memory::{poke_u16, Endian};
-    const ZERO_TARGETS: &[usize] = &[0x250EE, 0x2576E];
+    const ZERO_TARGETS: &[usize] = &[0x250EE, 0x25772];
     for addr in ZERO_TARGETS {
         poke_u16(core, *addr, 0x0000, Endian::Little);
     }
