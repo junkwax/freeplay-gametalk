@@ -449,6 +449,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut net_frame_counter: u32 = 0;
     const GS_FIGHTING: u16 = 0x02;
     const GS_GAMEOVER: u16 = 0x0b;
+    const MATCH_WIN_TARGET: u16 = 2;
     let mut session_p1_wins: u32 = 0;
     let mut session_p2_wins: u32 = 0;
     const P1_HP_ADDR: usize = 0x253D6;
@@ -2717,18 +2718,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     cfg.aspect_mode,
                     cfg.crt_corner_bend,
                 )?;
-                // Draw the fight overlay only once fighters have spawned. gstate=0x02
-                // covers both the VS screen and actual combat; P1 HP is zero on VS
-                // and populated when the round intro loads. This also turns the
-                // names off after arcade endings/game-over flows.
+                // Draw the fight overlay once the stage/round has loaded. round_num
+                // flips on earlier than HP, so names appear during the intro instead
+                // of waiting until the "FIGHT" callout. Hide it once a match is
+                // decided so arcade endings after Shao Kahn do not keep the plates.
                 let in_fight_screen = core
                     .as_ref()
                     .map(|c| {
                         let gstate =
                             memory::peek_u16(c, GSTATE_ADDR, memory::Endian::Little).unwrap_or(0);
-                        let p1_hp =
-                            memory::peek_u16(c, P1_HP_ADDR, memory::Endian::Little).unwrap_or(0);
-                        matches!(gstate, GS_FIGHTING | 0x03) && p1_hp > 0
+                        let s = score::Score::read(c);
+                        let match_decided = s.p1_match_wins >= MATCH_WIN_TARGET
+                            || s.p2_match_wins >= MATCH_WIN_TARGET;
+                        gstate != 0
+                            && gstate != GS_AMODE
+                            && gstate != GS_GAMEOVER
+                            && s.round_num > 0
+                            && !match_decided
                     })
                     .unwrap_or(false);
                 if in_fight_screen {

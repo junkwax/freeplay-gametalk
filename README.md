@@ -33,6 +33,13 @@ URLs, OAuth client IDs, tokens, or webhooks.
 
 ## Release Notes
 
+### 0.5.15 - 2026-05-10
+
+- Restored fight overlay timing so player names appear when the round/stage
+  renders instead of waiting for the `FIGHT` callout, while hiding the plates
+  after the match is decided so Shao Kahn endings do not keep Lab names active.
+- Bumped the build to v0.5.15.
+
 ### 0.5.14 - 2026-05-10
 
 - Renamed Practice surfaces to Lab and fixed Lab overlays lingering after game
@@ -208,8 +215,8 @@ published as a GitHub Release.
 Create and publish a release by pushing a version tag:
 
 ```powershell
-git tag v0.5.14
-git push origin v0.5.14
+git tag v0.5.15
+git push origin v0.5.15
 ```
 
 The release workflow fails if the pushed tag does not match the version in
