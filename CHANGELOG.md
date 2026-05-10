@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.17 - 2026-05-10
+
+### Changed
+
+- Reassigned Lab hotkeys into ordered pairs: `F6/F7` load/save Lab reset
+  points and `F8/F9` load/save local ghosts.
+- Reserved `F1` for online match quit only; `F2` is now the single hitbox
+  toggle.
+- Moved the rewind determinism diagnostic from `F9` to `Shift+F9`.
+
 ## 0.5.16 - 2026-05-10
 
 ### Fixed

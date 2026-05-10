@@ -45,13 +45,13 @@ URLs, OAuth client IDs, tokens, or webhooks.
 ### Lab And Local Play
 
 - `Esc`: return to the main menu.
-- `F1` or `F2`: toggle hitbox overlay.
+- `F2`: toggle hitbox overlay.
 - `F3`: toggle infinite health.
 - `F4`: toggle freeze timer.
-- `F5`: save the current Lab reset point.
-- `F7`: load the saved Lab reset point.
-- `F6`: start/stop local ghost recording.
-- `F8`: full ghost playback from `ghost.bin`.
+- `F6`: load the saved Lab reset point.
+- `F7`: save the current Lab reset point.
+- `F8`: load/play full ghost playback from `ghost.bin`.
+- `F9`: start/stop local ghost recording.
 - `F10`: toggle reactive drone behavior while a ghost playback is active.
 - `F12`: play against a logic-driven P2 ghost opponent.
 - `F11`: show/hide the Lab assist panel, including P1 input history.
@@ -67,7 +67,7 @@ URLs, OAuth client IDs, tokens, or webhooks.
 - `F1`: leave an online set gracefully.
 - `Esc`: stop full replay playback and return to Watch Replays.
 - `Shift+F11`: dump SYSTEM_RAM for diagnostics.
-- `F9`: run the rewind determinism test.
+- `Shift+F9`: run the rewind determinism test.
 
 ## Requirements
 
@@ -180,8 +180,8 @@ published as a GitHub Release.
 Create and publish a release by pushing a version tag:
 
 ```powershell
-git tag v0.5.16
-git push origin v0.5.16
+git tag v0.5.17
+git push origin v0.5.17
 ```
 
 The release workflow fails if the pushed tag does not match the version in

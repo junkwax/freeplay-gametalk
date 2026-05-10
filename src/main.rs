@@ -1858,12 +1858,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         keycode: Some(Keycode::F1),
                         repeat: false,
                         ..
-                    } => {
-                        if net_session.is_some() {
-                            net_teardown_reason = Some("you quit the match".into());
-                        } else {
-                            toggle_hitbox_view(&mut trainer, &mut toast);
-                        }
+                    } if net_session.is_some() => {
+                        net_teardown_reason = Some("you quit the match".into());
                     }
                     Event::KeyDown {
                         keycode: Some(Keycode::Escape),
@@ -1874,9 +1870,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     Event::KeyDown {
                         keycode: Some(Keycode::F9),
+                        keymod,
                         repeat: false,
                         ..
-                    } if net_session.is_none() && match_replay_playback.is_none() => {
+                    } if net_session.is_none()
+                        && match_replay_playback.is_none()
+                        && keymod.intersects(Mod::LSHIFTMOD | Mod::RSHIFTMOD) =>
+                    {
                         if core.is_some() && rewind_test.is_none() {
                             println!(
                                 "[rewind] Starting rewind test — recording {} frames...",
@@ -1944,7 +1944,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ));
                     }
                     Event::KeyDown {
-                        keycode: Some(Keycode::F5),
+                        keycode: Some(Keycode::F7),
                         repeat: false,
                         ..
                     } if net_session.is_none() && match_replay_playback.is_none() => {
@@ -1969,7 +1969,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     Event::KeyDown {
-                        keycode: Some(Keycode::F7),
+                        keycode: Some(Keycode::F6),
                         repeat: false,
                         ..
                     } if net_session.is_none() && match_replay_playback.is_none() => {
@@ -1996,7 +1996,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     Event::KeyDown {
-                        keycode: Some(Keycode::F6),
+                        keycode: Some(Keycode::F9),
                         repeat: false,
                         ..
                     } => {

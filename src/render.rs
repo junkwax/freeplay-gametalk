@@ -588,11 +588,12 @@ pub fn draw_lab_assist_overlay(
     y = y.clamp(118, 150);
 
     let hotkeys = [
-        ("F1/2 BOXES", "F3 HEALTH"),
-        ("F4 TIMER", "F5 SAVE"),
-        ("F7 LOAD", "F6 REC GHOST"),
-        ("F8 PLAY GHOST", "F10 GHOST AI"),
-        ("F12 VS GHOST", "F11 HIDE"),
+        ("F2 BOXES", "F3 HEALTH"),
+        ("F4 TIMER", ""),
+        ("F6 LOAD", "F7 SAVE"),
+        ("F8 LOAD GHOST", "F9 SAVE GHOST"),
+        ("F10 GHOST AI", "F11 HIDE"),
+        ("F12 VS GHOST", ""),
     ];
     let hotkey_h = pad * 2 + line_h * (hotkeys.len() as i32 + 1);
     canvas.set_draw_color(Color::RGBA(8, 10, 18, 190));
@@ -618,14 +619,16 @@ pub fn draw_lab_assist_overlay(
             scale,
             Color::RGBA(210, 220, 245, 225),
         )?;
-        font.draw_overlay(
-            canvas,
-            right,
-            col2_x,
-            row_y,
-            scale,
-            Color::RGBA(210, 220, 245, 225),
-        )?;
+        if !right.is_empty() {
+            font.draw_overlay(
+                canvas,
+                right,
+                col2_x,
+                row_y,
+                scale,
+                Color::RGBA(210, 220, 245, 225),
+            )?;
+        }
         row_y += line_h;
     }
 

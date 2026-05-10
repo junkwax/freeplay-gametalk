@@ -1504,21 +1504,20 @@ fn draw_about(canvas: &mut Canvas<Window>, font: &mut Font, w: i32, h: i32) -> R
     let body_c = Color::RGB(190, 190, 200);
 
     let left = [
-        "F1   Hitbox overlay",
         "F2   Hitbox overlay",
         "F3   Infinite health",
         "F4   Freeze timer",
-        "F5   Save lab reset",
-        "F7   Load lab reset",
-        "F6   Ghost record",
-        "F8   Ghost playback",
+        "F6   Load lab reset",
+        "F7   Save lab reset",
+        "F8   Load ghost",
+        "F9   Save ghost",
         "F10  Toggle ghost drone",
-        "F12  Play vs ghost",
         "F11  Show/hide lab assist",
+        "F12  Play vs ghost",
         "Ctrl+R Record clip",
         "Ctrl+F Video filter",
         "Ctrl+A Aspect",
-        "F9   Rewind test",
+        "Shift+F9 Rewind test",
         "Shift+F11 Dump RAM",
     ];
     let right = [
@@ -2498,8 +2497,8 @@ fn draw_training(
     y += TRAINING_ITEMS.len() as i32 * row_h + 20;
     let notes = [
         "These helpers are disabled during online matches.",
-        "F1/F2/F3/F4 toggle training overlays while playing.",
-        "F5/F7 save/load Lab reset points; F11 shows Lab assist.",
+        "F2/F3/F4 toggle training overlays while playing.",
+        "F6/F7 load/save Lab reset points; F11 shows Lab assist.",
     ];
     for note in notes {
         font.draw(canvas, note, x, y, small, Color::RGB(130, 140, 165))?;
@@ -2874,7 +2873,7 @@ fn draw_ghost_select(
             Color::RGB(180, 180, 200),
         )?;
         y += 24 * small as i32;
-        let hint = "Record during netplay or use F6 to record locally";
+        let hint = "Record during netplay or use F9 to record locally";
         let hw = font.text_width_exact(hint, small);
         font.draw(
             canvas,
