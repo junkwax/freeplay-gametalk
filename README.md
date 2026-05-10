@@ -31,41 +31,6 @@ URLs, OAuth client IDs, tokens, or webhooks.
   replay viewing, and lab play drone mode.
 - Package script that creates a distributable zip without ROMs or secrets.
 
-## Release Notes
-
-### 0.5.15 - 2026-05-10
-
-- Restored fight overlay timing so player names appear when the round/stage
-  renders instead of waiting for the `FIGHT` callout, while hiding the plates
-  after the match is decided so Shao Kahn endings do not keep Lab names active.
-- Bumped the build to v0.5.15.
-
-### 0.5.14 - 2026-05-10
-
-- Renamed Practice surfaces to Lab and fixed Lab overlays lingering after game
-  completion.
-- Bumped the build to v0.5.14 and made release pushes validate that the git tag
-  matches `Cargo.toml`, while local/CI builds refresh the displayed git revision
-  when the branch moves.
-- Reworked Load Ghosts into a logic-driven P2 ghost opponent: P1 stays live,
-  the ghost selects its recorded character, and combat uses reactive behavior
-  instead of full replay.
-- Added a toggleable Lab assist panel on F11 with hotkeys and P1 input history,
-  plus F5/F7 save/load reset points for fast setup repetition.
-- Added local full-match replays under `replays\` with a Watch Replays menu,
-  separate from ghost opponent recordings.
-- Fixed ghost loading from the menu, including local `ghost.bin`, remote
-  downloads, gzip decoding, visible download/load status, and entering gameplay
-  after load.
-- Prevented ghost playback from pressing coin, and stripped Start/Coin from
-  reactive combat logic.
-- Added player-name entry before Find Match, username availability checks, and
-  generated default Wu-style names.
-- Improved controller navigation/back behavior in menus and added controller
-  send/close paths for chat.
-- Kept chat usable after a match ends and made offline F1 toggle hitboxes
-  instead of exiting Lab.
-
 ## Hotkeys
 
 ### Menus
