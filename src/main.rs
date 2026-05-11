@@ -16,6 +16,7 @@ mod ghost;
 mod incident;
 mod input;
 mod input_history;
+mod lab;
 mod log;
 mod match_replay;
 mod matchmaking;
@@ -46,7 +47,8 @@ use crate::menu_input::{capture_rebind, event_to_menu_nav, is_cancel, is_clear, 
 use crate::netcore::{reset_for_netplay, step_netplay_frame, NetRuntime};
 use crate::render::{
     draw_chat_overlay, draw_emu_frame, draw_fight_overlay, draw_lab_assist_overlay,
-    ensure_core_loaded, format_probe_result, route_player,
+    draw_net_stats_overlay, draw_replay_review_overlay, ensure_core_loaded, format_probe_result,
+    route_player,
 };
 use crate::retro::*;
 use crate::session::{
@@ -147,6 +149,49 @@ fn toggle_hitbox_view(trainer: &mut memory::PokeList, toast: &mut Option<(String
 }
 
 const GHOST_P2_MASK: u8 = 0b10;
+const REPLAY_SEEK_FRAMES: usize = 55 * 5;
+const REPLAY_SPEED_LABELS: [&str; 5] = ["0.25X", "0.5X", "1X", "2X", "4X"];
+const REPLAY_DEFAULT_SPEED: usize = 2;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LocalPlayMode {
+    Arcade,
+    Lab,
+}
+
+impl LocalPlayMode {
+    fn is_lab(self) -> bool {
+        self == Self::Lab
+    }
+}
+
+fn start_find_match_queue(
+    cfg: &config::Config,
+    mm_rx: &mut Option<std::sync::mpsc::Receiver<matchmaking::Update>>,
+    state: &mut AppState,
+    username: String,
+    discord_user: &mut Option<String>,
+    discord_id: &mut Option<String>,
+) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    *mm_rx = Some(rx);
+    if let Some(discord_name) = matchmaking::connected_discord_user_from_cached_token() {
+        *discord_user = Some(discord_name.clone());
+        if discord_id.is_none() {
+            *discord_id = matchmaking::discord_id_from_cached_token();
+        }
+        matchmaking::start(tx);
+        *state = AppState::Menu(MenuScreen::Matchmaking {
+            status: format!("Entering queue as {discord_name}"),
+        });
+    } else {
+        matchmaking::set_guest_profile(username.clone(), cfg.stats_email.clone());
+        matchmaking::start_guest(tx);
+        *state = AppState::Menu(MenuScreen::Matchmaking {
+            status: format!("Entering queue as {username}"),
+        });
+    }
+}
 
 fn ghost_target_port(mask: u8) -> usize {
     if mask & 0b10 != 0 {
@@ -183,14 +228,198 @@ fn replay_names(
     }
 }
 
+fn step_replay_frame(core: &retro::Core, playback: &mut match_replay::Playback) -> bool {
+    if !playback.inject_next() {
+        return false;
+    }
+    unsafe {
+        (core.run)();
+    }
+    playback.observe_current_frame(core);
+    true
+}
+
+fn seek_replay_to(
+    core: &retro::Core,
+    playback: &mut match_replay::Playback,
+    target_frame: usize,
+) -> bool {
+    if !playback.reset_to_anchor(core) {
+        return false;
+    }
+    let target = target_frame.min(playback.frame_count());
+    while playback.current_frame() < target {
+        if !step_replay_frame(core, playback) {
+            break;
+        }
+        unsafe {
+            clear_audio_buffer();
+        }
+    }
+    input::clear_all_inputs();
+    unsafe {
+        clear_audio_buffer();
+    }
+    true
+}
+
+fn seek_replay_relative(
+    core: &retro::Core,
+    playback: &mut match_replay::Playback,
+    delta_frames: isize,
+) -> bool {
+    let current = playback.current_frame() as isize;
+    let target = current
+        .saturating_add(delta_frames)
+        .clamp(0, playback.frame_count() as isize) as usize;
+    seek_replay_to(core, playback, target)
+}
+
+fn replay_frames_for_tick(speed_index: usize, tick: u64) -> usize {
+    match speed_index {
+        0 => {
+            if tick % 4 == 0 {
+                1
+            } else {
+                0
+            }
+        }
+        1 => {
+            if tick % 2 == 0 {
+                1
+            } else {
+                0
+            }
+        }
+        3 => 2,
+        4 => 4,
+        _ => 1,
+    }
+}
+
+fn adjust_replay_speed(speed_index: &mut usize, delta: isize) {
+    let next = (*speed_index as isize)
+        .saturating_add(delta)
+        .clamp(0, (REPLAY_SPEED_LABELS.len() - 1) as isize) as usize;
+    *speed_index = next;
+}
+
+fn seek_replay_marker(
+    core: &retro::Core,
+    playback: &mut match_replay::Playback,
+    direction: isize,
+    filter: match_replay::ReplayEventFilter,
+) -> bool {
+    let current = playback.current_frame();
+    let target = if direction >= 0 {
+        playback.next_event_frame_after(current, filter)
+    } else {
+        playback.previous_event_frame_before(current, filter)
+    };
+    if let Some(frame) = target {
+        seek_replay_to(core, playback, frame as usize)
+    } else {
+        false
+    }
+}
+
+fn prepare_replay_review(core: &retro::Core, path: &str) -> Result<match_replay::Playback, String> {
+    let mut pb =
+        match_replay::Playback::load(path).map_err(|e| format!("replay load failed: {e}"))?;
+    if !pb.prime(core) {
+        return Err("replay state rejected".into());
+    }
+    let total_frames = pb.frame_count();
+    let _ = seek_replay_to(core, &mut pb, total_frames);
+    let _ = seek_replay_to(core, &mut pb, 0);
+    println!(
+        "[replay] Reviewing {} frames: {} vs {} ({} markers, {} bookmarks)",
+        pb.frame_count(),
+        pb.p1_name(),
+        pb.p2_name(),
+        pb.markers().len(),
+        pb.bookmarks().len()
+    );
+    Ok(pb)
+}
+
+fn enter_replay_review(
+    pb: match_replay::Playback,
+    match_replay_playback: &mut Option<match_replay::Playback>,
+    replay_review_paused: &mut bool,
+    replay_review_speed: &mut usize,
+    replay_review_tick: &mut u64,
+    replay_event_filter: &mut match_replay::ReplayEventFilter,
+    replay_clip_in: &mut Option<usize>,
+    replay_clip_out: &mut Option<usize>,
+    ghost_playback: &mut Option<ghost::Playback>,
+    ghost_recording: &mut Option<ghost::Recording>,
+    drone_runner: &mut Option<drone::DroneRunner>,
+    input_history: &mut input_history::InputHistory,
+    clip_recorder: &mut Option<clip::ClipRecorder>,
+    toast: &mut Option<(String, Instant)>,
+    state: &mut AppState,
+) {
+    *match_replay_playback = Some(pb);
+    *replay_review_paused = false;
+    *replay_review_speed = REPLAY_DEFAULT_SPEED;
+    *replay_review_tick = 0;
+    *replay_event_filter = match_replay::ReplayEventFilter::All;
+    *replay_clip_in = None;
+    *replay_clip_out = None;
+    *ghost_playback = None;
+    *ghost_recording = None;
+    *drone_runner = None;
+    input_history.clear();
+    input::clear_all_inputs();
+    if let Some(recorder) = clip_recorder.take() {
+        let message = finish_clip_recording(recorder);
+        println!("[clip] {message}");
+        *toast = Some((message, Instant::now() + Duration::from_millis(3200)));
+    }
+    *state = AppState::Playing;
+}
+
+fn net_stats_detail_rows(
+    rollback_frames: u32,
+    load_count: u32,
+    kbps_sent: Option<&str>,
+    local_frames_behind: Option<&str>,
+    remote_frames_behind: Option<&str>,
+    ping_ms: Option<i32>,
+) -> Vec<String> {
+    let mut rows = Vec::new();
+    if let Some(ms) = ping_ms {
+        let quality = if ms <= 80 {
+            "GOOD"
+        } else if ms <= 140 {
+            "OK"
+        } else {
+            "HIGH"
+        };
+        rows.push(format!("QUALITY {quality}"));
+    }
+    rows.push(format!("ROLL {}F", rollback_frames));
+    if load_count > 0 {
+        rows.push(format!("LOADS {load_count}"));
+    }
+    if let (Some(local), Some(remote)) = (local_frames_behind, remote_frames_behind) {
+        rows.push(format!("BEHIND L{local} R{remote}"));
+    }
+    if let Some(kbps) = kbps_sent {
+        rows.push(format!("SEND {kbps} KB/S"));
+    }
+    rows
+}
+
 fn refresh_replay_select(state: &mut AppState, status: Option<String>) {
     if let AppState::Menu(MenuScreen::ReplaySelect {
+        cursor,
         entries,
         status: screen_status,
-        ..
     }) = state
     {
-        *entries = match_replay::list_replays()
+        *entries = match_replay::list_online_replays()
             .into_iter()
             .map(|meta| menu::ReplayEntry {
                 filename: meta.filename,
@@ -198,15 +427,125 @@ fn refresh_replay_select(state: &mut AppState, status: Option<String>) {
                 p1_name: meta.p1_name,
                 p2_name: meta.p2_name,
                 frame_count: meta.frame_count,
+                note: meta.note,
+                bookmark_count: meta.bookmark_count,
             })
             .collect();
+        if entries.is_empty() {
+            *cursor = 0;
+        } else if *cursor >= entries.len() {
+            *cursor = entries.len() - 1;
+        }
         *screen_status = status.or_else(|| {
             if entries.is_empty() {
-                Some("No saved replays found".into())
+                Some("No online replays found".into())
             } else {
                 None
             }
         });
+    }
+}
+
+fn selected_replay_entry(state: &AppState) -> Option<menu::ReplayEntry> {
+    if let AppState::Menu(MenuScreen::ReplaySelect {
+        cursor, entries, ..
+    }) = state
+    {
+        entries.get(*cursor).cloned()
+    } else {
+        None
+    }
+}
+
+fn handle_replay_select_shortcut(event: &Event, state: &mut AppState) -> bool {
+    if !matches!(state, AppState::Menu(MenuScreen::ReplaySelect { .. })) {
+        return false;
+    }
+
+    match event {
+        Event::KeyDown {
+            keycode: Some(Keycode::Delete),
+            repeat: false,
+            ..
+        }
+        | Event::ControllerButtonDown {
+            button: sdl2::controller::Button::X,
+            ..
+        } => {
+            let Some(entry) = selected_replay_entry(state) else {
+                refresh_replay_select(state, Some("No replay selected".into()));
+                return true;
+            };
+            let status = match std::fs::remove_file(&entry.path) {
+                Ok(()) => {
+                    let _ = std::fs::remove_file(match_replay::replay_notes_path(&entry.path));
+                    format!("Deleted {}", entry.filename)
+                }
+                Err(e) => format!("Delete failed: {e}"),
+            };
+            refresh_replay_select(state, Some(status));
+            true
+        }
+        Event::KeyDown {
+            keycode: Some(Keycode::N),
+            repeat: false,
+            ..
+        }
+        | Event::ControllerButtonDown {
+            button: sdl2::controller::Button::RightShoulder,
+            ..
+        } => {
+            let Some(entry) = selected_replay_entry(state) else {
+                refresh_replay_select(state, Some("No replay selected".into()));
+                return true;
+            };
+            let cursor = if let AppState::Menu(MenuScreen::ReplaySelect { cursor, .. }) = state {
+                *cursor
+            } else {
+                0
+            };
+            let came_from = if let AppState::Menu(screen) = state {
+                screen.clone()
+            } else {
+                MenuScreen::ReplaySelect {
+                    cursor,
+                    entries: vec![],
+                    status: None,
+                }
+            };
+            *state = AppState::Menu(MenuScreen::TextEdit {
+                title: "REPLAY NOTE".into(),
+                label: format!("{} vs {}", entry.p1_name, entry.p2_name),
+                value: entry.note,
+                field: menu::EditField::ReplayNote {
+                    path: entry.path,
+                    cursor,
+                },
+                came_from: Box::new(came_from),
+            });
+            true
+        }
+        Event::KeyDown {
+            keycode: Some(Keycode::O),
+            repeat: false,
+            ..
+        }
+        | Event::ControllerButtonDown {
+            button: sdl2::controller::Button::Y,
+            ..
+        } => {
+            let target = std::env::current_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("."))
+                .join("replays");
+            let _ = std::fs::create_dir_all(&target);
+            let status = match open::that(&target) {
+                Ok(()) => "Replay folder opened".into(),
+                Err(e) => format!("Open failed: {e}"),
+            };
+            refresh_replay_select(state, Some(status));
+            true
+        }
+        _ => false,
     }
 }
 
@@ -259,6 +598,53 @@ fn finish_clip_recording(recorder: clip::ClipRecorder) -> String {
     match recorder.finish() {
         Ok(result) => result.message,
         Err(e) => format!("Clip save failed: {e}"),
+    }
+}
+
+fn export_replay_clip(
+    core: &retro::Core,
+    playback: &mut match_replay::Playback,
+    clip_in: usize,
+    clip_out: usize,
+    sample_rate: u32,
+) -> String {
+    let start = clip_in.min(clip_out).min(playback.frame_count());
+    let end = clip_in.max(clip_out).min(playback.frame_count());
+    if end <= start {
+        return "Replay clip needs different IN/OUT frames".into();
+    }
+
+    let restore_frame = playback.current_frame();
+    let mut recorder = match clip::ClipRecorder::start(sample_rate) {
+        Ok(recorder) => recorder,
+        Err(e) => return format!("Replay clip start failed: {e}"),
+    };
+
+    if !seek_replay_to(core, playback, start) {
+        return "Replay clip export failed: anchor state rejected".into();
+    }
+
+    while playback.current_frame() < end && !recorder.is_at_limit() {
+        if !step_replay_frame(core, playback) {
+            break;
+        }
+        let samples = unsafe { drain_audio_buffer() };
+        if !samples.is_empty() {
+            recorder.record_audio(&samples);
+        }
+        if let Err(e) = recorder.record_frame() {
+            let _ = seek_replay_to(core, playback, restore_frame);
+            return format!("Replay clip frame capture failed: {e}");
+        }
+    }
+
+    let limited = playback.current_frame() < end;
+    let message = finish_clip_recording(recorder);
+    let _ = seek_replay_to(core, playback, restore_frame);
+    if limited {
+        format!("{message} (trimmed to 20s)")
+    } else {
+        message
     }
 }
 
@@ -371,14 +757,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut core: Option<retro::Core> = None;
     let mut audio_queue: Option<AudioQueue<i16>> = None;
-    let mut lab_save_slot: Option<Vec<u8>> = None;
+    let mut lab_reset_slots = lab::ResetSlots::default();
     let mut rewind_test: Option<replay::RewindTest> = None;
     let mut input_history = input_history::InputHistory::new();
     let mut lab_assist_visible = true;
+    let mut local_play_mode = LocalPlayMode::Arcade;
+    let mut lab_dummy = lab::DummyController::default();
+    let mut lab_position_preset = lab::PositionPreset::default();
+    let mut punish_trainer = lab::PunishTrainer::default();
+    let mut damage_tracker = lab::DamageTracker::default();
     let mut ghost_recording: Option<ghost::Recording> = None;
     let mut ghost_playback: Option<ghost::Playback> = None;
     let mut match_replay_recording: Option<match_replay::Recording> = None;
     let mut match_replay_playback: Option<match_replay::Playback> = None;
+    let mut replay_review_paused = false;
+    let mut replay_review_speed = REPLAY_DEFAULT_SPEED;
+    let mut replay_review_tick: u64 = 0;
+    let mut replay_event_filter = match_replay::ReplayEventFilter::All;
+    let mut replay_clip_in: Option<usize> = None;
+    let mut replay_clip_out: Option<usize> = None;
     let mut clip_recorder: Option<clip::ClipRecorder> = None;
     let mut ghost_port_mask: u8 = 0b11;
     let mut drone_runner: Option<drone::DroneRunner> = None;
@@ -448,6 +845,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut net_log: Option<std::fs::File> = None;
     let mut net_runtime = NetRuntime::default();
     let mut net_stats_next_frame: u32 = 0;
+    let mut net_stats_visible = false;
+    let mut latest_net_ping_ms: Option<i32> = None;
+    let mut latest_net_kbps_sent: Option<String> = None;
+    let mut latest_net_local_frames_behind: Option<String> = None;
+    let mut latest_net_remote_frames_behind: Option<String> = None;
+    let mut latest_net_rollback_frames: u32 = 0;
+    let mut latest_net_load_count: u32 = 0;
     let mut net_spectate_next: u32 = 165; // ~3s
     let mut net_frame_counter: u32 = 0;
     const GS_FIGHTING: u16 = 0x02;
@@ -469,6 +873,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut mm_rx: Option<std::sync::mpsc::Receiver<matchmaking::Update>> = None;
     let mut username_check_rx: Option<std::sync::mpsc::Receiver<matchmaking::UsernameCheckUpdate>> =
         None;
+    let mut username_check_silent = false;
     let mut mm_session_id: Option<String> = None;
     let mut rpc_client = if cfg.discord_rpc_enabled {
         rpc::RpcClient::init()
@@ -502,6 +907,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut live_matches_next_refresh = Instant::now();
     let mut toast: Option<(String, Instant)> = None;
     let frame_duration = Duration::from_micros(18281);
+    let mut fps_sample_started = Instant::now();
+    let mut fps_sample_frames: u32 = 0;
+    let mut current_fps: Option<f32> = None;
 
     ghost::drain_upload_queue(&cfg.stats_url);
     ghost::queue_all_local_ghosts(
@@ -967,7 +1375,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } if state == AppState::Playing
                     && keymod.intersects(Mod::LCTRLMOD | Mod::RCTRLMOD) =>
                 {
-                    if let Some(recorder) = clip_recorder.take() {
+                    if let (Some(c), Some(pb)) = (&core, match_replay_playback.as_mut()) {
+                        match (replay_clip_in, replay_clip_out) {
+                            (Some(clip_in), Some(clip_out)) => {
+                                replay_review_paused = true;
+                                replay_review_tick = 0;
+                                let sample_rate = audio_queue
+                                    .as_ref()
+                                    .map(|q| q.spec().freq.max(1) as u32)
+                                    .unwrap_or(48_000);
+                                let message =
+                                    export_replay_clip(c, pb, clip_in, clip_out, sample_rate);
+                                println!("[clip] {message}");
+                                toast =
+                                    Some((message, Instant::now() + Duration::from_millis(3600)));
+                            }
+                            _ => {
+                                toast = Some((
+                                    "Set replay clip IN and OUT first".into(),
+                                    Instant::now() + Duration::from_millis(2400),
+                                ));
+                            }
+                        }
+                    } else if let Some(recorder) = clip_recorder.take() {
                         let message = finish_clip_recording(recorder);
                         println!("[clip] {message}");
                         toast = Some((message, Instant::now() + Duration::from_millis(3200)));
@@ -1033,6 +1463,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     state.text_backspace();
                 }
 
+                Event::KeyDown {
+                    keycode: Some(Keycode::F11),
+                    repeat: false,
+                    ..
+                } if matches!(state, AppState::Menu(MenuScreen::Matchmaking { .. })) => {
+                    net_stats_visible = !net_stats_visible;
+                    toast = Some((
+                        format!(
+                            "Network stats {}",
+                            if net_stats_visible { "ON" } else { "OFF" }
+                        ),
+                        Instant::now() + Duration::from_millis(1600),
+                    ));
+                }
+
                 _ if matches!(state, AppState::Menu(MenuScreen::Matchmaking { .. })) => {
                     if is_cancel(&event) {
                         println!("[mm] matchmaking canceled by user");
@@ -1074,13 +1519,78 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let _ = open::that("https://github.com/junkwax/freeplay-gametalk");
                 }
 
+                Event::KeyDown {
+                    keycode: Some(Keycode::R),
+                    repeat: false,
+                    ..
+                }
+                | Event::ControllerButtonDown {
+                    button: sdl2::controller::Button::Y,
+                    ..
+                } if matches!(
+                    state,
+                    AppState::Menu(MenuScreen::SessionEnded {
+                        replay_path: Some(_),
+                        ..
+                    })
+                ) =>
+                {
+                    let path = if let AppState::Menu(MenuScreen::SessionEnded {
+                        replay_path: Some(path),
+                        ..
+                    }) = &state
+                    {
+                        path.clone()
+                    } else {
+                        String::new()
+                    };
+                    ensure_core_loaded(&mut core, &mut audio_queue, &audio_subsystem)?;
+                    if let Some(c) = &core {
+                        match prepare_replay_review(c, &path) {
+                            Ok(pb) => enter_replay_review(
+                                pb,
+                                &mut match_replay_playback,
+                                &mut replay_review_paused,
+                                &mut replay_review_speed,
+                                &mut replay_review_tick,
+                                &mut replay_event_filter,
+                                &mut replay_clip_in,
+                                &mut replay_clip_out,
+                                &mut ghost_playback,
+                                &mut ghost_recording,
+                                &mut drone_runner,
+                                &mut input_history,
+                                &mut clip_recorder,
+                                &mut toast,
+                                &mut state,
+                            ),
+                            Err(e) => {
+                                println!("[replay] Session replay load failed: {e}");
+                                toast = Some((
+                                    format!("Replay unavailable: {e}"),
+                                    Instant::now() + Duration::from_millis(3200),
+                                ));
+                            }
+                        }
+                    }
+                }
+
                 _ if matches!(state, AppState::Menu(_)) => {
+                    if handle_replay_select_shortcut(&event, &mut state) {
+                        continue;
+                    }
                     if let Some(nav) = event_to_menu_nav(&event) {
                         match nav {
                             MenuNav::Up => state.nav_up(),
                             MenuNav::Down => state.nav_down(),
                             MenuNav::Accept => match state.nav_accept(rom_present()) {
-                                NavResult::StartGame => {
+                                NavResult::StartLocal { lab } => {
+                                    let previous_local_mode = local_play_mode;
+                                    local_play_mode = if lab {
+                                        LocalPlayMode::Lab
+                                    } else {
+                                        LocalPlayMode::Arcade
+                                    };
                                     ensure_core_loaded(
                                         &mut core,
                                         &mut audio_queue,
@@ -1088,6 +1598,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     )?;
                                     input_history.clear();
                                     match_replay_playback = None;
+                                    match_replay_recording = None;
+                                    ghost_playback = None;
+                                    drone_runner = None;
+                                    score_tracker.reset();
+                                    session_p1_wins = 0;
+                                    session_p2_wins = 0;
+                                    punish_trainer.reset_stats();
+                                    damage_tracker.reset_stats();
+                                    if lab {
+                                        auto_start_done = false;
+                                        auto_start_frame = 0;
+                                    } else {
+                                        if previous_local_mode.is_lab() {
+                                            if let Some(c) = &core {
+                                                c.reset();
+                                                println!("[arcade] Core reset after leaving Lab.");
+                                            }
+                                        }
+                                        lab_reset_slots.clear();
+                                        lab_dummy.clear_loop();
+                                        trainer.set_enabled("hitboxes", false);
+                                        trainer.set_enabled("p1_health", false);
+                                        trainer.set_enabled("p2_health", false);
+                                        trainer.set_enabled("freeze_timer", false);
+                                        auto_start_done = true;
+                                        auto_start_frame = 0;
+                                    }
+                                    input::clear_all_inputs();
                                     if net_session.is_none() {
                                         if let NetMode::P2P {
                                             player,
@@ -1103,6 +1641,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             ) {
                                                 Ok(s) => {
                                                     net_session = Some(s);
+                                                    latest_net_ping_ms = None;
+                                                    latest_net_kbps_sent = None;
+                                                    latest_net_local_frames_behind = None;
+                                                    latest_net_remote_frames_behind = None;
+                                                    latest_net_rollback_frames = 0;
+                                                    latest_net_load_count = 0;
+                                                    net_stats_next_frame = 0;
+                                                    net_frame_counter = 0;
                                                     net_recording = maybe_start_net_recording(
                                                         &ghost_library,
                                                         *peer,
@@ -1127,17 +1673,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 NavResult::OpenUsernameEntry => {
                                     let value = config::sanitize_username(&cfg.player_username)
                                         .unwrap_or_else(config::default_username);
-                                    state = AppState::Menu(MenuScreen::MatchUsername {
-                                        value,
-                                        status: "Choose a public player name".into(),
-                                        checking: false,
-                                    });
+                                    if cfg.player_username_confirmed {
+                                        cfg.player_username = value.clone();
+                                        config::save(&cfg);
+                                        start_find_match_queue(
+                                            &cfg,
+                                            &mut mm_rx,
+                                            &mut state,
+                                            value,
+                                            &mut discord_user,
+                                            &mut discord_id,
+                                        );
+                                    } else if !cfg.player_username_autogenerated {
+                                        let (tx, rx) = std::sync::mpsc::channel();
+                                        username_check_rx = Some(rx);
+                                        username_check_silent = true;
+                                        matchmaking::check_username_available(
+                                            cfg.stats_url.clone(),
+                                            value.clone(),
+                                            tx,
+                                        );
+                                        state = AppState::Menu(MenuScreen::Matchmaking {
+                                            status: format!("Checking name {value}"),
+                                        });
+                                    } else {
+                                        state = AppState::Menu(MenuScreen::MatchUsername {
+                                            value,
+                                            status: "Choose a public player name".into(),
+                                            checking: false,
+                                        });
+                                    }
                                 }
                                 NavResult::SubmitUsername(value) => {
                                     match config::sanitize_username(&value) {
                                         Some(username) => {
                                             let (tx, rx) = std::sync::mpsc::channel();
                                             username_check_rx = Some(rx);
+                                            username_check_silent = false;
                                             matchmaking::check_username_available(
                                                 cfg.stats_url.clone(),
                                                 username.clone(),
@@ -1165,13 +1737,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         config::sanitize_username(&cfg.player_username)
                                             .unwrap_or_else(config::default_username);
                                     config::save(&cfg);
-                                    matchmaking::set_guest_profile(
+                                    start_find_match_queue(
+                                        &cfg,
+                                        &mut mm_rx,
+                                        &mut state,
                                         cfg.player_username.clone(),
-                                        cfg.stats_email.clone(),
+                                        &mut discord_user,
+                                        &mut discord_id,
                                     );
-                                    let (tx, rx) = std::sync::mpsc::channel();
-                                    mm_rx = Some(rx);
-                                    matchmaking::start_guest(tx);
                                 }
                                 NavResult::OpenGhostSelect => {
                                     let (tx, rx) = std::sync::mpsc::channel();
@@ -1280,17 +1853,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     println!("[auth] Signed out");
                                 }
                                 NavResult::EditText(field, title) => {
-                                    let value = match field {
+                                    let value = match &field {
                                         menu::EditField::Username => cfg.player_username.clone(),
                                         menu::EditField::StatsEmail => cfg.stats_email.clone(),
+                                        menu::EditField::ReplayNote { .. } => String::new(),
                                     };
-                                    let label = match field {
+                                    let label = match &field {
                                         menu::EditField::Username => {
                                             "Choose the name other players see"
                                         }
                                         menu::EditField::StatsEmail => {
                                             "Optional email for portable stats"
                                         }
+                                        menu::EditField::ReplayNote { .. } => "Replay note",
+                                    };
+                                    let settings_cursor = match &field {
+                                        menu::EditField::Username => 0,
+                                        menu::EditField::StatsEmail => 1,
+                                        menu::EditField::ReplayNote { .. } => 0,
                                     };
                                     state = AppState::Menu(MenuScreen::TextEdit {
                                         title,
@@ -1298,10 +1878,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         value,
                                         field,
                                         came_from: Box::new(MenuScreen::Settings {
-                                            cursor: match field {
-                                                menu::EditField::Username => 0,
-                                                menu::EditField::StatsEmail => 1,
-                                            },
+                                            cursor: settings_cursor,
                                             player_username: cfg.player_username.clone(),
                                             stats_email: cfg.stats_email.clone(),
                                             discord_connected: matchmaking::connected_discord_user_from_cached_token()
@@ -1317,62 +1894,85 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         }),
                                     });
                                 }
-                                NavResult::CommitText(field, value) => {
-                                    match field {
-                                        menu::EditField::Username => {
-                                            cfg.player_username = config::sanitize_username(&value)
-                                                .unwrap_or_else(config::default_username);
-                                            toast = Some((
-                                                format!("Username {}", cfg.player_username),
-                                                Instant::now() + Duration::from_millis(2200),
-                                            ));
-                                        }
-                                        menu::EditField::StatsEmail => {
-                                            let trimmed = value.trim();
-                                            if trimmed.is_empty() {
-                                                cfg.stats_email.clear();
+                                NavResult::CommitText(field, value) => match field {
+                                    menu::EditField::ReplayNote { path, cursor } => {
+                                        let status =
+                                            match match_replay::save_replay_note(&path, &value) {
+                                                Ok(()) => "Replay note saved".to_string(),
+                                                Err(e) => format!("Replay note failed: {e}"),
+                                            };
+                                        state = AppState::Menu(MenuScreen::ReplaySelect {
+                                            cursor,
+                                            entries: vec![],
+                                            status: Some(status.clone()),
+                                        });
+                                        refresh_replay_select(&mut state, Some(status));
+                                    }
+                                    field => {
+                                        match field {
+                                            menu::EditField::Username => {
+                                                cfg.player_username =
+                                                    config::sanitize_username(&value)
+                                                        .unwrap_or_else(config::default_username);
+                                                cfg.player_username_confirmed = false;
+                                                cfg.player_username_autogenerated = false;
                                                 toast = Some((
-                                                    "Stats email cleared".into(),
+                                                    format!("Username {}", cfg.player_username),
                                                     Instant::now() + Duration::from_millis(2200),
-                                                ));
-                                            } else if let Some(email) =
-                                                config::normalize_email(trimmed)
-                                            {
-                                                cfg.stats_email = email;
-                                                toast = Some((
-                                                    "Stats email saved".into(),
-                                                    Instant::now() + Duration::from_millis(2200),
-                                                ));
-                                            } else {
-                                                toast = Some((
-                                                    "Enter a valid email address".into(),
-                                                    Instant::now() + Duration::from_millis(2600),
                                                 ));
                                             }
+                                            menu::EditField::StatsEmail => {
+                                                let trimmed = value.trim();
+                                                if trimmed.is_empty() {
+                                                    cfg.stats_email.clear();
+                                                    toast = Some((
+                                                        "Stats email cleared".into(),
+                                                        Instant::now()
+                                                            + Duration::from_millis(2200),
+                                                    ));
+                                                } else if let Some(email) =
+                                                    config::normalize_email(trimmed)
+                                                {
+                                                    cfg.stats_email = email;
+                                                    toast = Some((
+                                                        "Stats email saved".into(),
+                                                        Instant::now()
+                                                            + Duration::from_millis(2200),
+                                                    ));
+                                                } else {
+                                                    toast = Some((
+                                                        "Enter a valid email address".into(),
+                                                        Instant::now()
+                                                            + Duration::from_millis(2600),
+                                                    ));
+                                                }
+                                            }
+                                            menu::EditField::ReplayNote { .. } => {}
                                         }
+                                        config::save(&cfg);
+                                        matchmaking::clear_cached_token();
+                                        state = AppState::Menu(MenuScreen::Settings {
+                                            cursor: match field {
+                                                menu::EditField::Username => 0,
+                                                menu::EditField::StatsEmail => 1,
+                                                menu::EditField::ReplayNote { .. } => 0,
+                                            },
+                                            player_username: cfg.player_username.clone(),
+                                            stats_email: cfg.stats_email.clone(),
+                                            discord_connected:
+                                                matchmaking::connected_discord_user_from_cached_token()
+                                                    .is_some(),
+                                            discord_rpc_enabled: cfg.discord_rpc_enabled,
+                                            fullscreen: cfg.fullscreen,
+                                            volume_percent: cfg.volume_percent,
+                                            audio_buffer: cfg.audio_buffer,
+                                            video_filter: cfg.video_filter,
+                                            crt_corner_bend: cfg.crt_corner_bend,
+                                            aspect_mode: cfg.aspect_mode,
+                                            scorebar_style: cfg.scorebar_style,
+                                        });
                                     }
-                                    config::save(&cfg);
-                                    matchmaking::clear_cached_token();
-                                    state = AppState::Menu(MenuScreen::Settings {
-                                        cursor: match field {
-                                            menu::EditField::Username => 0,
-                                            menu::EditField::StatsEmail => 1,
-                                        },
-                                        player_username: cfg.player_username.clone(),
-                                        stats_email: cfg.stats_email.clone(),
-                                        discord_connected:
-                                            matchmaking::connected_discord_user_from_cached_token()
-                                                .is_some(),
-                                        discord_rpc_enabled: cfg.discord_rpc_enabled,
-                                        fullscreen: cfg.fullscreen,
-                                        volume_percent: cfg.volume_percent,
-                                        audio_buffer: cfg.audio_buffer,
-                                        video_filter: cfg.video_filter,
-                                        crt_corner_bend: cfg.crt_corner_bend,
-                                        aspect_mode: cfg.aspect_mode,
-                                        scorebar_style: cfg.scorebar_style,
-                                    });
-                                }
+                                },
                                 NavResult::ConnectDiscord => {
                                     if matchmaking::connected_discord_user_from_cached_token()
                                         .is_some()
@@ -1710,6 +2310,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                         &mut drone_runner,
                                                     );
                                                     match_replay_playback = None;
+                                                    local_play_mode = LocalPlayMode::Lab;
                                                     input::clear_all_inputs();
                                                     auto_start_done = false;
                                                     auto_start_frame = 0;
@@ -1718,19 +2319,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     println!(
                                                         "[ghost] Anchor state rejected by core."
                                                     );
-                                                    state = AppState::Menu(MenuScreen::Main {
-                                                        cursor: 3,
+                                                    state = AppState::Menu(MenuScreen::LabMenu {
+                                                        cursor: 1,
                                                     });
                                                 }
                                             }
                                             Err(e) => {
                                                 println!("[ghost] Load failed: {e}");
-                                                state =
-                                                    AppState::Menu(MenuScreen::Main { cursor: 3 });
+                                                state = AppState::Menu(MenuScreen::LabMenu {
+                                                    cursor: 1,
+                                                });
                                             }
                                         }
                                     } else {
-                                        state = AppState::Menu(MenuScreen::Main { cursor: 3 });
+                                        state = AppState::Menu(MenuScreen::LabMenu { cursor: 1 });
                                     }
                                 }
                                 NavResult::LoadReplay(path) => {
@@ -1740,37 +2342,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         &audio_subsystem,
                                     )?;
                                     if let Some(c) = &core {
-                                        match match_replay::Playback::load(&path) {
-                                            Ok(pb) => {
-                                                if pb.prime(c) {
-                                                    println!(
-                                                        "[replay] Playing {} frames: {} vs {}",
-                                                        pb.frame_count(),
-                                                        pb.p1_name(),
-                                                        pb.p2_name()
-                                                    );
-                                                    match_replay_playback = Some(pb);
-                                                    ghost_playback = None;
-                                                    ghost_recording = None;
-                                                    drone_runner = None;
-                                                    input_history.clear();
-                                                    input::clear_all_inputs();
-                                                    state = AppState::Playing;
-                                                } else {
-                                                    println!(
-                                                        "[replay] Anchor state rejected by core."
-                                                    );
-                                                    refresh_replay_select(
-                                                        &mut state,
-                                                        Some("Error: replay state rejected".into()),
-                                                    );
-                                                }
-                                            }
+                                        match prepare_replay_review(c, &path) {
+                                            Ok(pb) => enter_replay_review(
+                                                pb,
+                                                &mut match_replay_playback,
+                                                &mut replay_review_paused,
+                                                &mut replay_review_speed,
+                                                &mut replay_review_tick,
+                                                &mut replay_event_filter,
+                                                &mut replay_clip_in,
+                                                &mut replay_clip_out,
+                                                &mut ghost_playback,
+                                                &mut ghost_recording,
+                                                &mut drone_runner,
+                                                &mut input_history,
+                                                &mut clip_recorder,
+                                                &mut toast,
+                                                &mut state,
+                                            ),
                                             Err(e) => {
                                                 println!("[replay] Load failed: {e}");
                                                 refresh_replay_select(
                                                     &mut state,
-                                                    Some(format!("Error: replay load failed: {e}")),
+                                                    Some(format!("Error: {e}")),
                                                 );
                                             }
                                         }
@@ -1791,6 +2385,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ..
                     } if match_replay_playback.is_some() => {
                         match_replay_playback = None;
+                        replay_review_paused = false;
+                        replay_review_speed = REPLAY_DEFAULT_SPEED;
+                        replay_review_tick = 0;
+                        replay_event_filter = match_replay::ReplayEventFilter::All;
+                        replay_clip_in = None;
+                        replay_clip_out = None;
                         input::clear_all_inputs();
                         state = AppState::Menu(MenuScreen::ReplaySelect {
                             cursor: 0,
@@ -1798,6 +2398,360 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             status: Some("Replay stopped".into()),
                         });
                         refresh_replay_select(&mut state, Some("Replay stopped".into()));
+                    }
+                    Event::ControllerButtonDown {
+                        button: sdl2::controller::Button::B | sdl2::controller::Button::Back,
+                        ..
+                    } if match_replay_playback.is_some() => {
+                        match_replay_playback = None;
+                        replay_review_paused = false;
+                        replay_review_speed = REPLAY_DEFAULT_SPEED;
+                        replay_review_tick = 0;
+                        replay_event_filter = match_replay::ReplayEventFilter::All;
+                        replay_clip_in = None;
+                        replay_clip_out = None;
+                        input::clear_all_inputs();
+                        state = AppState::Menu(MenuScreen::ReplaySelect {
+                            cursor: 0,
+                            entries: vec![],
+                            status: Some("Replay stopped".into()),
+                        });
+                        refresh_replay_select(&mut state, Some("Replay stopped".into()));
+                    }
+                    Event::KeyDown {
+                        keycode: Some(Keycode::Space | Keycode::Return | Keycode::KpEnter),
+                        repeat: false,
+                        ..
+                    } if match_replay_playback.is_some() => {
+                        replay_review_paused = !replay_review_paused;
+                    }
+                    Event::ControllerButtonDown {
+                        button: sdl2::controller::Button::Start,
+                        ..
+                    } if match_replay_playback.is_some() => {
+                        replay_review_paused = !replay_review_paused;
+                    }
+                    Event::KeyDown {
+                        keycode: Some(Keycode::Period),
+                        repeat: false,
+                        ..
+                    } if match_replay_playback.is_some() => {
+                        if let (Some(c), Some(pb)) = (&core, match_replay_playback.as_mut()) {
+                            replay_review_paused = true;
+                            if !step_replay_frame(c, pb) {
+                                toast = Some((
+                                    "Replay complete".into(),
+                                    Instant::now() + Duration::from_millis(1800),
+                                ));
+                            }
+                        }
+                    }
+                    Event::ControllerButtonDown {
+                        button: sdl2::controller::Button::A,
+                        ..
+                    } if match_replay_playback.is_some() => {
+                        if let (Some(c), Some(pb)) = (&core, match_replay_playback.as_mut()) {
+                            replay_review_paused = true;
+                            if !step_replay_frame(c, pb) {
+                                toast = Some((
+                                    "Replay complete".into(),
+                                    Instant::now() + Duration::from_millis(1800),
+                                ));
+                            }
+                        }
+                    }
+                    Event::KeyDown {
+                        keycode: Some(Keycode::I),
+                        repeat: false,
+                        ..
+                    } if match_replay_playback.is_some() => {
+                        if let Some(pb) = match_replay_playback.as_ref() {
+                            let frame = pb.current_frame();
+                            replay_clip_in = Some(frame);
+                            toast = Some((
+                                format!("Replay clip IN set: {frame}"),
+                                Instant::now() + Duration::from_millis(1600),
+                            ));
+                        }
+                    }
+                    Event::ControllerButtonDown {
+                        button: sdl2::controller::Button::X,
+                        ..
+                    } if match_replay_playback.is_some() => {
+                        if let Some(pb) = match_replay_playback.as_ref() {
+                            let frame = pb.current_frame();
+                            replay_clip_in = Some(frame);
+                            toast = Some((
+                                format!("Replay clip IN set: {frame}"),
+                                Instant::now() + Duration::from_millis(1600),
+                            ));
+                        }
+                    }
+                    Event::KeyDown {
+                        keycode: Some(Keycode::O),
+                        repeat: false,
+                        ..
+                    } if match_replay_playback.is_some() => {
+                        if let Some(pb) = match_replay_playback.as_ref() {
+                            let frame = pb.current_frame();
+                            replay_clip_out = Some(frame);
+                            toast = Some((
+                                format!("Replay clip OUT set: {frame}"),
+                                Instant::now() + Duration::from_millis(1600),
+                            ));
+                        }
+                    }
+                    Event::ControllerButtonDown {
+                        button: sdl2::controller::Button::Y,
+                        ..
+                    } if match_replay_playback.is_some() => {
+                        if let Some(pb) = match_replay_playback.as_ref() {
+                            let frame = pb.current_frame();
+                            replay_clip_out = Some(frame);
+                            toast = Some((
+                                format!("Replay clip OUT set: {frame}"),
+                                Instant::now() + Duration::from_millis(1600),
+                            ));
+                        }
+                    }
+                    Event::KeyDown {
+                        keycode: Some(Keycode::C),
+                        repeat: false,
+                        ..
+                    } if match_replay_playback.is_some() => {
+                        replay_clip_in = None;
+                        replay_clip_out = None;
+                        toast = Some((
+                            "Replay clip marks cleared".into(),
+                            Instant::now() + Duration::from_millis(1600),
+                        ));
+                    }
+                    Event::KeyDown {
+                        keycode: Some(Keycode::M),
+                        repeat: false,
+                        ..
+                    }
+                    | Event::ControllerButtonDown {
+                        button: sdl2::controller::Button::RightStick,
+                        ..
+                    } if match_replay_playback.is_some() => {
+                        if let Some(pb) = match_replay_playback.as_mut() {
+                            replay_review_paused = true;
+                            let frame = pb.current_frame();
+                            match pb.toggle_bookmark_at_current() {
+                                Ok(true) => {
+                                    toast = Some((
+                                        format!("Bookmark added: {frame}"),
+                                        Instant::now() + Duration::from_millis(1800),
+                                    ));
+                                }
+                                Ok(false) => {
+                                    toast = Some((
+                                        format!("Bookmark removed: {frame}"),
+                                        Instant::now() + Duration::from_millis(1800),
+                                    ));
+                                }
+                                Err(e) => {
+                                    toast = Some((
+                                        format!("Bookmark failed: {e}"),
+                                        Instant::now() + Duration::from_millis(2600),
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    Event::KeyDown {
+                        keycode: Some(Keycode::Delete),
+                        repeat: false,
+                        ..
+                    }
+                    | Event::ControllerButtonDown {
+                        button: sdl2::controller::Button::LeftStick,
+                        ..
+                    } if match_replay_playback.is_some() => {
+                        if let Some(pb) = match_replay_playback.as_mut() {
+                            replay_review_paused = true;
+                            match pb.remove_bookmark_near_current(90) {
+                                Ok(Some(bookmark)) => {
+                                    toast = Some((
+                                        format!("Bookmark removed: {}", bookmark.frame),
+                                        Instant::now() + Duration::from_millis(1800),
+                                    ));
+                                }
+                                Ok(None) => {
+                                    toast = Some((
+                                        "No nearby bookmark".into(),
+                                        Instant::now() + Duration::from_millis(1800),
+                                    ));
+                                }
+                                Err(e) => {
+                                    toast = Some((
+                                        format!("Bookmark failed: {e}"),
+                                        Instant::now() + Duration::from_millis(2600),
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    Event::KeyDown {
+                        keycode: Some(Keycode::Left),
+                        repeat: false,
+                        ..
+                    } if match_replay_playback.is_some() => {
+                        if let (Some(c), Some(pb)) = (&core, match_replay_playback.as_mut()) {
+                            let _ = seek_replay_relative(c, pb, -(REPLAY_SEEK_FRAMES as isize));
+                            replay_review_tick = 0;
+                        }
+                    }
+                    Event::ControllerButtonDown {
+                        button: sdl2::controller::Button::DPadLeft,
+                        ..
+                    } if match_replay_playback.is_some() => {
+                        if let (Some(c), Some(pb)) = (&core, match_replay_playback.as_mut()) {
+                            let _ = seek_replay_relative(c, pb, -(REPLAY_SEEK_FRAMES as isize));
+                            replay_review_tick = 0;
+                        }
+                    }
+                    Event::KeyDown {
+                        keycode: Some(Keycode::Right),
+                        repeat: false,
+                        ..
+                    } if match_replay_playback.is_some() => {
+                        if let (Some(c), Some(pb)) = (&core, match_replay_playback.as_mut()) {
+                            let _ = seek_replay_relative(c, pb, REPLAY_SEEK_FRAMES as isize);
+                            replay_review_tick = 0;
+                        }
+                    }
+                    Event::ControllerButtonDown {
+                        button: sdl2::controller::Button::DPadRight,
+                        ..
+                    } if match_replay_playback.is_some() => {
+                        if let (Some(c), Some(pb)) = (&core, match_replay_playback.as_mut()) {
+                            let _ = seek_replay_relative(c, pb, REPLAY_SEEK_FRAMES as isize);
+                            replay_review_tick = 0;
+                        }
+                    }
+                    Event::KeyDown {
+                        keycode: Some(Keycode::PageUp),
+                        repeat: false,
+                        ..
+                    } if match_replay_playback.is_some() => {
+                        if let (Some(c), Some(pb)) = (&core, match_replay_playback.as_mut()) {
+                            if seek_replay_marker(c, pb, -1, replay_event_filter) {
+                                replay_review_paused = true;
+                                replay_review_tick = 0;
+                            }
+                        }
+                    }
+                    Event::ControllerButtonDown {
+                        button: sdl2::controller::Button::LeftShoulder,
+                        ..
+                    } if match_replay_playback.is_some() => {
+                        if let (Some(c), Some(pb)) = (&core, match_replay_playback.as_mut()) {
+                            if seek_replay_marker(c, pb, -1, replay_event_filter) {
+                                replay_review_paused = true;
+                                replay_review_tick = 0;
+                            }
+                        }
+                    }
+                    Event::KeyDown {
+                        keycode: Some(Keycode::PageDown),
+                        repeat: false,
+                        ..
+                    } if match_replay_playback.is_some() => {
+                        if let (Some(c), Some(pb)) = (&core, match_replay_playback.as_mut()) {
+                            if seek_replay_marker(c, pb, 1, replay_event_filter) {
+                                replay_review_paused = true;
+                                replay_review_tick = 0;
+                            }
+                        }
+                    }
+                    Event::ControllerButtonDown {
+                        button: sdl2::controller::Button::RightShoulder,
+                        ..
+                    } if match_replay_playback.is_some() => {
+                        if let (Some(c), Some(pb)) = (&core, match_replay_playback.as_mut()) {
+                            if seek_replay_marker(c, pb, 1, replay_event_filter) {
+                                replay_review_paused = true;
+                                replay_review_tick = 0;
+                            }
+                        }
+                    }
+                    Event::KeyDown {
+                        keycode: Some(Keycode::Up),
+                        repeat: false,
+                        ..
+                    } if match_replay_playback.is_some() => {
+                        adjust_replay_speed(&mut replay_review_speed, 1);
+                        replay_review_tick = 0;
+                    }
+                    Event::ControllerButtonDown {
+                        button: sdl2::controller::Button::DPadUp,
+                        ..
+                    } if match_replay_playback.is_some() => {
+                        adjust_replay_speed(&mut replay_review_speed, 1);
+                        replay_review_tick = 0;
+                    }
+                    Event::KeyDown {
+                        keycode: Some(Keycode::Down),
+                        repeat: false,
+                        ..
+                    } if match_replay_playback.is_some() => {
+                        adjust_replay_speed(&mut replay_review_speed, -1);
+                        replay_review_tick = 0;
+                    }
+                    Event::ControllerButtonDown {
+                        button: sdl2::controller::Button::DPadDown,
+                        ..
+                    } if match_replay_playback.is_some() => {
+                        adjust_replay_speed(&mut replay_review_speed, -1);
+                        replay_review_tick = 0;
+                    }
+                    Event::KeyDown {
+                        keycode: Some(Keycode::F),
+                        keymod,
+                        repeat: false,
+                        ..
+                    } if match_replay_playback.is_some()
+                        && !keymod.intersects(Mod::LCTRLMOD | Mod::RCTRLMOD) =>
+                    {
+                        replay_event_filter = replay_event_filter.next();
+                        toast = Some((
+                            format!("Replay events: {}", replay_event_filter.label()),
+                            Instant::now() + Duration::from_millis(1800),
+                        ));
+                    }
+                    Event::ControllerButtonDown {
+                        button: sdl2::controller::Button::Guide,
+                        ..
+                    } if match_replay_playback.is_some() => {
+                        replay_event_filter = replay_event_filter.next();
+                        toast = Some((
+                            format!("Replay events: {}", replay_event_filter.label()),
+                            Instant::now() + Duration::from_millis(1800),
+                        ));
+                    }
+                    Event::KeyDown {
+                        keycode: Some(Keycode::Home),
+                        repeat: false,
+                        ..
+                    } if match_replay_playback.is_some() => {
+                        if let (Some(c), Some(pb)) = (&core, match_replay_playback.as_mut()) {
+                            let _ = seek_replay_to(c, pb, 0);
+                            replay_review_tick = 0;
+                        }
+                    }
+                    Event::KeyDown {
+                        keycode: Some(Keycode::End),
+                        repeat: false,
+                        ..
+                    } if match_replay_playback.is_some() => {
+                        if let (Some(c), Some(pb)) = (&core, match_replay_playback.as_mut()) {
+                            let end_frame = pb.frame_count();
+                            let _ = seek_replay_to(c, pb, end_frame);
+                            replay_review_paused = true;
+                            replay_review_tick = 0;
+                        }
                     }
                     Event::KeyDown {
                         keycode: Some(Keycode::T),
@@ -1886,11 +2840,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     Event::KeyDown {
                         keycode: Some(Keycode::F10),
+                        keymod,
                         repeat: false,
                         ..
                     } if net_session.is_none()
                         && match_replay_playback.is_none()
-                        && ghost_playback.is_some() =>
+                        && ghost_playback.is_none()
+                        && local_play_mode.is_lab()
+                        && keymod.intersects(Mod::LSHIFTMOD | Mod::RSHIFTMOD) =>
+                    {
+                        punish_trainer.reset_stats();
+                        damage_tracker.reset_stats();
+                        toast = Some((
+                            "Lab stats reset".into(),
+                            Instant::now() + Duration::from_millis(1800),
+                        ));
+                    }
+                    Event::KeyDown {
+                        keycode: Some(Keycode::F10),
+                        repeat: false,
+                        ..
+                    } if net_session.is_none()
+                        && match_replay_playback.is_none()
+                        && local_play_mode.is_lab()
+                        && ghost_playback.is_none() =>
+                    {
+                        let on = punish_trainer.toggle();
+                        toast = Some((
+                            format!("Punish trainer {}", if on { "ON" } else { "OFF" }),
+                            Instant::now() + Duration::from_millis(1800),
+                        ));
+                    }
+                    Event::KeyDown {
+                        keycode: Some(Keycode::F10),
+                        repeat: false,
+                        ..
+                    } if net_session.is_none()
+                        && match_replay_playback.is_none()
+                        && ghost_playback.is_some()
+                        && local_play_mode.is_lab() =>
                     {
                         if drone_runner.is_some() {
                             drone_runner = None;
@@ -1912,6 +2900,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ..
                     } if net_session.is_none()
                         && match_replay_playback.is_none()
+                        && local_play_mode.is_lab()
                         && (keycode == Some(Keycode::F2) || scancode == Some(Scancode::F2)) =>
                     {
                         toggle_hitbox_view(&mut trainer, &mut toast);
@@ -1920,7 +2909,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         keycode: Some(Keycode::F3),
                         repeat: false,
                         ..
-                    } if net_session.is_none() && match_replay_playback.is_none() => {
+                    } if net_session.is_none()
+                        && match_replay_playback.is_none()
+                        && local_play_mode.is_lab() =>
+                    {
                         let on = !trainer.is_enabled("p1_health");
                         trainer.set_enabled("p1_health", on);
                         trainer.set_enabled("p2_health", on);
@@ -1937,7 +2929,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         keycode: Some(Keycode::F4),
                         repeat: false,
                         ..
-                    } if net_session.is_none() && match_replay_playback.is_none() => {
+                    } if net_session.is_none()
+                        && match_replay_playback.is_none()
+                        && local_play_mode.is_lab() =>
+                    {
                         let on = !trainer.is_enabled("freeze_timer");
                         trainer.set_enabled("freeze_timer", on);
                         println!("[trainer] Freeze timer: {}", if on { "ON" } else { "OFF" });
@@ -1947,18 +2942,158 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ));
                     }
                     Event::KeyDown {
+                        keycode: Some(Keycode::F5),
+                        keymod,
+                        repeat: false,
+                        ..
+                    } if net_session.is_none()
+                        && match_replay_playback.is_none()
+                        && ghost_playback.is_none()
+                        && local_play_mode.is_lab()
+                        && keymod.intersects(Mod::LCTRLMOD | Mod::RCTRLMOD) =>
+                    {
+                        if lab_dummy.is_recording() {
+                            let frames = lab_dummy.stop_recording();
+                            let message = if frames > 0 {
+                                format!("Dummy loop saved {}", lab::format_frames(frames))
+                            } else {
+                                "Dummy loop empty".into()
+                            };
+                            toast = Some((message, Instant::now() + Duration::from_millis(2200)));
+                        } else if let Some(c) = &core {
+                            let gstate = memory::peek_u16(c, GSTATE_ADDR, memory::Endian::Little)
+                                .unwrap_or(0);
+                            let p1_hp = memory::peek_u16(c, P1_HP_ADDR, memory::Endian::Little)
+                                .unwrap_or(0);
+                            let fight_loaded = matches!(gstate, GS_FIGHTING | 0x03) && p1_hp > 0;
+                            if fight_loaded {
+                                punish_trainer.reset_stats();
+                                damage_tracker.reset_stats();
+                                lab_dummy.start_recording();
+                                toast = Some((
+                                    "Recording P2 dummy... Ctrl+F5 stops".into(),
+                                    Instant::now() + Duration::from_millis(2400),
+                                ));
+                            } else {
+                                toast = Some((
+                                    "Start dummy record after fight loads".into(),
+                                    Instant::now() + Duration::from_millis(2200),
+                                ));
+                            }
+                        }
+                    }
+                    Event::KeyDown {
+                        keycode: Some(Keycode::F5),
+                        keymod,
+                        repeat: false,
+                        ..
+                    } if net_session.is_none()
+                        && match_replay_playback.is_none()
+                        && ghost_playback.is_none()
+                        && local_play_mode.is_lab()
+                        && keymod.intersects(Mod::LSHIFTMOD | Mod::RSHIFTMOD) =>
+                    {
+                        lab_dummy.clear_loop();
+                        punish_trainer.reset_stats();
+                        damage_tracker.reset_stats();
+                        input::apply_snapshot(Player::P2, 0);
+                        toast = Some((
+                            "Dummy loop cleared".into(),
+                            Instant::now() + Duration::from_millis(1800),
+                        ));
+                    }
+                    Event::KeyDown {
+                        keycode: Some(Keycode::F5),
+                        repeat: false,
+                        ..
+                    } if net_session.is_none()
+                        && match_replay_playback.is_none()
+                        && ghost_playback.is_none()
+                        && local_play_mode.is_lab() =>
+                    {
+                        let mode = lab_dummy.cycle_mode();
+                        punish_trainer.reset_stats();
+                        damage_tracker.reset_stats();
+                        if mode.active() {
+                            auto_start_done = false;
+                            auto_start_frame = 0;
+                        } else {
+                            input::apply_snapshot(Player::P2, 0);
+                        }
+                        toast = Some((
+                            format!("Dummy {}", mode.label()),
+                            Instant::now() + Duration::from_millis(1800),
+                        ));
+                    }
+                    Event::KeyDown {
+                        keycode: Some(Keycode::F6),
+                        keymod,
+                        repeat: false,
+                        ..
+                    } if net_session.is_none()
+                        && match_replay_playback.is_none()
+                        && local_play_mode.is_lab()
+                        && keymod.intersects(Mod::LCTRLMOD | Mod::RCTRLMOD) =>
+                    {
+                        if let Some(c) = &core {
+                            let gstate = memory::peek_u16(c, GSTATE_ADDR, memory::Endian::Little)
+                                .unwrap_or(0);
+                            let p1_hp = memory::peek_u16(c, P1_HP_ADDR, memory::Endian::Little)
+                                .unwrap_or(0);
+                            let fight_loaded = matches!(gstate, GS_FIGHTING | 0x03) && p1_hp > 0;
+                            if fight_loaded {
+                                let preset = lab_position_preset;
+                                lab::apply_position_preset(c, preset);
+                                lab_position_preset = lab_position_preset.next();
+                                toast = Some((
+                                    format!("Position {}", preset.label()),
+                                    Instant::now() + Duration::from_millis(1800),
+                                ));
+                            } else {
+                                toast = Some((
+                                    "Position reset after fight loads".into(),
+                                    Instant::now() + Duration::from_millis(2200),
+                                ));
+                            }
+                        } else {
+                            toast = Some((
+                                "Position reset after fight loads".into(),
+                                Instant::now() + Duration::from_millis(2200),
+                            ));
+                        }
+                    }
+                    Event::KeyDown {
+                        keycode: Some(Keycode::F7),
+                        keymod,
+                        repeat: false,
+                        ..
+                    } if net_session.is_none()
+                        && match_replay_playback.is_none()
+                        && local_play_mode.is_lab()
+                        && keymod.intersects(Mod::LCTRLMOD | Mod::RCTRLMOD) =>
+                    {
+                        let slot = lab_reset_slots.cycle_next();
+                        toast = Some((
+                            format!("Lab reset slot {slot}"),
+                            Instant::now() + Duration::from_millis(1600),
+                        ));
+                    }
+                    Event::KeyDown {
                         keycode: Some(Keycode::F7),
                         repeat: false,
                         ..
-                    } if net_session.is_none() && match_replay_playback.is_none() => {
+                    } if net_session.is_none()
+                        && match_replay_playback.is_none()
+                        && local_play_mode.is_lab() =>
+                    {
                         if let Some(c) = &core {
                             match c.save_state() {
                                 Some(blob) => {
-                                    let bytes = blob.len();
-                                    lab_save_slot = Some(blob);
-                                    println!("[lab] Saved reset point ({bytes} bytes)");
+                                    let slot = lab_reset_slots.active_number();
+                                    let bytes = lab_reset_slots.save_active(blob);
+                                    println!("[lab] Saved reset point slot {slot} ({bytes} bytes)");
                                     toast = Some((
-                                        "Lab reset point saved".into(),
+                                        format!("Lab reset slot {slot} saved"),
                                         Instant::now() + Duration::from_millis(1800),
                                     ));
                                 }
@@ -1975,20 +3110,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         keycode: Some(Keycode::F6),
                         repeat: false,
                         ..
-                    } if net_session.is_none() && match_replay_playback.is_none() => {
-                        if let (Some(c), Some(slot)) = (&core, lab_save_slot.as_ref()) {
-                            if c.load_state(slot) {
-                                input::clear_all_inputs();
-                                input_history.clear();
-                                println!("[lab] Reset to saved point");
-                                toast = Some((
-                                    "Lab reset loaded".into(),
-                                    Instant::now() + Duration::from_millis(1800),
-                                ));
+                    } if net_session.is_none()
+                        && match_replay_playback.is_none()
+                        && local_play_mode.is_lab() =>
+                    {
+                        let slot = lab_reset_slots.active_number();
+                        if let Some(c) = &core {
+                            if let Some(loaded) = lab_reset_slots.load_active(c) {
+                                if loaded {
+                                    input::clear_all_inputs();
+                                    input_history.clear();
+                                    println!("[lab] Reset to saved slot {slot}");
+                                    toast = Some((
+                                        format!("Lab reset slot {slot} loaded"),
+                                        Instant::now() + Duration::from_millis(1800),
+                                    ));
+                                } else {
+                                    toast = Some((
+                                        format!("Lab reset slot {slot} failed"),
+                                        Instant::now() + Duration::from_millis(2200),
+                                    ));
+                                }
                             } else {
                                 toast = Some((
-                                    "Lab reset failed".into(),
-                                    Instant::now() + Duration::from_millis(2200),
+                                    format!("No lab reset in slot {slot}"),
+                                    Instant::now() + Duration::from_millis(1800),
                                 ));
                             }
                         } else {
@@ -2002,7 +3148,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         keycode: Some(Keycode::F9),
                         repeat: false,
                         ..
-                    } => {
+                    } if local_play_mode.is_lab() => {
                         if match_replay_playback.is_some() {
                             println!("[replay] Ghost recording disabled during replay playback.");
                         } else if net_session.is_some() {
@@ -2048,7 +3194,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         keycode: Some(Keycode::F8),
                         repeat: false,
                         ..
-                    } => {
+                    } if local_play_mode.is_lab() => {
                         if match_replay_playback.is_some() {
                             println!("[replay] Ghost playback disabled during replay playback.");
                         } else if net_session.is_some() {
@@ -2081,7 +3227,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         keycode: Some(Keycode::F12),
                         repeat: false,
                         ..
-                    } => {
+                    } if local_play_mode.is_lab() => {
                         if match_replay_playback.is_some() {
                             println!("[replay] Ghost opponent disabled during replay playback.");
                         } else if net_session.is_some() {
@@ -2125,6 +3271,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     Event::KeyDown {
                         keycode: Some(Keycode::F11),
+                        repeat: false,
+                        ..
+                    } if net_session.is_some() && match_replay_playback.is_none() => {
+                        net_stats_visible = !net_stats_visible;
+                        toast = Some((
+                            format!(
+                                "Network stats {}",
+                                if net_stats_visible { "ON" } else { "OFF" }
+                            ),
+                            Instant::now() + Duration::from_millis(1600),
+                        ));
+                    }
+                    Event::KeyDown {
+                        keycode: Some(Keycode::F11),
                         keymod,
                         repeat: false,
                         ..
@@ -2154,7 +3314,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         keycode: Some(Keycode::F11),
                         repeat: false,
                         ..
-                    } if net_session.is_none() && match_replay_playback.is_none() => {
+                    } if net_session.is_none()
+                        && match_replay_playback.is_none()
+                        && local_play_mode.is_lab() =>
+                    {
                         lab_assist_visible = !lab_assist_visible;
                         toast = Some((
                             format!(
@@ -2164,6 +3327,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             Instant::now() + Duration::from_millis(1800),
                         ));
                     }
+                    Event::KeyDown {
+                        keycode: Some(k),
+                        repeat: false,
+                        ..
+                    } if match_replay_playback.is_some() => {
+                        let _ = k;
+                    }
+                    Event::KeyUp { .. } if match_replay_playback.is_some() => {}
+                    Event::ControllerButtonDown { .. } if match_replay_playback.is_some() => {}
+                    Event::ControllerButtonUp { .. } if match_replay_playback.is_some() => {}
+                    Event::ControllerAxisMotion { .. } if match_replay_playback.is_some() => {}
                     Event::KeyDown {
                         keycode: Some(k),
                         repeat: false,
@@ -2351,6 +3525,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 );
                             }
                         }
+                        latest_net_rollback_frames =
+                            step_stats.advance_count.saturating_sub(1) as u32;
+                        latest_net_load_count = step_stats.load_count as u32;
 
                         let post_confirmed = sess.confirmed_frame();
                         if pre_ready && post_confirmed > pre_confirmed {
@@ -2380,6 +3557,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             net_stats_next_frame = net_frame_counter.wrapping_add(275);
                             let remote_handle = 1 - local_handle;
                             if let Ok(stats) = sess.network_stats(remote_handle) {
+                                latest_net_ping_ms = Some(stats.ping as i32);
+                                latest_net_kbps_sent = Some(stats.kbps_sent.to_string());
+                                latest_net_local_frames_behind =
+                                    Some(stats.local_frames_behind.to_string());
+                                latest_net_remote_frames_behind =
+                                    Some(stats.remote_frames_behind.to_string());
                                 let line = format!(
                                     "[net/diag] frame={} confirmed={} ping={}ms kbps_sent={} local_frames_ahead={} remote_frames_ahead={}",
                                     net_frame_counter,
@@ -2397,25 +3580,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                     } else if let Some(pb) = match_replay_playback.as_mut() {
-                        if !pb.inject_next() {
-                            println!("[replay] Playback complete ({} frames).", pb.frame_count());
-                            match_replay_playback = None;
+                        if replay_review_paused {
                             input::clear_all_inputs();
-                            state = AppState::Menu(MenuScreen::ReplaySelect {
-                                cursor: 0,
-                                entries: vec![],
-                                status: Some("Replay complete".into()),
-                            });
-                            refresh_replay_select(&mut state, Some("Replay complete".into()));
                         } else {
-                            unsafe {
-                                (c.run)();
+                            replay_review_tick = replay_review_tick.wrapping_add(1);
+                            let frames_this_tick =
+                                replay_frames_for_tick(replay_review_speed, replay_review_tick);
+                            let mut complete = false;
+                            for _ in 0..frames_this_tick {
+                                if !step_replay_frame(c, pb) {
+                                    complete = true;
+                                    break;
+                                }
+                            }
+                            if replay_review_speed != REPLAY_DEFAULT_SPEED {
+                                unsafe {
+                                    clear_audio_buffer();
+                                }
+                            }
+                            if complete {
+                                println!(
+                                    "[replay] Playback complete ({} frames).",
+                                    pb.frame_count()
+                                );
+                                match_replay_playback = None;
+                                replay_review_paused = false;
+                                replay_review_speed = REPLAY_DEFAULT_SPEED;
+                                replay_review_tick = 0;
+                                replay_event_filter = match_replay::ReplayEventFilter::All;
+                                replay_clip_in = None;
+                                replay_clip_out = None;
+                                input::clear_all_inputs();
+                                state = AppState::Menu(MenuScreen::ReplaySelect {
+                                    cursor: 0,
+                                    entries: vec![],
+                                    status: Some("Replay complete".into()),
+                                });
+                                refresh_replay_select(&mut state, Some("Replay complete".into()));
                             }
                         }
                     } else {
                         input::commit_live_to_state();
                         input_history.step(input::snapshot_player(Player::P1));
-                        if !auto_start_done {
+                        if local_play_mode.is_lab() && !auto_start_done {
                             let gstate = memory::peek_u16(c, GSTATE_ADDR, memory::Endian::Little)
                                 .unwrap_or(0);
                             if gstate == GS_AMODE {
@@ -2429,6 +3636,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     INPUT_STATE[0][RETRO_DEVICE_ID_JOYPAD_START as usize] = false;
                                 }
                                 auto_start_done = true;
+                            }
+                        }
+                        if local_play_mode.is_lab() && ghost_playback.is_none() {
+                            let gstate = memory::peek_u16(c, GSTATE_ADDR, memory::Endian::Little)
+                                .unwrap_or(0);
+                            let p1_hp = memory::peek_u16(c, P1_HP_ADDR, memory::Endian::Little)
+                                .unwrap_or(0);
+                            let fight_loaded = matches!(gstate, GS_FIGHTING | 0x03) && p1_hp > 0;
+                            let live_p2_bits = input::snapshot_player(Player::P2);
+                            if let Some(bits) = lab_dummy.next_bits(fight_loaded, live_p2_bits) {
+                                input::apply_snapshot(Player::P2, bits);
+                            }
+                            if let Some(frames) = lab_dummy.take_auto_finished_loop() {
+                                toast = Some((
+                                    format!("Dummy loop saved {}", lab::format_frames(frames)),
+                                    Instant::now() + Duration::from_millis(2200),
+                                ));
                             }
                         }
                         if let Some(pb) = ghost_playback.as_mut() {
@@ -2494,9 +3718,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 rewind_test = None;
                             }
                         }
-                        trainer.apply(c);
+                        if local_play_mode.is_lab() {
+                            trainer.apply(c);
+                        }
                         unsafe {
                             (c.run)();
+                        }
+                        if net_session.is_none()
+                            && match_replay_playback.is_none()
+                            && ghost_playback.is_none()
+                            && local_play_mode.is_lab()
+                        {
+                            let gstate = memory::peek_u16(c, GSTATE_ADDR, memory::Endian::Little)
+                                .unwrap_or(0);
+                            let p1_hp = memory::peek_u16(c, P1_HP_ADDR, memory::Endian::Little)
+                                .unwrap_or(0);
+                            let fight_loaded = matches!(gstate, GS_FIGHTING | 0x03) && p1_hp > 0;
+                            let p2_hp = memory::peek_u16(c, P2_HP_ADDR, memory::Endian::Little)
+                                .unwrap_or(0);
+                            damage_tracker.observe(fight_loaded, p2_hp);
+                            let p1_bits = input::snapshot_player(Player::P1);
+                            if let Some(event) = punish_trainer.observe(p2_hp, p1_bits) {
+                                toast = Some((
+                                    event.label(),
+                                    Instant::now() + Duration::from_millis(1400),
+                                ));
+                            }
+                            if lab_dummy.take_loop_completed().is_some() {
+                                punish_trainer.arm(p2_hp);
+                            }
                         }
                         // Ghost match vs detection: track fight start/end for webhook
                         if ghost_playback.is_some() && ghost_port_mask == 0b10 {
@@ -2527,6 +3777,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if matches!(state, AppState::Playing)
                         && net_session.is_none()
                         && match_replay_playback.is_none()
+                        && local_play_mode.is_lab()
                     {
                         trainer.apply(c);
                     }
@@ -2673,7 +3924,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             discord_id.as_deref(),
                             &format!("{:016x}", rom_hash_u64),
                         );
-                        match_replay::finalize_recording(&mut match_replay_recording);
+                        let replay_path =
+                            match_replay::finalize_recording(&mut match_replay_recording)
+                                .map(|path| path.to_string_lossy().into_owned());
                         net_session = None;
                         net_match_count = 0;
                         net_in_fight = false;
@@ -2684,6 +3937,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         net_frame_counter = 0;
                         net_runtime = NetRuntime::default();
                         net_log = None;
+                        latest_net_ping_ms = None;
+                        latest_net_kbps_sent = None;
+                        latest_net_local_frames_behind = None;
+                        latest_net_remote_frames_behind = None;
+                        latest_net_rollback_frames = 0;
+                        latest_net_load_count = 0;
                         relay_chat = None;
                         chat_open = false;
                         chat_draft.clear();
@@ -2692,7 +3951,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         peer_name = None;
                         auto_start_done = false;
                         auto_start_frame = 0;
-                        lab_save_slot = None;
+                        lab_reset_slots.clear();
                         ghost_recording = None;
                         ghost_playback = None;
                         if let Some(recorder) = clip_recorder.take() {
@@ -2712,6 +3971,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         input::clear_all_inputs();
                         state = AppState::Menu(MenuScreen::SessionEnded {
                             lines: teardown_lines,
+                            replay_path,
                         });
                     }
                 }
@@ -2745,7 +4005,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             && !match_decided
                     })
                     .unwrap_or(false);
-                if in_fight_screen {
+                if in_fight_screen
+                    && (net_session.is_some()
+                        || local_play_mode.is_lab()
+                        || match_replay_playback.is_some())
+                {
                     if discord_user.is_none() {
                         discord_user = matchmaking::username_from_cached_token();
                     }
@@ -2785,8 +4049,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         } else {
                             Some(local_name)
                         }
-                    } else {
+                    } else if local_play_mode.is_lab() {
                         Some("Lab")
+                    } else {
+                        Some("CPU")
                     };
                     canvas.set_logical_size(0, 0)?;
                     let (win_w, win_h) = canvas.output_size().unwrap_or((1200, 762));
@@ -2838,7 +4104,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     canvas.set_logical_size(LOGICAL_W as u32, LOGICAL_H as u32)?;
                 }
-                if net_session.is_none() && match_replay_playback.is_none() && lab_assist_visible {
+                if let Some(pb) = match_replay_playback.as_ref() {
+                    canvas.set_logical_size(0, 0)?;
+                    let (win_w, win_h) = canvas.output_size().unwrap_or((1200, 762));
+                    draw_replay_review_overlay(
+                        &mut canvas,
+                        &mut font,
+                        win_w as i32,
+                        win_h as i32,
+                        pb,
+                        replay_review_paused,
+                        REPLAY_SPEED_LABELS[replay_review_speed],
+                        replay_event_filter,
+                        replay_clip_in,
+                        replay_clip_out,
+                    )
+                    .map_err(|e| format!("replay review overlay: {e}"))?;
+                    canvas.set_logical_size(LOGICAL_W as u32, LOGICAL_H as u32)?;
+                }
+                if net_session.is_none()
+                    && match_replay_playback.is_none()
+                    && local_play_mode.is_lab()
+                    && lab_assist_visible
+                {
                     canvas.set_logical_size(0, 0)?;
                     let (win_w, win_h) = canvas.output_size().unwrap_or((1200, 762));
                     draw_lab_assist_overlay(
@@ -2850,6 +4138,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         trainer.is_enabled("hitboxes"),
                         trainer.is_enabled("p1_health"),
                         trainer.is_enabled("freeze_timer"),
+                        &lab_dummy.status_label(),
+                        &lab_reset_slots.active_status_label(),
+                        &punish_trainer.status_label(),
                     )
                     .map_err(|e| format!("lab assist overlay: {e}"))?;
                     canvas.set_logical_size(LOGICAL_W as u32, LOGICAL_H as u32)?;
@@ -2866,6 +4157,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if chat_open { Some(&chat_draft) } else { None },
                     )
                     .map_err(|e| format!("chat overlay: {e}"))?;
+                    canvas.set_logical_size(LOGICAL_W as u32, LOGICAL_H as u32)?;
+                }
+                if net_stats_visible && net_session.is_some() {
+                    canvas.set_logical_size(0, 0)?;
+                    let (win_w, win_h) = canvas.output_size().unwrap_or((1200, 762));
+                    let ping_label = latest_net_ping_ms.map(|ms| format!("{ms} ms"));
+                    let detail_rows = net_stats_detail_rows(
+                        latest_net_rollback_frames,
+                        latest_net_load_count,
+                        latest_net_kbps_sent.as_deref(),
+                        latest_net_local_frames_behind.as_deref(),
+                        latest_net_remote_frames_behind.as_deref(),
+                        latest_net_ping_ms,
+                    );
+                    draw_net_stats_overlay(
+                        &mut canvas,
+                        &mut font,
+                        win_w as i32,
+                        win_h as i32,
+                        current_fps,
+                        ping_label.as_deref(),
+                        "ONLINE",
+                        &detail_rows,
+                    )
+                    .map_err(|e| format!("network stats overlay: {e}"))?;
                     canvas.set_logical_size(LOGICAL_W as u32, LOGICAL_H as u32)?;
                 }
                 if let Some(toast) = toast_payload(&toast) {
@@ -2951,7 +4267,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     reset_for_netplay(
                                         c,
                                         &mut trainer,
-                                        &mut lab_save_slot,
+                                        &mut lab_reset_slots,
                                         &mut ghost_playback,
                                         &mut ghost_recording,
                                     );
@@ -3072,6 +4388,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         match_replay_recording =
                                             Some(match_replay::Recording::new(p1, p2));
                                         net_log = log;
+                                        latest_net_ping_ms = None;
+                                        latest_net_kbps_sent = None;
+                                        latest_net_local_frames_behind = None;
+                                        latest_net_remote_frames_behind = None;
+                                        latest_net_rollback_frames = 0;
+                                        latest_net_load_count = 0;
+                                        net_stats_next_frame = 0;
+                                        net_frame_counter = 0;
                                         let who = discord_user.as_deref().unwrap_or("Anonymous");
                                         let role = if local_handle == 0 { "P1" } else { "P2" };
                                         discord_webhook::post(
@@ -3079,6 +4403,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             &format!(":crossed_swords: **{who}** ({role}) is in a match - MK2"),
                                         );
                                         state = AppState::Playing;
+                                        local_play_mode = LocalPlayMode::Arcade;
                                     }
                                     Err(e) => {
                                         let tail = format!("Match connect failed: {e}");
@@ -3174,6 +4499,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     toast_payload(&toast),
                 )
                 .map_err(|e| format!("menu draw: {e}"))?;
+                if net_stats_visible
+                    && matches!(state, AppState::Menu(MenuScreen::Matchmaking { .. }))
+                {
+                    draw_net_stats_overlay(
+                        &mut canvas,
+                        &mut font,
+                        win_w as i32,
+                        win_h as i32,
+                        current_fps,
+                        None,
+                        "QUEUE",
+                        &[],
+                    )
+                    .map_err(|e| format!("network stats overlay: {e}"))?;
+                }
                 canvas.present();
                 canvas.set_logical_size(menu::LOGICAL_W as u32, menu::LOGICAL_H as u32)?;
             }
@@ -3194,25 +4534,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 if let Some(rx) = &username_check_rx {
-                    if matches!(
+                    let waiting_for_username = matches!(
                         state,
                         AppState::Menu(menu::MenuScreen::MatchUsername { .. })
-                    ) {
+                    ) || (username_check_silent
+                        && matches!(state, AppState::Menu(menu::MenuScreen::Matchmaking { .. })));
+                    if waiting_for_username {
                         match rx.try_recv() {
                             Ok(matchmaking::UsernameCheckUpdate::Available(username)) => {
                                 cfg.player_username = username.clone();
+                                cfg.player_username_confirmed = true;
+                                cfg.player_username_autogenerated = false;
                                 config::save(&cfg);
-                                matchmaking::set_guest_profile(
-                                    username.clone(),
-                                    cfg.stats_email.clone(),
+                                start_find_match_queue(
+                                    &cfg,
+                                    &mut mm_rx,
+                                    &mut state,
+                                    username,
+                                    &mut discord_user,
+                                    &mut discord_id,
                                 );
-                                let (tx, rx) = std::sync::mpsc::channel();
-                                mm_rx = Some(rx);
-                                matchmaking::start_guest(tx);
-                                state = AppState::Menu(MenuScreen::Matchmaking {
-                                    status: format!("Entering queue as {username}"),
-                                });
                                 username_check_rx = None;
+                                username_check_silent = false;
                             }
                             Ok(matchmaking::UsernameCheckUpdate::Taken(username)) => {
                                 state = AppState::Menu(MenuScreen::MatchUsername {
@@ -3221,6 +4564,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     checking: false,
                                 });
                                 username_check_rx = None;
+                                username_check_silent = false;
                             }
                             Ok(matchmaking::UsernameCheckUpdate::Error(message)) => {
                                 let value = if let AppState::Menu(MenuScreen::MatchUsername {
@@ -3238,10 +4582,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     checking: false,
                                 });
                                 username_check_rx = None;
+                                username_check_silent = false;
                             }
                             Err(std::sync::mpsc::TryRecvError::Empty) => {}
                             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                                 username_check_rx = None;
+                                username_check_silent = false;
                                 state = AppState::Menu(MenuScreen::MatchUsername {
                                     value: cfg.player_username.clone(),
                                     status: "Username check stopped".into(),
@@ -3251,6 +4597,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     } else {
                         username_check_rx = None;
+                        username_check_silent = false;
                     }
                 }
 
@@ -3564,6 +4911,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     &mut drone_runner,
                                                 );
                                                 match_replay_playback = None;
+                                                local_play_mode = LocalPlayMode::Lab;
                                                 input::clear_all_inputs();
                                                 auto_start_done = false;
                                                 auto_start_frame = 0;
@@ -3692,6 +5040,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         if elapsed < frame_duration {
             std::thread::sleep(frame_duration - elapsed);
+        }
+        fps_sample_frames = fps_sample_frames.saturating_add(1);
+        let fps_elapsed = fps_sample_started.elapsed();
+        if fps_elapsed >= Duration::from_millis(500) {
+            current_fps = Some(fps_sample_frames as f32 / fps_elapsed.as_secs_f32());
+            fps_sample_frames = 0;
+            fps_sample_started = Instant::now();
         }
     }
 

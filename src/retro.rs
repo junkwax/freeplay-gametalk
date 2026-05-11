@@ -75,6 +75,16 @@ pub static mut LIVE_INPUT: [[bool; 16]; 2] = [[false; 16]; 2];
 /// each frame and then clears it.
 pub static mut AUDIO_BUFFER: Vec<i16> = Vec::new();
 
+#[allow(static_mut_refs)]
+pub unsafe fn clear_audio_buffer() {
+    AUDIO_BUFFER.clear();
+}
+
+#[allow(static_mut_refs)]
+pub unsafe fn drain_audio_buffer() -> Vec<i16> {
+    std::mem::take(&mut AUDIO_BUFFER)
+}
+
 /// When true, video_refresh_cb / audio callbacks discard data. Used during
 /// rollback resim frames where we only want to advance state, not present it.
 pub static mut SILENT_MODE: bool = false;
@@ -261,6 +271,7 @@ pub struct Core {
     _lib: Library, // kept alive so the other symbols stay valid
     pub run: unsafe extern "C" fn(),
     pub av_info: SystemAvInfo,
+    reset_fn: unsafe extern "C" fn(),
     serialize_size_fn: unsafe extern "C" fn() -> usize,
     serialize_fn: unsafe extern "C" fn(*mut c_void, usize) -> bool,
     unserialize_fn: unsafe extern "C" fn(*const c_void, usize) -> bool,
@@ -269,6 +280,15 @@ pub struct Core {
 }
 
 impl Core {
+    /// Reset the loaded game through libretro. This keeps the core loaded but
+    /// returns emulation to the same clean state as a fresh arcade boot.
+    pub fn reset(&self) {
+        unsafe {
+            (self.reset_fn)();
+            clear_audio_buffer();
+        }
+    }
+
     /// Maximum serialized state size in bytes (upper bound; actual writes fit in this).
     pub fn serialize_size(&self) -> usize {
         unsafe { (self.serialize_size_fn)() }
@@ -340,6 +360,7 @@ pub unsafe fn load(dll_path: &str, rom_path: &str) -> Result<Core, Box<dyn std::
     let retro_load_game: Symbol<unsafe extern "C" fn(*const GameInfo) -> bool> =
         lib.get(b"retro_load_game\0")?;
     let retro_run: Symbol<unsafe extern "C" fn()> = lib.get(b"retro_run\0")?;
+    let retro_reset: Symbol<unsafe extern "C" fn()> = lib.get(b"retro_reset\0")?;
     let retro_get_system_av_info: Symbol<unsafe extern "C" fn(*mut SystemAvInfo)> =
         lib.get(b"retro_get_system_av_info\0")?;
     let retro_serialize_size: Symbol<unsafe extern "C" fn() -> usize> =
@@ -389,6 +410,7 @@ pub unsafe fn load(dll_path: &str, rom_path: &str) -> Result<Core, Box<dyn std::
 
     // Capture function pointers before their `Symbol` guards drop.
     let run_fn: unsafe extern "C" fn() = *retro_run;
+    let reset_fn: unsafe extern "C" fn() = *retro_reset;
     let ss_fn: unsafe extern "C" fn() -> usize = *retro_serialize_size;
     let s_fn: unsafe extern "C" fn(*mut c_void, usize) -> bool = *retro_serialize;
     let u_fn: unsafe extern "C" fn(*const c_void, usize) -> bool = *retro_unserialize;
@@ -404,6 +426,7 @@ pub unsafe fn load(dll_path: &str, rom_path: &str) -> Result<Core, Box<dyn std::
         _lib: lib,
         run: run_fn,
         av_info,
+        reset_fn,
         serialize_size_fn: ss_fn,
         serialize_fn: s_fn,
         unserialize_fn: u_fn,

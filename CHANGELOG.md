@@ -1,5 +1,76 @@
 # Changelog
 
+## 0.6.0 - 2026-05-10
+
+### Added
+
+- Added Replay Review Mode for saved full-match replays with pause/resume,
+  one-frame stepping, 5-second seek jumps, live P1/P2 input display, frame/time
+  readout, and a timeline with round, hit, and match-end markers.
+- Added replay review speed controls and previous/next marker jumps for quickly
+  navigating long sets.
+- Added a Replay Review event sidebar that lists round starts, hits, and match
+  end markers with the current event highlighted.
+- Added replay clip export: set in/out marks during review and press `Ctrl+R`
+  to export that replay segment through the MP4 clip pipeline.
+- Added Replays browser actions for deleting selected online replays, opening the
+  replay folder, and showing readable replay duration/date metadata.
+- Added persistent replay bookmarks and replay notes. Bookmarks appear on the
+  review timeline/sidebar, marker jumps include them, and notes show in the
+  Replays browser.
+- Added Replay Review event filters for narrowing the timeline, sidebar, and
+  previous/next event jumps to hits, bookmarks, rounds, or match-end markers.
+- Added Replay Review learning auto-markers for first hit, big damage,
+  low-health scrambles, and P1/P2 round wins, plus a `LEARN` event filter.
+- Added a separate main-menu `Arcade` entry under Find Match for normal local
+  coin/start play without Lab dummy input, Lab assist, or training pokes.
+- Added a compact Lab submenu for Start Lab and Load Ghosts.
+- Added online match replay capture so completed Find Match sets can save a
+  reviewable `.ncrp` replay.
+- Added an opt-in `F11` network stats overlay for matchmaking and online play,
+  showing FPS and live ping once connected.
+- Added the `F11` stats hint directly to the Find Match queue screen.
+- Added a post-online-match replay shortcut on the match-ended screen (`R` or
+  controller `Y`) when an online replay was saved.
+- Added richer online diagnostics to the `F11` stats panel: quality, rollback
+  frames, load count, frames behind, and send rate.
+- Added Lab dummy controls. Lab now defaults to a local 2P dummy, `F5` cycles
+  stand/crouch/block/crouch-block/jump/jump-in/reversal/throw-tech/wakeup-block/off
+  modes, and `OFF` preserves the old single-player CPU behavior.
+- Added Lab dummy presets for jump-in, reversal mash, throw-tech, and wakeup
+  block practice.
+- Added Lab dummy loop recording with `Ctrl+F5`: record P2 live controls for up
+  to five seconds, loop them as the dummy, and clear the loop with `Shift+F5`.
+- Added Lab quick position reset on `Ctrl+F6`, cycling midscreen, P2-corner,
+  and P1-corner placements without leaving the match.
+- Added three Lab reset slots. `F6/F7` load/save the active slot, `Ctrl+F7`
+  cycles slots, and the Lab assist panel marks saved slots with `*`.
+- Added Punish Trainer with `F10`: recorded dummy loops arm a punish window and
+  score `PUNISH`, `LATE`, `BLOCKED`, or `MISSED` from P2 health and P1 attacks.
+- Added passive Lab damage tracking for last damage, hit count, attempts, and
+  best damage in the Lab assist panel.
+- Changed the Find Match name gate so generated names only need first-run
+  confirmation; accepted/custom names skip the blinking name box on later
+  queues unless the name check fails.
+- Changed the replay browser back to a top-level `Replays` main-menu item and
+  scoped it to online match replays.
+- Changed Arcade/Lab/Ghost local play to stop creating Replays entries.
+- Changed Arcade to suppress the extra scorebar overlay so it feels like the
+  normal arcade path.
+- Changed the in-game Lab hotkeys panel to a compact F-key-only quick reference;
+  modifier shortcuts remain documented in About/README.
+- Changed the About and Settings screens to use tighter reference text instead
+  of large bottom note blocks.
+- Changed input display direction formatting so Up displays as `U`, including
+  controller conflict cases that previously collapsed to neutral.
+
+### Fixed
+
+- Fixed Arcade starts after Lab so the core resets back to a clean arcade boot
+  instead of inheriting the last Lab match state.
+- Fixed the lower-right `Logged in as` badge disappearing on the Find Match
+  matchmaking screen.
+
 ## 0.5.21 - 2026-05-10
 
 ### Fixed

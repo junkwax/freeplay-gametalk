@@ -14,8 +14,7 @@ URLs, OAuth client IDs, tokens, or webhooks.
 
 ## Current Build
 
-- Modern SDL menu with Profile, Load Ghosts, Watch Replays, Controls,
-  Settings, and About.
+- Modern SDL menu with Replays, Profile, Lab, Controls, Settings, and About.
 - Username-based online sign-in; Discord OAuth is not required to match.
 - Optional Discord account linking from Settings for profile lookup and
   account display.
@@ -23,12 +22,14 @@ URLs, OAuth client IDs, tokens, or webhooks.
 - Discord Rich Presence with join/spectate support when configured.
 - Online matchmaking through a signaling service.
 - Public UDP relay path for cross-NAT online play.
+- Arcade mode for a normal local coin/start arcade run, separate from Lab's
+  training helpers.
 - Best-of-session scoring and a high-resolution fight overlay rendered over
   the emulator view.
 - Profile page with rating, wins, losses, win rate, match history, and Discord
   avatar support when available.
-- Ghost recording, upload/download support, local ghost playback, full match
-  replay viewing, and lab play drone mode.
+- Ghost recording, upload/download support, local ghost playback, online match
+  replay review, and lab play drone mode.
 - Package script that creates a distributable zip without ROMs or secrets.
 
 ## Hotkeys
@@ -40,6 +41,14 @@ URLs, OAuth client IDs, tokens, or webhooks.
 - `Esc`, controller `B`, or controller `Back`: go back/cancel.
 - `Tab`, `Left`/`Right`, or controller D-pad left/right: switch P1/P2 on
   screens that support it.
+- Find Match asks for a public name the first time a generated name needs
+  confirmation. After the name is accepted once, or after a custom saved name
+  checks out, future queues skip the name box unless the name is taken.
+- `Arcade` starts a normal local arcade run. Insert coin/start through your
+  bindings; Lab dummy controls, Lab assist, training pokes, and the extra
+  scorebar overlay stay off.
+- `Lab` opens a compact submenu for Start Lab and Load Ghosts.
+- `Replays` opens saved online match replays from completed Find Match sets.
 - `Shift+D`: open Doctor from menu screens.
 
 ### Lab And Local Play
@@ -48,10 +57,28 @@ URLs, OAuth client IDs, tokens, or webhooks.
 - `F2`: toggle hitbox overlay.
 - `F3`: toggle infinite health.
 - `F4`: toggle freeze timer.
-- `F6`: load the saved Lab reset point.
-- `F7`: save the current Lab reset point.
+- `F5`: cycle Lab dummy mode (`STAND`, `CROUCH`, `BLOCK`, `CROUCH BLOCK`,
+  `JUMP`, `JUMP IN`, `REV MASH`, `THROW TECH`, `WAKE BLOCK`, `OFF`). Active
+  dummy modes start Lab as a local 2P match and own P2 inputs; `OFF` keeps the
+  old single-player/CPU behavior.
+- `Ctrl+F5`: record P2's live controls for up to 5 seconds, then loop them as
+  the Lab dummy. Press `Ctrl+F5` again to stop early.
+- `Shift+F5`: clear the recorded dummy loop and return to the selected simple
+  dummy mode.
+- `F6`: load the active Lab reset slot.
+- `Ctrl+F6`: quick position reset. Each press applies the current preset and
+  advances the next preset through `MID`, `P2 CORNER`, and `P1 CORNER`.
+- `F7`: save the active Lab reset slot.
+- `Ctrl+F7`: cycle Lab reset slots `S1`/`S2`/`S3`; an asterisk in the Lab
+  assist panel means that slot has a saved reset.
 - `F8`: load/play full ghost playback from `ghost.bin`.
 - `F9`: start/stop local ghost recording.
+- `F10`: toggle Punish Trainer when no ghost playback is active. It arms when
+  the recorded dummy loop ends, then scores `PUNISH`, `LATE`, `BLOCKED`, or
+  `MISSED` from P2 health and P1 attacks.
+- Lab assist also tracks P2 damage, hit count, attempts, and best damage while
+  fighting.
+- `Shift+F10`: reset Punish Trainer and damage stats.
 - `F10`: toggle reactive drone behavior while a ghost playback is active.
 - `F12`: play against a logic-driven P2 ghost opponent.
 - `F11`: show/hide the Lab assist panel, including P1 input history.
@@ -65,7 +92,34 @@ URLs, OAuth client IDs, tokens, or webhooks.
 - `Enter` or controller `Start`: send chat.
 - `Esc`, controller `B`, or controller `Back`: close chat.
 - `F1`: leave an online set gracefully.
-- `Esc`: stop full replay playback and return to Watch Replays.
+- `F11`: show/hide network stats while matchmaking or online. The panel is
+  hidden by default and shows FPS, ping, rollback/load counts, frames behind,
+  send rate, and a connection-quality label once connected.
+- On the online match-ended screen, press `R` or controller `Y` to review the
+  replay saved from that set.
+- `Space`, `Enter`, or controller `Start`: pause/resume replay review.
+- `.`, or controller `A`: step one replay frame while paused.
+- `Left`/`Right`, or controller D-pad left/right: jump replay review by 5 seconds.
+- `Up`/`Down`, or controller D-pad up/down: adjust replay review speed.
+- `F`, or controller `Guide`: cycle replay event filters (`ALL`, `HITS`,
+  `LEARN`, `BOOKMARKS`, `ROUNDS`, `END`).
+- `PageUp`/`PageDown`, or controller `LB`/`RB`: jump to previous/next replay
+  event in the active filter.
+- Replay review shows a right-side event list for round starts, hits, and match
+  end markers plus manual bookmarks when there is enough screen space.
+- Replay review auto-marks learning moments including first hit, big damage,
+  low-health scramble, and P1/P2 round wins.
+- Replays shows replay duration/date metadata; press `Delete` or
+  controller `X` to remove the selected replay, `N` or controller `RB` to edit
+  its note, and `O` or controller `Y` to open the replay folder.
+- `M` or controller right-stick click: add/remove a bookmark at the current
+  replay frame.
+- `Delete` or controller left-stick click: remove the nearest replay bookmark.
+- `I`/`O`, or controller `X`/`Y`: set replay clip in/out marks.
+- `Ctrl+R`: export the marked replay review segment as an MP4 clip.
+- `C`: clear replay clip marks.
+- `Esc`, controller `B`, or controller `Back`: stop replay review and return to
+  Replays.
 - `Shift+F11`: dump SYSTEM_RAM for diagnostics.
 - `Shift+F9`: run the rewind determinism test.
 
@@ -180,8 +234,8 @@ published as a GitHub Release.
 Create and publish a release by pushing a version tag:
 
 ```powershell
-git tag v0.5.21
-git push origin v0.5.21
+git tag v0.6.0
+git push origin v0.6.0
 ```
 
 The release workflow fails if the pushed tag does not match the version in
@@ -244,7 +298,7 @@ For public release builds:
    Freeplay.
 6. Select Find Match, confirm a player name, then enter the queue.
 7. During an online match, press `T` to chat, Enter/Start to send, or Esc/B/Back to close.
-8. Completed sets save local full-match replays; use Watch Replays to review.
+8. Completed online sets save full-match replays; use Replays to review.
 9. Press `F1` to leave the set.
 
 Under the hood:
@@ -311,7 +365,7 @@ The repository intentionally ignores:
 - ROM zips and generated release zips
 - SDL/FBNeo runtime binaries in `src\`
 - local logs, save states, ghosts, and tokens
-- local match replays
+- saved replay files
 - `.env` and local `config.toml`
 - local agent notes and scratch scripts
 - `Cargo.lock`

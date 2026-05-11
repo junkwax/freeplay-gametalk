@@ -269,7 +269,18 @@ fn run(tx: &Sender<Update>) -> Result<(), String> {
 }
 
 fn run_guest(tx: &Sender<Update>) -> Result<(), String> {
-    send(tx, Update::Status("Signing in as guest...".into()))?;
+    let has_profile_email = GUEST_PROFILE
+        .lock()
+        .ok()
+        .and_then(|g| g.clone())
+        .and_then(|(_, email)| crate::config::normalize_email(&email))
+        .is_some();
+    let status = if has_profile_email {
+        "Signing in with player profile..."
+    } else {
+        "Signing in as guest..."
+    };
+    send(tx, Update::Status(status.into()))?;
     let token = guest_login()?;
     set_current_token(&token);
     run_with_token(tx, token)

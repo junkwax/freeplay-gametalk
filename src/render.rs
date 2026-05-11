@@ -572,6 +572,64 @@ pub fn draw_chat_overlay(
     Ok(())
 }
 
+pub fn draw_net_stats_overlay(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    font: &mut Font,
+    window_w: i32,
+    window_h: i32,
+    fps: Option<f32>,
+    ping: Option<&str>,
+    mode: &str,
+    detail_rows: &[String],
+) -> Result<(), String> {
+    let scale = 1;
+    let pad = 9;
+    let line_h = 18;
+    let fps_text = fps
+        .map(|v| format!("{v:.1} FPS"))
+        .unwrap_or_else(|| "-- FPS".to_string());
+    let ping_text = format!("PING {}", ping.unwrap_or("--"));
+    let mut rows = vec![mode.to_string(), fps_text, ping_text];
+    rows.extend(detail_rows.iter().cloned());
+
+    let mut content_w = font.text_width_overlay("NET STATS", scale);
+    for row in &rows {
+        content_w = content_w.max(font.text_width_exact(row, scale));
+    }
+    let box_w = (content_w + pad * 2).clamp(150, 230);
+    let box_h = pad * 2 + 24 + line_h * rows.len() as i32;
+    let x = window_w - box_w - 18;
+    let y = window_h - box_h - 24;
+
+    canvas.set_draw_color(Color::RGBA(8, 10, 18, 205));
+    canvas.fill_rect(Rect::new(x, y, box_w as u32, box_h as u32))?;
+    canvas.set_draw_color(Color::RGBA(95, 130, 210, 190));
+    canvas.draw_rect(Rect::new(x, y, box_w as u32, box_h as u32))?;
+    font.draw_overlay(
+        canvas,
+        "NET STATS",
+        x + pad,
+        y + pad,
+        scale,
+        Color::RGBA(255, 210, 90, 245),
+    )?;
+
+    let mut row_y = y + pad + 26;
+    for row in rows {
+        font.draw(
+            canvas,
+            &row,
+            x + pad,
+            row_y,
+            scale,
+            Color::RGBA(226, 234, 252, 230),
+        )?;
+        row_y += line_h;
+    }
+
+    Ok(())
+}
+
 pub fn draw_lab_assist_overlay(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     font: &mut Font,
@@ -581,6 +639,9 @@ pub fn draw_lab_assist_overlay(
     hitboxes_on: bool,
     health_on: bool,
     timer_on: bool,
+    dummy_status: &str,
+    reset_slot_status: &str,
+    punish_status: &str,
 ) -> Result<(), String> {
     let header_scale = 1;
     let body_scale = 1;
@@ -591,11 +652,12 @@ pub fn draw_lab_assist_overlay(
         format!("F2  BOXES {}", if hitboxes_on { "ON" } else { "OFF" }),
         format!("F3  HEALTH {}", if health_on { "ON" } else { "OFF" }),
         format!("F4  TIMER {}", if timer_on { "ON" } else { "OFF" }),
-        "F6  LOAD RESET".to_string(),
-        "F7  SAVE RESET".to_string(),
+        format!("F5  DUMMY {dummy_status}"),
+        format!("F6  LOAD {reset_slot_status}"),
+        format!("F7  SAVE {reset_slot_status}"),
         "F8  LOAD GHOST".to_string(),
         "F9  SAVE GHOST".to_string(),
-        "F10 GHOST AI".to_string(),
+        format!("F10 PUNISH {punish_status}"),
         "F11 HIDE HELP".to_string(),
         "F12 VS GHOST".to_string(),
     ];
@@ -708,6 +770,405 @@ pub fn draw_lab_assist_overlay(
         }
     }
     Ok(())
+}
+
+pub fn draw_replay_review_overlay(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    font: &mut Font,
+    window_w: i32,
+    window_h: i32,
+    playback: &crate::match_replay::Playback,
+    paused: bool,
+    speed_label: &str,
+    event_filter: crate::match_replay::ReplayEventFilter,
+    clip_in: Option<usize>,
+    clip_out: Option<usize>,
+) -> Result<(), String> {
+    let pad = 10;
+    let panel_w = (window_w - 36).clamp(360, 760);
+    let panel_h = 146;
+    let x = (window_w - panel_w) / 2;
+    let y = window_h - panel_h - 18;
+    let scale = 1;
+    let header_scale = 1;
+    let frame = playback.current_frame();
+    let total = playback.frame_count().max(1);
+    let mins = frame / (55 * 60);
+    let secs = (frame / 55) % 60;
+    let state = if paused { "PAUSED" } else { "PLAYING" };
+    let header = format!(
+        "{state} {speed_label}  FILTER {}  FRAME {frame}/{total}  {mins:02}:{secs:02}",
+        event_filter.label()
+    );
+
+    draw_replay_event_sidebar(canvas, font, window_w, window_h, playback, event_filter)?;
+
+    canvas.set_draw_color(Color::RGBA(8, 10, 18, 205));
+    canvas.fill_rect(Rect::new(x, y, panel_w as u32, panel_h as u32))?;
+    canvas.set_draw_color(Color::RGBA(95, 130, 210, 190));
+    canvas.draw_rect(Rect::new(x, y, panel_w as u32, panel_h as u32))?;
+
+    font.draw_overlay(
+        canvas,
+        "REPLAY REVIEW",
+        x + pad,
+        y + pad,
+        header_scale,
+        Color::RGBA(255, 210, 90, 240),
+    )?;
+    let header_w = font.text_width_exact(&header, scale);
+    font.draw(
+        canvas,
+        &header,
+        x + panel_w - pad - header_w,
+        y + pad + 2,
+        scale,
+        Color::RGBA(220, 230, 255, 230),
+    )?;
+
+    let timeline_x = x + pad;
+    let timeline_y = y + 38;
+    let timeline_w = panel_w - pad * 2;
+    canvas.set_draw_color(Color::RGBA(56, 62, 84, 220));
+    canvas.fill_rect(Rect::new(timeline_x, timeline_y, timeline_w as u32, 5))?;
+    let progress_w = ((timeline_w as f32) * (frame as f32 / total as f32))
+        .round()
+        .clamp(0.0, timeline_w as f32) as u32;
+    canvas.set_draw_color(Color::RGBA(120, 210, 255, 230));
+    canvas.fill_rect(Rect::new(timeline_x, timeline_y, progress_w, 5))?;
+
+    for marker in playback.markers() {
+        if !event_filter.matches_marker(marker.kind) {
+            continue;
+        }
+        let mx = timeline_x
+            + ((timeline_w as f32) * (marker.frame as f32 / total as f32))
+                .round()
+                .clamp(0.0, timeline_w as f32) as i32;
+        let color = replay_marker_color(marker.kind);
+        canvas.set_draw_color(color);
+        canvas.fill_rect(Rect::new(mx, timeline_y - 5, 2, 15))?;
+    }
+    if event_filter.matches_bookmarks() {
+        for bookmark in playback.bookmarks() {
+            let mx = timeline_x
+                + ((timeline_w as f32) * (bookmark.frame as f32 / total as f32))
+                    .round()
+                    .clamp(0.0, timeline_w as f32) as i32;
+            canvas.set_draw_color(replay_bookmark_color());
+            canvas.fill_rect(Rect::new(mx - 2, timeline_y - 7, 5, 17))?;
+        }
+    }
+
+    let inputs = playback.current_inputs().unwrap_or([0, 0]);
+    let p1 = crate::input_history::format_bits(inputs[0]);
+    let p2 = crate::input_history::format_bits(inputs[1]);
+    let next_marker = next_replay_event_line(playback, frame, event_filter);
+    let input_line = format!("P1 {p1}     P2 {p2}     {next_marker}");
+    let clip_line = replay_clip_line(clip_in, clip_out);
+    let controls_1 = "SPACE/START PAUSE   . / A STEP   F/GUIDE FILTER";
+    let controls_2 = "UP/DOWN SPEED   M/RS BOOKMARK   DEL/LS REMOVE";
+    let controls_3 = "LEFT/RIGHT +/-5S   PGUP/PGDN/LB/RB EVENT   I/O X/Y CLIP";
+    let input_line = fit_text_exact(font, &input_line, scale, timeline_w);
+    let clip_line = fit_text_exact(font, &clip_line, scale, timeline_w);
+    let controls_1 = fit_text_exact(font, controls_1, scale, timeline_w);
+    let controls_2 = fit_text_exact(font, controls_2, scale, timeline_w);
+    let controls_3 = fit_text_exact(font, controls_3, scale, timeline_w);
+    font.draw(
+        canvas,
+        &input_line,
+        x + pad,
+        y + 56,
+        scale,
+        Color::RGBA(230, 238, 255, 230),
+    )?;
+    font.draw(
+        canvas,
+        &clip_line,
+        x + pad,
+        y + 74,
+        scale,
+        Color::RGBA(220, 230, 255, 220),
+    )?;
+    font.draw(
+        canvas,
+        &controls_1,
+        x + pad,
+        y + 92,
+        scale,
+        Color::RGBA(150, 165, 195, 190),
+    )?;
+    font.draw(
+        canvas,
+        &controls_2,
+        x + pad,
+        y + 110,
+        scale,
+        Color::RGBA(150, 165, 195, 190),
+    )?;
+    font.draw(
+        canvas,
+        &controls_3,
+        x + pad,
+        y + 128,
+        scale,
+        Color::RGBA(150, 165, 195, 190),
+    )?;
+
+    Ok(())
+}
+
+fn draw_replay_event_sidebar(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    font: &mut Font,
+    window_w: i32,
+    window_h: i32,
+    playback: &crate::match_replay::Playback,
+    event_filter: crate::match_replay::ReplayEventFilter,
+) -> Result<(), String> {
+    if window_w < 760 {
+        return Ok(());
+    }
+
+    enum SidebarRaw {
+        Marker(crate::match_replay::ReplayMarkerKind),
+        Bookmark(String),
+    }
+
+    struct SidebarEvent {
+        frame: u32,
+        label: String,
+        color: Color,
+    }
+
+    let mut raw = Vec::new();
+    for marker in playback.markers() {
+        if event_filter.matches_marker(marker.kind) {
+            raw.push((marker.frame, 0_u8, SidebarRaw::Marker(marker.kind)));
+        }
+    }
+    if event_filter.matches_bookmarks() {
+        for bookmark in playback.bookmarks() {
+            raw.push((
+                bookmark.frame,
+                1_u8,
+                SidebarRaw::Bookmark(bookmark.note.clone()),
+            ));
+        }
+    }
+    if raw.is_empty() {
+        return Ok(());
+    }
+    raw.sort_by_key(|(frame, order, _)| (*frame, *order));
+
+    let mut round_count = 0;
+    let mut hit_count = 0;
+    let mut bookmark_count = 0;
+    let events: Vec<SidebarEvent> = raw
+        .into_iter()
+        .map(|(frame, _, kind)| match kind {
+            SidebarRaw::Marker(kind) => {
+                let label = match kind {
+                    crate::match_replay::ReplayMarkerKind::RoundStart => {
+                        round_count += 1;
+                        format!("ROUND {round_count}")
+                    }
+                    crate::match_replay::ReplayMarkerKind::RoundWinP1 => "P1 ROUND".to_string(),
+                    crate::match_replay::ReplayMarkerKind::RoundWinP2 => "P2 ROUND".to_string(),
+                    crate::match_replay::ReplayMarkerKind::Hit => {
+                        hit_count += 1;
+                        format!("HIT {hit_count:02}")
+                    }
+                    crate::match_replay::ReplayMarkerKind::FirstHit => "FIRST HIT".to_string(),
+                    crate::match_replay::ReplayMarkerKind::BigDamage => "BIG DAMAGE".to_string(),
+                    crate::match_replay::ReplayMarkerKind::LowHealth => "LOW HEALTH".to_string(),
+                    crate::match_replay::ReplayMarkerKind::MatchEnd => "MATCH END".to_string(),
+                };
+                SidebarEvent {
+                    frame,
+                    label,
+                    color: replay_marker_color(kind),
+                }
+            }
+            SidebarRaw::Bookmark(note) => {
+                bookmark_count += 1;
+                let label = if note.is_empty() {
+                    format!("MARK {bookmark_count:02}")
+                } else {
+                    format!("MARK {bookmark_count:02} {note}")
+                };
+                SidebarEvent {
+                    frame,
+                    label,
+                    color: replay_bookmark_color(),
+                }
+            }
+        })
+        .collect();
+
+    let pad = 8;
+    let panel_w = 226;
+    let bottom_limit = window_h - 178;
+    let panel_h = (bottom_limit - 88).clamp(132, 360);
+    let x = window_w - panel_w - 18;
+    let y = 88;
+    let row_h = 18;
+    let scale = 1;
+    let frame = playback.current_frame();
+    let active = events
+        .iter()
+        .rposition(|event| event.frame as usize <= frame)
+        .unwrap_or(0);
+    let max_rows = ((panel_h - 44) / row_h).max(3) as usize;
+    let mut start = active.saturating_sub(max_rows / 2);
+    if start + max_rows > events.len() {
+        start = events.len().saturating_sub(max_rows);
+    }
+    let end = (start + max_rows).min(events.len());
+
+    canvas.set_draw_color(Color::RGBA(8, 10, 18, 200));
+    canvas.fill_rect(Rect::new(x, y, panel_w as u32, panel_h as u32))?;
+    canvas.set_draw_color(Color::RGBA(95, 130, 210, 170));
+    canvas.draw_rect(Rect::new(x, y, panel_w as u32, panel_h as u32))?;
+    let sidebar_title = format!("{} EVENTS", event_filter.label());
+    font.draw_overlay(
+        canvas,
+        &sidebar_title,
+        x + pad,
+        y + pad,
+        scale,
+        Color::RGBA(255, 210, 90, 240),
+    )?;
+
+    let mut row_y = y + 34;
+    for (i, event) in events[start..end].iter().enumerate() {
+        let absolute = start + i;
+        let is_active = absolute == active;
+        if is_active {
+            canvas.set_draw_color(Color::RGBA(34, 42, 66, 230));
+            canvas.fill_rect(Rect::new(
+                x + 4,
+                row_y - 3,
+                (panel_w - 8) as u32,
+                (row_h - 2) as u32,
+            ))?;
+        }
+        canvas.set_draw_color(event.color);
+        canvas.fill_rect(Rect::new(x + pad, row_y + 4, 4, 4))?;
+        let stamp = format_review_clock(event.frame as usize);
+        let stamp_w = font.text_width_exact(&stamp, scale);
+        let label = fit_text_exact(font, &event.label, scale, panel_w - pad * 2 - stamp_w - 20);
+        font.draw(
+            canvas,
+            &label,
+            x + pad + 12,
+            row_y,
+            scale,
+            if is_active {
+                Color::RGBA(235, 242, 255, 245)
+            } else {
+                Color::RGBA(205, 214, 235, 220)
+            },
+        )?;
+        font.draw(
+            canvas,
+            &stamp,
+            x + panel_w - pad - stamp_w,
+            row_y,
+            scale,
+            Color::RGBA(145, 156, 184, 210),
+        )?;
+        row_y += row_h;
+    }
+
+    Ok(())
+}
+
+fn replay_marker_label(kind: crate::match_replay::ReplayMarkerKind) -> &'static str {
+    match kind {
+        crate::match_replay::ReplayMarkerKind::RoundStart => "ROUND",
+        crate::match_replay::ReplayMarkerKind::RoundWinP1 => "P1 RD",
+        crate::match_replay::ReplayMarkerKind::RoundWinP2 => "P2 RD",
+        crate::match_replay::ReplayMarkerKind::Hit => "HIT",
+        crate::match_replay::ReplayMarkerKind::FirstHit => "1ST",
+        crate::match_replay::ReplayMarkerKind::BigDamage => "BIG",
+        crate::match_replay::ReplayMarkerKind::LowHealth => "LOW",
+        crate::match_replay::ReplayMarkerKind::MatchEnd => "END",
+    }
+}
+
+fn replay_marker_color(kind: crate::match_replay::ReplayMarkerKind) -> Color {
+    match kind {
+        crate::match_replay::ReplayMarkerKind::RoundStart => Color::RGBA(255, 220, 120, 240),
+        crate::match_replay::ReplayMarkerKind::RoundWinP1 => Color::RGBA(130, 235, 150, 245),
+        crate::match_replay::ReplayMarkerKind::RoundWinP2 => Color::RGBA(150, 175, 255, 245),
+        crate::match_replay::ReplayMarkerKind::Hit => Color::RGBA(235, 85, 85, 240),
+        crate::match_replay::ReplayMarkerKind::FirstHit => Color::RGBA(255, 165, 90, 245),
+        crate::match_replay::ReplayMarkerKind::BigDamage => Color::RGBA(255, 95, 210, 245),
+        crate::match_replay::ReplayMarkerKind::LowHealth => Color::RGBA(120, 225, 255, 245),
+        crate::match_replay::ReplayMarkerKind::MatchEnd => Color::RGBA(180, 235, 255, 245),
+    }
+}
+
+fn replay_bookmark_color() -> Color {
+    Color::RGBA(120, 245, 150, 245)
+}
+
+fn next_replay_event_line(
+    playback: &crate::match_replay::Playback,
+    frame: usize,
+    filter: crate::match_replay::ReplayEventFilter,
+) -> String {
+    let marker = playback
+        .markers()
+        .iter()
+        .find(|marker| marker.frame as usize > frame && filter.matches_marker(marker.kind))
+        .map(|marker| (marker.frame, replay_marker_label(marker.kind).to_string()));
+    let bookmark = playback
+        .next_bookmark_after(frame)
+        .filter(|_| filter.matches_bookmarks())
+        .map(|bookmark| (bookmark.frame, "MARK".to_string()));
+    marker
+        .into_iter()
+        .chain(bookmark)
+        .min_by_key(|(event_frame, _)| *event_frame)
+        .map(|(event_frame, label)| format!("NEXT {label} @{event_frame}"))
+        .unwrap_or_else(|| {
+            if filter == crate::match_replay::ReplayEventFilter::All {
+                "NO NEXT EVENT".to_string()
+            } else {
+                format!("NO NEXT {} EVENT", filter.label())
+            }
+        })
+}
+
+fn replay_clip_line(clip_in: Option<usize>, clip_out: Option<usize>) -> String {
+    match (clip_in, clip_out) {
+        (Some(start), Some(end)) => {
+            let from = start.min(end);
+            let to = start.max(end);
+            format!(
+                "CLIP IN {}  OUT {}  LEN {}",
+                format_review_clock(from),
+                format_review_clock(to),
+                format_review_duration(to.saturating_sub(from))
+            )
+        }
+        (Some(start), None) => format!("CLIP IN {}  OUT --", format_review_clock(start)),
+        (None, Some(end)) => format!("CLIP IN --  OUT {}", format_review_clock(end)),
+        (None, None) => "CLIP IN --  OUT --".to_string(),
+    }
+}
+
+fn format_review_clock(frame: usize) -> String {
+    let mins = frame / (55 * 60);
+    let secs = (frame / 55) % 60;
+    format!("{mins:02}:{secs:02}")
+}
+
+fn format_review_duration(frames: usize) -> String {
+    let tenths = frames.saturating_mul(10) / 55;
+    format!("{}.{:01}s", tenths / 10, tenths % 10)
 }
 
 fn format_input_frames(frames: u32) -> String {

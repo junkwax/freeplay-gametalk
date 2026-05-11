@@ -35,6 +35,9 @@ pub enum MenuScreen {
     Main {
         cursor: usize,
     },
+    LabMenu {
+        cursor: usize,
+    },
     Controls {
         cursor: usize,
         player: Player,
@@ -56,6 +59,7 @@ pub enum MenuScreen {
     /// gets a calm end screen instead of a diagnostics-style failure panel.
     SessionEnded {
         lines: Vec<String>,
+        replay_path: Option<String>,
     },
     /// Automated matchmaking via the signaling server. `status` is a
     /// human-readable progress string updated by the background thread.
@@ -140,10 +144,11 @@ pub enum MenuScreen {
     },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EditField {
     Username,
     StatsEmail,
+    ReplayNote { path: String, cursor: usize },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -163,6 +168,8 @@ pub struct ReplayEntry {
     pub p1_name: String,
     pub p2_name: String,
     pub frame_count: u32,
+    pub note: String,
+    pub bookmark_count: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -230,15 +237,16 @@ impl Default for AppState {
 /// from the public menu for now to keep the first-run footprint focused.
 pub const MAIN_ITEMS: [&str; 9] = [
     "Find Match",
+    "Arcade",
     "Lab",
+    "Replays",
     "Profile",
-    "Load Ghosts",
-    "Watch Replays",
     "Controls",
     "Settings",
     "About",
     "Quit",
 ];
+const LAB_MENU_ITEMS: [&str; 2] = ["Start Lab", "Load Ghosts"];
 
 const SETTINGS_ITEMS: [&str; 14] = [
     "Username",
@@ -260,7 +268,9 @@ const TRAINING_ITEMS: [&str; 3] = ["Hitbox View", "Infinite Health", "Freeze Tim
 
 pub enum NavResult {
     Stay,
-    StartGame,
+    StartLocal {
+        lab: bool,
+    },
     /// Launch automated matchmaking via the signaling server.
     #[allow(dead_code)]
     StartMatchmaking,
@@ -340,6 +350,9 @@ impl AppState {
             AppState::Menu(MenuScreen::Main { cursor }) => {
                 *cursor = cursor.saturating_sub(1);
             }
+            AppState::Menu(MenuScreen::LabMenu { cursor }) => {
+                *cursor = cursor.saturating_sub(1);
+            }
             AppState::Menu(MenuScreen::Controls { cursor, .. }) => {
                 *cursor = cursor.saturating_sub(1);
             }
@@ -366,6 +379,11 @@ impl AppState {
         match self {
             AppState::Menu(MenuScreen::Main { cursor }) => {
                 if *cursor + 1 < MAIN_ITEMS.len() {
+                    *cursor += 1;
+                }
+            }
+            AppState::Menu(MenuScreen::LabMenu { cursor }) => {
+                if *cursor + 1 < LAB_MENU_ITEMS.len() {
                     *cursor += 1;
                 }
             }
@@ -426,37 +444,39 @@ impl AppState {
                     NavResult::OpenUsernameEntry
                 }
                 1 => {
-                    // Lab
+                    // Arcade
                     if !rom_present {
                         return NavResult::Stay;
                     }
                     *self = AppState::Playing;
-                    NavResult::StartGame
+                    NavResult::StartLocal { lab: false }
                 }
                 2 => {
-                    // Profile
-                    *self = AppState::Menu(MenuScreen::Profile {
-                        state: ProfileScreenState::Loading,
-                    });
-                    NavResult::OpenProfile
+                    // Lab
+                    if !rom_present {
+                        return NavResult::Stay;
+                    }
+                    *self = AppState::Menu(MenuScreen::LabMenu { cursor: 0 });
+                    NavResult::Stay
                 }
                 3 => {
-                    // Load Ghosts
-                    *self = AppState::Menu(MenuScreen::GhostSelect {
-                        cursor: 0,
-                        entries: vec![],
-                        download_status: None,
-                    });
-                    NavResult::OpenGhostSelect
-                }
-                4 => {
-                    // Watch Replays
+                    // Replays
+                    if !rom_present {
+                        return NavResult::Stay;
+                    }
                     *self = AppState::Menu(MenuScreen::ReplaySelect {
                         cursor: 0,
                         entries: vec![],
                         status: None,
                     });
                     NavResult::OpenReplaySelect
+                }
+                4 => {
+                    // Profile
+                    *self = AppState::Menu(MenuScreen::Profile {
+                        state: ProfileScreenState::Loading,
+                    });
+                    NavResult::OpenProfile
                 }
                 5 => {
                     // Controls
@@ -490,6 +510,27 @@ impl AppState {
                     NavResult::Stay
                 }
                 8 => NavResult::Quit,
+                _ => NavResult::Stay,
+            },
+            AppState::Menu(MenuScreen::LabMenu { cursor }) => match cursor {
+                0 => {
+                    if !rom_present {
+                        return NavResult::Stay;
+                    }
+                    *self = AppState::Playing;
+                    NavResult::StartLocal { lab: true }
+                }
+                1 => {
+                    if !rom_present {
+                        return NavResult::Stay;
+                    }
+                    *self = AppState::Menu(MenuScreen::GhostSelect {
+                        cursor: 0,
+                        entries: vec![],
+                        download_status: None,
+                    });
+                    NavResult::OpenGhostSelect
+                }
                 _ => NavResult::Stay,
             },
             AppState::Menu(MenuScreen::Controls { cursor, player }) => {
@@ -614,6 +655,7 @@ impl AppState {
     pub fn nav_back(&mut self) {
         match self {
             AppState::Menu(MenuScreen::Controls { .. })
+            | AppState::Menu(MenuScreen::LabMenu { .. })
             | AppState::Menu(MenuScreen::About)
             | AppState::Menu(MenuScreen::TestIp { .. })
             | AppState::Menu(MenuScreen::TestResult { .. })
@@ -660,7 +702,7 @@ impl AppState {
 
         if let AppState::Menu(MenuScreen::TextEdit { value, .. }) = self {
             for c in s.chars() {
-                if !c.is_control() && value.len() < 64 {
+                if !c.is_control() && value.len() < 96 {
                     value.push(c);
                 }
             }
@@ -731,6 +773,9 @@ pub fn draw(
             discord_user,
             main_leaderboard,
         )?,
+        AppState::Menu(MenuScreen::LabMenu { cursor }) => {
+            draw_lab_menu(canvas, font, *cursor, rom_present, w, h)?
+        }
         AppState::Menu(MenuScreen::Controls { cursor, player }) => draw_controls(
             canvas,
             font,
@@ -748,11 +793,11 @@ pub fn draw(
         AppState::Menu(MenuScreen::TestResult { lines }) => {
             draw_test_result(canvas, font, lines, w, h)?
         }
-        AppState::Menu(MenuScreen::SessionEnded { lines }) => {
-            draw_session_ended(canvas, font, lines, w, h)?
+        AppState::Menu(MenuScreen::SessionEnded { lines, replay_path }) => {
+            draw_session_ended(canvas, font, lines, replay_path.is_some(), w, h)?
         }
         AppState::Menu(MenuScreen::Matchmaking { status }) => {
-            draw_matchmaking(canvas, font, status, w, h)?
+            draw_matchmaking(canvas, font, status, discord_user, w, h)?
         }
         AppState::Menu(MenuScreen::MatchUsername {
             value,
@@ -906,6 +951,7 @@ fn draw_session_ended(
     canvas: &mut Canvas<Window>,
     font: &mut Font,
     lines: &[String],
+    has_replay: bool,
     w: i32,
     h: i32,
 ) -> Result<(), String> {
@@ -927,7 +973,11 @@ fn draw_session_ended(
         y += 22 * scale as i32 + 4;
     }
 
-    let footer = "ENTER Main Menu   ESC Main Menu";
+    let footer = if has_replay {
+        "R/Y Replay   ENTER Main Menu   ESC Main Menu"
+    } else {
+        "ENTER Main Menu   ESC Main Menu"
+    };
     let fw = font.text_width_exact(footer, small);
     font.draw(
         canvas,
@@ -1159,6 +1209,29 @@ fn draw_version_footer(
     Ok(())
 }
 
+fn draw_logged_in_as(
+    canvas: &mut Canvas<Window>,
+    font: &mut Font,
+    discord_user: Option<&str>,
+    w: i32,
+    h: i32,
+) -> Result<(), String> {
+    if let Some(name) = discord_user {
+        let label = format!("Logged in as {name}");
+        let scale = small_scale(h);
+        let tw = font.text_width_exact(&label, scale);
+        font.draw(
+            canvas,
+            &label,
+            w - tw - 8,
+            h - 54,
+            scale,
+            Color::RGB(88, 130, 200),
+        )?;
+    }
+    Ok(())
+}
+
 fn draw_title(
     canvas: &mut Canvas<Window>,
     font: &mut Font,
@@ -1220,7 +1293,7 @@ fn draw_main(
     for (i, label) in MAIN_ITEMS.iter().enumerate() {
         let x = menu_x;
         let y = start_y + i as i32 * line_h;
-        let disabled = i == 0 && !rom_present;
+        let disabled = matches!(i, 0 | 1 | 2 | 3) && !rom_present;
         let base = if disabled {
             Color::RGB(60, 60, 60)
         } else if i == cursor {
@@ -1273,19 +1346,7 @@ fn draw_main(
         Color::RGB(100, 100, 100),
     )?;
 
-    if let Some(name) = discord_user {
-        let label = format!("Logged in as {name}");
-        let ls = small_scale(h);
-        let lw = font.text_width_exact(&label, ls);
-        font.draw(
-            canvas,
-            &label,
-            w - lw - 8,
-            h - 54,
-            ls,
-            Color::RGB(88, 130, 200),
-        )?;
-    }
+    draw_logged_in_as(canvas, font, discord_user, w, h)?;
 
     if show_sidebar {
         let sidebar_y = (start_y - 16).max(84);
@@ -1300,6 +1361,68 @@ fn draw_main(
         )?;
     }
 
+    Ok(())
+}
+
+fn draw_lab_menu(
+    canvas: &mut Canvas<Window>,
+    font: &mut Font,
+    cursor: usize,
+    rom_present: bool,
+    w: i32,
+    h: i32,
+) -> Result<(), String> {
+    draw_title(canvas, font, "LAB", w, h)?;
+
+    let scale = body_scale(h).max(2);
+    let small = small_scale(h);
+    let line_h = (44 * scale as i32) / 2;
+    let block_h = LAB_MENU_ITEMS.len() as i32 * line_h;
+    let start_y = (h - block_h) / 2 + 8;
+    let widest = LAB_MENU_ITEMS
+        .iter()
+        .map(|label| font.text_width_exact(label, scale))
+        .max()
+        .unwrap_or(0);
+    let x = ((w - widest) / 2).max(24);
+
+    for (i, label) in LAB_MENU_ITEMS.iter().enumerate() {
+        let y = start_y + i as i32 * line_h;
+        let colour = if !rom_present {
+            Color::RGB(60, 60, 60)
+        } else if i == cursor {
+            Color::RGB(255, 255, 255)
+        } else {
+            Color::RGB(135, 140, 160)
+        };
+        if i == cursor && rom_present {
+            let caret_w = font.text_width_exact("> ", scale);
+            font.draw(canvas, ">", x - caret_w, y, scale, colour)?;
+        }
+        font.draw(canvas, label, x, y, scale, colour)?;
+    }
+
+    let note = "Lab tools, ghosts, and replay review";
+    let note_w = font.text_width_exact(note, small);
+    font.draw(
+        canvas,
+        note,
+        (w - note_w) / 2,
+        start_y + block_h + 18,
+        small,
+        Color::RGB(130, 140, 165),
+    )?;
+
+    let footer = "ENTER Select   ESC Back";
+    let fw = font.text_width_exact(footer, small);
+    font.draw(
+        canvas,
+        footer,
+        (w - fw) / 2,
+        h - 28,
+        small,
+        Color::RGB(100, 100, 100),
+    )?;
     Ok(())
 }
 
@@ -1482,7 +1605,7 @@ fn draw_about(canvas: &mut Canvas<Window>, font: &mut Font, w: i32, h: i32) -> R
         Color::RGBA(15, 16, 24, 230),
     )?;
     let line = format!(
-        "Freeplay  v{}  build {}",
+        "Freeplay v{}  build {}",
         version::VERSION,
         version::BUILD_DATE
     );
@@ -1504,38 +1627,26 @@ fn draw_about(canvas: &mut Canvas<Window>, font: &mut Font, w: i32, h: i32) -> R
     let body_c = Color::RGB(190, 190, 200);
 
     let left = [
-        "F2   Hitbox overlay",
-        "F3   Infinite health",
-        "F4   Freeze timer",
-        "F6   Load lab reset",
-        "F7   Save lab reset",
-        "F8   Load ghost",
-        "F9   Save ghost",
-        "F10  Toggle ghost drone",
-        "F11  Show/hide lab assist",
-        "F12  Play vs ghost",
-        "Ctrl+R Record clip",
-        "Ctrl+F Video filter",
-        "Ctrl+A Aspect",
-        "Shift+F9 Rewind test",
-        "Shift+F11 Dump RAM",
+        "F2  Hitboxes",
+        "F3  Health",
+        "F4  Timer",
+        "F5  Dummy mode",
+        "F6/F7 Reset load/save",
+        "F8/F9 Ghost load/save",
+        "F10 Punish trainer",
+        "F11 Hide help",
+        "F12 Play vs ghost",
     ];
     let right = [
-        "Auto-skip attract on both sides",
-        "3 matches per session",
-        "Auto-record 3 sessions/peer",
-        "Disconnect returns to lobby",
-        "Esc ends match gracefully",
-        "",
-        "F1 exits online gracefully",
-        "Logs: freeplay-net.log",
-        "",
-        "Replays save after sets",
-        "Watch Replays from menu",
-        "",
-        "T opens chat online",
+        "Find Match saves replays",
+        "Replays opens online sets",
+        "F1 leaves online",
+        "F11 toggles ping/FPS",
+        "T opens online chat",
         "Enter/Start sends chat",
         "Esc/B/Back closes chat",
+        "Logs: freeplay-net.log",
+        "Shift+F11 dumps RAM",
     ];
     let panel_h = 54 + left.len().max(right.len()) as i32 * line_h;
     draw_panel(
@@ -1554,8 +1665,8 @@ fn draw_about(canvas: &mut Canvas<Window>, font: &mut Font, w: i32, h: i32) -> R
         panel_h,
         Color::RGBA(15, 16, 24, 220),
     )?;
-    font.draw(canvas, "LAB HOTKEYS", left_x + 14, y + 12, body, header)?;
-    font.draw(canvas, "NETPLAY", right_x + 14, y + 12, body, header)?;
+    font.draw(canvas, "LAB F KEYS", left_x + 14, y + 12, body, header)?;
+    font.draw(canvas, "ONLINE", right_x + 14, y + 12, body, header)?;
     y += 44;
 
     for i in 0..left.len().max(right.len()) {
@@ -1572,32 +1683,13 @@ fn draw_about(canvas: &mut Canvas<Window>, font: &mut Font, w: i32, h: i32) -> R
 
     let gh = "github.com/junkwax/freeplay-gametalk";
     let ghw = font.text_width_exact(gh, content_scale);
-    let btn_x = (w - ghw) / 2 - 14;
-    let btn_y = y + 100;
-    let btn_w = ghw + 28;
-    let btn_h = (24 * content_scale) as i32;
-    canvas.set_draw_color(Color::RGBA(25, 30, 55, 220));
-    canvas.fill_rect(Rect::new(btn_x, btn_y, btn_w as u32, btn_h as u32))?;
-    canvas.set_draw_color(Color::RGB(80, 140, 220));
-    canvas.draw_rect(Rect::new(btn_x, btn_y, btn_w as u32, btn_h as u32))?;
     font.draw(
         canvas,
         gh,
-        btn_x + 14,
-        btn_y + 4,
+        (w - ghw) / 2,
+        (h - 78).max(y + 18),
         content_scale,
         Color::RGB(160, 200, 255),
-    )?;
-
-    let hint = "Press ENTER to open in browser";
-    let hw = font.text_width_exact(hint, small);
-    font.draw(
-        canvas,
-        hint,
-        (w - hw) / 2,
-        btn_y + btn_h + 6,
-        small,
-        Color::RGB(90, 90, 120),
     )?;
 
     let libs = about_status_line();
@@ -1611,7 +1703,7 @@ fn draw_about(canvas: &mut Canvas<Window>, font: &mut Font, w: i32, h: i32) -> R
         Color::RGB(140, 140, 160),
     )?;
 
-    let footer = "R Refresh   ESC Back";
+    let footer = "ENTER GitHub   R Refresh   ESC Back";
     let fs = small;
     let fw = font.text_width_exact(footer, fs);
     font.draw(
@@ -1991,6 +2083,7 @@ fn draw_matchmaking(
     canvas: &mut Canvas<Window>,
     font: &mut Font,
     status: &str,
+    discord_user: Option<&str>,
     w: i32,
     h: i32,
 ) -> Result<(), String> {
@@ -2035,7 +2128,7 @@ fn draw_matchmaking(
         Color::RGB(140, 140, 160),
     )?;
 
-    let footer = "ESC Cancel";
+    let footer = "F11 Stats   ESC Cancel";
     let fw = font.text_width_exact(footer, small);
     font.draw(
         canvas,
@@ -2045,6 +2138,7 @@ fn draw_matchmaking(
         small,
         Color::RGB(100, 100, 100),
     )?;
+    draw_logged_in_as(canvas, font, discord_user, w, h)?;
     Ok(())
 }
 
@@ -2367,24 +2461,11 @@ fn draw_settings(
         }
     }
 
-    y += SETTINGS_ITEMS.len() as i32 * row_h + 20;
-    let notes = [
-        "Doctor checks local setup in a separate window.",
-        "Username is required. Email is optional for portable stats.",
-        "Find Match uses the confirmed player name for online identity.",
-        "Use LEFT/RIGHT on Volume and video options.",
-        "Stable audio reduces crackle with a little more latency.",
-        "Video Filter applies during gameplay.",
-        "Aspect controls fullscreen fit.",
-        "Ctrl+R clips are written under clips/.",
-        "Logs are written next to the app while Freeplay runs.",
-    ];
-    for note in notes {
-        font.draw(canvas, note, x, y, small, Color::RGB(130, 140, 165))?;
-        y += 20 * small as i32;
-    }
+    y += SETTINGS_ITEMS.len() as i32 * row_h + 18;
+    let hint = fit_line(font, settings_hint(cursor), small, w - x * 2);
+    font.draw(canvas, &hint, x, y, small, Color::RGB(130, 140, 165))?;
 
-    let footer = "ENTER Select   ESC Back";
+    let footer = "ENTER Select   LEFT/RIGHT Adjust   ESC Back";
     let fw = font.text_width_exact(footer, small);
     font.draw(
         canvas,
@@ -2395,6 +2476,26 @@ fn draw_settings(
         Color::RGB(100, 100, 100),
     )?;
     Ok(())
+}
+
+fn settings_hint(cursor: usize) -> &'static str {
+    match cursor {
+        0 => "Public name used for Find Match and replays.",
+        1 => "Optional email keeps stats portable across machines.",
+        2 => "Connect Discord for account display and profile lookup.",
+        3 => "Discord Rich Presence shows menu, queue, and match state.",
+        4 => "Fullscreen toggles desktop fullscreen.",
+        5 => "Volume adjusts game audio.",
+        6 => "Stable audio adds a little buffer to reduce crackle.",
+        7 => "Video filter applies during gameplay.",
+        8 => "CRT glass controls rounded screen corners.",
+        9 => "Aspect controls how the game fits the window.",
+        10 => "Scorebar changes the online/Lab overlay style.",
+        11 => "Doctor checks ROM, core, networking, and config.",
+        12 => "Open the folder where Ctrl+R clips are written.",
+        13 => "Open runtime logs next to the app.",
+        _ => "",
+    }
 }
 
 fn draw_text_edit(
@@ -2498,7 +2599,7 @@ fn draw_training(
     let notes = [
         "These helpers are disabled during online matches.",
         "F2/F3/F4 toggle training overlays while playing.",
-        "F6/F7 load/save Lab reset points; F11 shows Lab assist.",
+        "F6/F7 load/save Lab reset slots; Ctrl+F7 changes slot.",
     ];
     for note in notes {
         font.draw(canvas, note, x, y, small, Color::RGB(130, 140, 165))?;
@@ -3013,7 +3114,7 @@ fn draw_replay_select(
     w: i32,
     h: i32,
 ) -> Result<(), String> {
-    draw_title(canvas, font, "WATCH REPLAY", w, h)?;
+    draw_title(canvas, font, "REPLAYS", w, h)?;
     let small = small_scale(h);
     let cx = w / 2;
     let content_x = (w / 12).max(42);
@@ -3030,7 +3131,7 @@ fn draw_replay_select(
             92,
             Color::RGBA(15, 16, 24, 225),
         )?;
-        let msg = status.unwrap_or("No saved replays found");
+        let msg = status.unwrap_or("No online replays found");
         let msg = fit_line(font, msg, small, content_w - 24);
         let tw = font.text_width_exact(&msg, small);
         font.draw(
@@ -3074,20 +3175,28 @@ fn draw_replay_select(
         for i in start..end {
             let selected = i == cursor;
             let entry = &entries[i];
+            let subtitle = {
+                let duration = format_replay_duration(entry.frame_count);
+                let time = parse_replay_time(&entry.filename);
+                let marks = match entry.bookmark_count {
+                    0 => String::new(),
+                    1 => " - 1 mark".to_string(),
+                    n => format!(" - {n} marks"),
+                };
+                if time.is_empty() {
+                    format!("{duration} - {}f{marks}", entry.frame_count)
+                } else {
+                    format!("{duration} - {time}{marks}")
+                }
+            };
+            let subtitle = fit_line(font, &subtitle, small, (content_w / 2).max(120));
+            let subtitle_w = font.text_width_exact(&subtitle, small);
             let display = fit_line(
                 font,
                 &format!("{} vs {}", entry.p1_name, entry.p2_name),
                 small,
-                content_w - 220,
+                (content_w - subtitle_w - 124).max(72),
             );
-            let subtitle = {
-                let time = parse_replay_time(&entry.filename);
-                if time.is_empty() {
-                    format!("{} frames", entry.frame_count)
-                } else {
-                    format!("{} frames \u{2022} {time}", entry.frame_count)
-                }
-            };
             let bg = if selected {
                 Color::RGBA(30, 44, 56, 235)
             } else {
@@ -3126,11 +3235,10 @@ fn draw_replay_select(
                     Color::RGB(220, 222, 232)
                 },
             )?;
-            let sw = font.text_width_exact(&subtitle, small);
             font.draw(
                 canvas,
                 &subtitle,
-                content_x + content_w - sw - 14,
+                content_x + content_w - subtitle_w - 14,
                 y,
                 small,
                 Color::RGB(130, 136, 152),
@@ -3139,8 +3247,15 @@ fn draw_replay_select(
         }
     }
 
-    if let Some(status) = status.filter(|_| !entries.is_empty()) {
-        let status = fit_line(font, status, small, w - 48);
+    let selected_note = entries
+        .get(cursor)
+        .and_then(|entry| (!entry.note.is_empty()).then_some(format!("NOTE: {}", entry.note)));
+    let bottom_status = status
+        .filter(|_| !entries.is_empty())
+        .map(str::to_string)
+        .or(selected_note);
+    if let Some(status) = bottom_status {
+        let status = fit_line(font, &status, small, w - 48);
         let sw = font.text_width_exact(&status, small);
         font.draw(
             canvas,
@@ -3152,11 +3267,16 @@ fn draw_replay_select(
         )?;
     }
 
-    let footer = "B/ESC Back   A/ENTER Watch";
-    let fw = font.text_width_exact(footer, small);
+    let footer = fit_line(
+        font,
+        "B/ESC Back   A/ENTER Watch   N/RB Note   DEL/X Delete   O/Y Folder",
+        small,
+        w - 48,
+    );
+    let fw = font.text_width_exact(&footer, small);
     font.draw(
         canvas,
-        footer,
+        &footer,
         (w - fw) / 2,
         h - 28,
         small,
@@ -3188,6 +3308,19 @@ fn parse_replay_time(filename: &str) -> String {
         return format!("Recorded {}", chrono_prelude(n as i64));
     }
     String::new()
+}
+
+fn format_replay_duration(frames: u32) -> String {
+    let total_seconds = (frames as u64 + 30) / 60;
+    let minutes = total_seconds / 60;
+    let seconds = total_seconds % 60;
+    if minutes >= 60 {
+        let hours = minutes / 60;
+        let minutes = minutes % 60;
+        format!("{hours}:{minutes:02}:{seconds:02}")
+    } else {
+        format!("{minutes}:{seconds:02}")
+    }
 }
 
 fn parse_ghost_time(filename: &str) -> String {

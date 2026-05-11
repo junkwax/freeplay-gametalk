@@ -11,6 +11,7 @@
 use crate::dlog;
 use crate::ghost;
 use crate::input;
+use crate::lab;
 use crate::match_replay;
 use crate::memory;
 use crate::netplay;
@@ -42,7 +43,7 @@ pub struct NetRuntime {
 pub fn reset_for_netplay(
     core: &retro::Core,
     trainer: &mut memory::PokeList,
-    save_slot: &mut Option<Vec<u8>>,
+    reset_slots: &mut lab::ResetSlots,
     ghost_playback: &mut Option<ghost::Playback>,
     ghost_recording: &mut Option<ghost::Recording>,
 ) {
@@ -55,7 +56,7 @@ pub fn reset_for_netplay(
     trainer.set_enabled("p1_health", false);
     trainer.set_enabled("p2_health", false);
     trainer.set_enabled("freeze_timer", false);
-    *save_slot = None;
+    reset_slots.clear();
     *ghost_playback = None;
     *ghost_recording = None;
 }

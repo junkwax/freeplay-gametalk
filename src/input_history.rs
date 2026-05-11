@@ -87,15 +87,30 @@ fn direction_label(bits: u16) -> &'static str {
     let down = pressed(bits, Action::Down);
     let left = pressed(bits, Action::Left);
     let right = pressed(bits, Action::Right);
-    match (up, down, left, right) {
-        (true, false, true, false) => "UL",
-        (true, false, false, true) => "UR",
-        (false, true, true, false) => "DL",
-        (false, true, false, true) => "DR",
-        (true, false, false, false) => "U",
-        (false, true, false, false) => "D",
-        (false, false, true, false) => "L",
-        (false, false, false, true) => "R",
+    match (
+        if up {
+            Some("U")
+        } else if down {
+            Some("D")
+        } else {
+            None
+        },
+        if left {
+            Some("L")
+        } else if right {
+            Some("R")
+        } else {
+            None
+        },
+    ) {
+        (Some(v), Some(h)) if v == "U" && h == "L" => "UL",
+        (Some(v), Some(h)) if v == "U" && h == "R" => "UR",
+        (Some(v), Some(h)) if v == "D" && h == "L" => "DL",
+        (Some(v), Some(h)) if v == "D" && h == "R" => "DR",
+        (Some("U"), None) => "U",
+        (Some("D"), None) => "D",
+        (None, Some("L")) => "L",
+        (None, Some("R")) => "R",
         _ => "N",
     }
 }
@@ -138,6 +153,8 @@ mod tests {
             format_bits(bit(Action::Down) | bit(Action::Right) | bit(Action::HighPunch)),
             "DR+HP"
         );
+        assert_eq!(format_bits(bit(Action::Up)), "U");
+        assert_eq!(format_bits(bit(Action::Up) | bit(Action::Down)), "U");
         assert_eq!(format_bits(0), "N");
     }
 }
