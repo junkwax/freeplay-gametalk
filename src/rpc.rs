@@ -171,14 +171,14 @@ impl RpcClient {
                 .get("secret")
                 .and_then(|v| v.as_str())
                 .unwrap_or_default();
-            println!("[rpc] Activity join requested — secret: {secret}");
+            println!("[rpc] Activity join requested");
             if let Some(room_id) = secret.strip_prefix("xband://join/") {
-                println!("[rpc] → Spar room join: room_id={room_id}");
+                println!("[rpc] Spar room join accepted");
                 if let Ok(mut slot) = join_slot().lock() {
                     *slot = Some(room_id.to_string());
                 }
             } else {
-                println!("[rpc] Ignoring unknown join secret");
+                println!("[rpc] Ignoring unknown join payload");
             }
         });
 
@@ -189,14 +189,14 @@ impl RpcClient {
                 .get("secret")
                 .and_then(|v| v.as_str())
                 .unwrap_or_default();
-            println!("[rpc] Spectate requested — secret: {secret}");
+            println!("[rpc] Spectate requested");
             if let Some(session_id) = secret.strip_prefix("xband://watch/") {
-                println!("[rpc] → Watch match: session_id={session_id}");
+                println!("[rpc] Watch match request accepted");
                 if let Ok(mut slot) = spectate_slot().lock() {
                     *slot = Some(session_id.to_string());
                 }
             } else {
-                println!("[rpc] Ignoring unknown spectate secret");
+                println!("[rpc] Ignoring unknown spectate payload");
             }
         });
 

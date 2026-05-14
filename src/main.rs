@@ -694,11 +694,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Some(uri) = protocol::parse_uri(&arg) {
             match uri {
                 protocol::XbandUri::Join { room_id } => {
-                    println!("[main] xband:// deep link: join room {room_id}");
+                    println!("[main] xband:// deep link: join room");
                     rpc::post_join_request(room_id);
                 }
                 protocol::XbandUri::Watch { session_id } => {
-                    println!("[main] xband:// deep link: watch session {session_id}");
+                    println!("[main] xband:// deep link: watch session");
                     rpc::post_spectate_request(session_id);
                 }
             }
@@ -941,7 +941,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Check for Discord ACTIVITY_JOIN (friend clicked "Join to Spar")
         if mm_rx.is_none() {
             if let Some(room_id) = rpc::take_join_request() {
-                println!("[main] Join-to-spar request: room_id={room_id}");
+                println!("[main] Join-to-spar request received");
                 let (tx, rx) = std::sync::mpsc::channel();
                 mm_rx = Some(rx);
                 matchmaking::start_join_room(tx, room_id);
@@ -951,7 +951,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         if let Some(session_id) = rpc::take_spectate_request() {
-            println!("[main] Spectate request received: session_id={session_id}");
+            println!("[main] Spectate request received");
             let (tx, rx) = std::sync::mpsc::channel();
             spectate_rx = Some(rx);
             spectate_last_update = Some(Instant::now());
