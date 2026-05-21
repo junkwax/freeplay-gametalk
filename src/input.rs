@@ -9,6 +9,8 @@ use crate::retro::*;
 use sdl2::controller::{Axis, Button};
 use sdl2::keyboard::Keycode;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::sync::{Mutex, OnceLock};
 
 pub const STICK_DEADZONE: i16 = 8000;
 
@@ -95,9 +97,57 @@ pub enum Binding {
     PadAxis { axis: String, positive: bool }, // analog stick beyond deadzone
 }
 
+/// One concrete physical source currently driving a live action.
+///
+/// Several sources can map to the same action (D-pad left + analog-left, for
+/// example). The live action stays held until every source for it releases.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum InputSource {
+    Key {
+        key: String,
+    },
+    PadButton {
+        which: u32,
+        button: String,
+    },
+    PadAxis {
+        which: u32,
+        axis: String,
+        positive: bool,
+    },
+}
+
+impl InputSource {
+    pub fn key(key: Keycode) -> Self {
+        Self::Key { key: key_name(key) }
+    }
+
+    pub fn pad_button(which: u32, button: Button) -> Self {
+        Self::PadButton {
+            which,
+            button: button_name(button),
+        }
+    }
+
+    pub fn pad_axis(which: u32, axis: Axis, positive: bool) -> Self {
+        Self::PadAxis {
+            which,
+            axis: axis_name(axis),
+            positive,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct AxisUpdate {
+    pub action: Action,
+    pub positive: bool,
+    pub pressed: bool,
+}
+
 /// Two-player identifier. Drives selection in the Controls UI and maps to
 /// libretro port 0 / 1.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Player {
     P1,
     P2,
@@ -281,7 +331,7 @@ impl PlayerBindings {
 
     /// For axis motion, return (action, pressed) for every binding that either
     /// triggers or releases based on this axis value.
-    pub fn axis_updates(&self, axis: Axis, value: i16) -> Vec<(Action, bool)> {
+    pub fn axis_updates(&self, axis: Axis, value: i16) -> Vec<AxisUpdate> {
         let name = axis_name(axis);
         let mut out = Vec::new();
         for (a, b) in &self.entries {
@@ -292,7 +342,11 @@ impl PlayerBindings {
                     } else {
                         value < -STICK_DEADZONE
                     };
-                    out.push((*a, pressed));
+                    out.push(AxisUpdate {
+                        action: *a,
+                        positive: *positive,
+                        pressed,
+                    });
                 }
             }
         }
@@ -322,6 +376,56 @@ impl PlayerBindings {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct HeldInputSource {
+    player: Player,
+    action: Action,
+    source: InputSource,
+}
+
+#[derive(Default)]
+struct LiveInputSources {
+    held: HashSet<HeldInputSource>,
+}
+
+impl LiveInputSources {
+    fn set_source(
+        &mut self,
+        player: Player,
+        action: Action,
+        source: InputSource,
+        pressed: bool,
+    ) -> bool {
+        let held = HeldInputSource {
+            player,
+            action,
+            source,
+        };
+        if pressed {
+            self.held.insert(held);
+        } else {
+            self.held.remove(&held);
+        }
+        self.is_action_held(player, action)
+    }
+
+    fn is_action_held(&self, player: Player, action: Action) -> bool {
+        self.held
+            .iter()
+            .any(|held| held.player == player && held.action == action)
+    }
+
+    fn clear(&mut self) {
+        self.held.clear();
+    }
+}
+
+static LIVE_INPUT_SOURCES: OnceLock<Mutex<LiveInputSources>> = OnceLock::new();
+
+fn live_input_sources() -> &'static Mutex<LiveInputSources> {
+    LIVE_INPUT_SOURCES.get_or_init(|| Mutex::new(LiveInputSources::default()))
+}
+
 /// Record an action press/release from the live input layer (SDL events).
 /// This does NOT write directly to the libretro-visible INPUT_STATE; the
 /// main loop decides when to commit LIVE_INPUT into INPUT_STATE (every
@@ -330,6 +434,18 @@ pub fn set_action(player: Player, action: Action, pressed: bool) {
     unsafe {
         LIVE_INPUT[player.port()][action.retro_id()] = pressed;
     }
+}
+
+/// Record one physical source for an action and resolve the action as the OR
+/// of every currently-held source bound to it.
+pub fn set_action_source(player: Player, action: Action, source: InputSource, pressed: bool) {
+    let pressed = {
+        let mut sources = live_input_sources()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        sources.set_source(player, action, source, pressed)
+    };
+    set_action(player, action, pressed);
 }
 
 /// Whether the user is currently holding this action (live pad state).
@@ -372,6 +488,10 @@ pub fn commit_live_to_state() {
 }
 
 pub fn clear_all_inputs() {
+    live_input_sources()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clear();
     unsafe {
         INPUT_STATE = [[false; 16]; 2];
         LIVE_INPUT = [[false; 16]; 2];
@@ -392,4 +512,39 @@ pub fn button_name(b: Button) -> String {
 
 pub fn axis_name(a: Axis) -> String {
     format!("{:?}", a)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn source(name: &str) -> InputSource {
+        InputSource::Key { key: name.into() }
+    }
+
+    #[test]
+    fn action_stays_held_until_all_sources_release() {
+        let mut sources = LiveInputSources::default();
+
+        assert!(sources.set_source(Player::P1, Action::Left, source("DPadLeft"), true));
+        assert!(sources.set_source(Player::P1, Action::Left, source("LeftX-"), true));
+        assert!(sources.set_source(Player::P1, Action::Left, source("LeftX-"), false));
+        assert!(sources.is_action_held(Player::P1, Action::Left));
+
+        assert!(!sources.set_source(Player::P1, Action::Left, source("DPadLeft"), false));
+        assert!(!sources.is_action_held(Player::P1, Action::Left));
+    }
+
+    #[test]
+    fn source_releases_only_its_player_and_action() {
+        let mut sources = LiveInputSources::default();
+
+        assert!(sources.set_source(Player::P1, Action::Left, source("Shared"), true));
+        assert!(sources.set_source(Player::P1, Action::Right, source("Shared"), true));
+        assert!(sources.set_source(Player::P2, Action::Left, source("Shared"), true));
+
+        assert!(!sources.set_source(Player::P1, Action::Left, source("Shared"), false));
+        assert!(sources.is_action_held(Player::P1, Action::Right));
+        assert!(sources.is_action_held(Player::P2, Action::Left));
+    }
 }

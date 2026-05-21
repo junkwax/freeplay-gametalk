@@ -41,7 +41,7 @@ mod wuname;
 use crate::cli::{parse_args, NetMode};
 use crate::controllers::{assign_pad, open_initial_controllers, pad_owner, Pads};
 use crate::font::Font;
-use crate::input::{set_action, Bindings, Player};
+use crate::input::{set_action_source, Bindings, InputSource, Player};
 use crate::menu::{AppState, MenuScreen, NavResult, LOGICAL_H, LOGICAL_W};
 use crate::menu_input::{capture_rebind, event_to_menu_nav, is_cancel, is_clear, MenuNav};
 use crate::netcore::{reset_for_netplay, step_netplay_frame, NetRuntime};
@@ -3344,6 +3344,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ..
                     } if !chat_open => {
                         for p in [Player::P1, Player::P2] {
+                            let source = InputSource::key(k);
                             for a in cfg.bindings.get(p).actions_for_key(k) {
                                 let dest = route_player(p, &net_session, local_handle);
                                 dlog!(
@@ -3354,7 +3355,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     dest,
                                     a
                                 );
-                                set_action(dest, a, true);
+                                set_action_source(dest, a, source.clone(), true);
                             }
                         }
                     }
@@ -3362,6 +3363,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         keycode: Some(k), ..
                     } if !chat_open => {
                         for p in [Player::P1, Player::P2] {
+                            let source = InputSource::key(k);
                             for a in cfg.bindings.get(p).actions_for_key(k) {
                                 let dest = route_player(p, &net_session, local_handle);
                                 dlog!(
@@ -3372,12 +3374,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     dest,
                                     a
                                 );
-                                set_action(dest, a, false);
+                                set_action_source(dest, a, source.clone(), false);
                             }
                         }
                     }
                     Event::ControllerButtonDown { which, button, .. } if !chat_open => {
                         if let Some(p) = pad_owner(&pads, which) {
+                            let source = InputSource::pad_button(which, button);
                             for a in cfg.bindings.get(p).actions_for_button(button) {
                                 let dest = route_player(p, &net_session, local_handle);
                                 dlog!(
@@ -3389,7 +3392,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     dest,
                                     a
                                 );
-                                set_action(dest, a, true);
+                                set_action_source(dest, a, source.clone(), true);
                             }
                         } else {
                             dlog!("input", "PadDown pad={} {:?} -- no owner", which, button);
@@ -3397,6 +3400,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     Event::ControllerButtonUp { which, button, .. } if !chat_open => {
                         if let Some(p) = pad_owner(&pads, which) {
+                            let source = InputSource::pad_button(which, button);
                             for a in cfg.bindings.get(p).actions_for_button(button) {
                                 let dest = route_player(p, &net_session, local_handle);
                                 dlog!(
@@ -3408,7 +3412,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     dest,
                                     a
                                 );
-                                set_action(dest, a, false);
+                                set_action_source(dest, a, source.clone(), false);
                             }
                         }
                     }
@@ -3416,11 +3420,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         which, axis, value, ..
                     } if !chat_open => {
                         if let Some(p) = pad_owner(&pads, which) {
-                            for (a, pressed) in cfg.bindings.get(p).axis_updates(axis, value) {
+                            for update in cfg.bindings.get(p).axis_updates(axis, value) {
                                 let dest = route_player(p, &net_session, local_handle);
                                 dlog!("input", "PadAxis pad={} {:?}={} bound={:?} dest={:?} action={:?} pressed={}",
-                                          which, axis, value, p, dest, a, pressed);
-                                set_action(dest, a, pressed);
+                                          which, axis, value, p, dest, update.action, update.pressed);
+                                set_action_source(
+                                    dest,
+                                    update.action,
+                                    InputSource::pad_axis(which, axis, update.positive),
+                                    update.pressed,
+                                );
                             }
                         }
                     }

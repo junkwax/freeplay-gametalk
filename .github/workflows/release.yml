@@ -126,9 +126,30 @@ jobs:
           if (-not $asset) {
             throw "Release zip not found"
           }
-          $notes = "Automated freeplay-gametalk client release. ROM files are not included."
+          $version = $tag.TrimStart("v")
+          $notesLines = New-Object System.Collections.Generic.List[string]
+          $inSection = $false
+          foreach ($line in Get-Content CHANGELOG.md) {
+            if ($line -match "^##\s+$([regex]::Escape($version))(\s|-|$)") {
+              $inSection = $true
+              continue
+            }
+            if ($inSection -and $line -match "^##\s+") {
+              break
+            }
+            if ($inSection) {
+              $notesLines.Add($line)
+            }
+          }
+          $notes = ($notesLines -join "`n").Trim()
+          if ([string]::IsNullOrWhiteSpace($notes)) {
+            $notes = "Automated freeplay-gametalk client release. ROM files are not included."
+          } else {
+            $notes = "$notes`n`nROM files are not included."
+          }
           gh release view $tag --repo $env:GH_REPO *> $null
           if ($LASTEXITCODE -eq 0) {
+            gh release edit $tag --repo $env:GH_REPO --notes $notes
             gh release upload $tag $asset.FullName --repo $env:GH_REPO --clobber
           } else {
             $args = @(
@@ -200,8 +221,27 @@ jobs:
           if [ "$EVENT_NAME" != "push" ]; then tag="${INPUT_TAG}"; fi
           asset="$(ls dist/freeplay-gametalk-v*-linux.tar.gz | head -n1)"
           if [ -z "$asset" ]; then echo "release tarball not found" >&2; exit 1; fi
-          notes="Automated freeplay-gametalk client release. ROM files are not included."
+          version="${tag#v}"
+          notes="$(awk -v version="$version" '
+            $0 ~ "^##[[:space:]]+" version "([[:space:]]|-|$)" { in_section=1; next }
+            in_section && $0 ~ "^##[[:space:]]+" { exit }
+            in_section {
+              if (!seen && $0 == "") next
+              seen=1
+              lines[++n]=$0
+            }
+            END {
+              while (n > 0 && lines[n] == "") n--
+              for (i=1; i<=n; i++) print lines[i]
+            }
+          ' CHANGELOG.md)"
+          if [ -z "${notes//[[:space:]]/}" ]; then
+            notes="Automated freeplay-gametalk client release. ROM files are not included."
+          else
+            notes="$(printf "%s\n\nROM files are not included." "$notes")"
+          fi
           if gh release view "$tag" --repo "$GH_REPO" >/dev/null 2>&1; then
+            gh release edit "$tag" --repo "$GH_REPO" --notes "$notes"
             gh release upload "$tag" "$asset" --repo "$GH_REPO" --clobber
           else
             args=(release create "$tag" "$asset" --repo "$GH_REPO" --title "$tag" --notes "$notes")
@@ -274,8 +314,27 @@ jobs:
           if [ "$EVENT_NAME" != "push" ]; then tag="${INPUT_TAG}"; fi
           asset="$(ls dist/freeplay-gametalk-v*-macos.tar.gz | head -n1)"
           if [ -z "$asset" ]; then echo "release tarball not found" >&2; exit 1; fi
-          notes="Automated freeplay-gametalk client release. ROM files are not included."
+          version="${tag#v}"
+          notes="$(awk -v version="$version" '
+            $0 ~ "^##[[:space:]]+" version "([[:space:]]|-|$)" { in_section=1; next }
+            in_section && $0 ~ "^##[[:space:]]+" { exit }
+            in_section {
+              if (!seen && $0 == "") next
+              seen=1
+              lines[++n]=$0
+            }
+            END {
+              while (n > 0 && lines[n] == "") n--
+              for (i=1; i<=n; i++) print lines[i]
+            }
+          ' CHANGELOG.md)"
+          if [ -z "${notes//[[:space:]]/}" ]; then
+            notes="Automated freeplay-gametalk client release. ROM files are not included."
+          else
+            notes="$(printf "%s\n\nROM files are not included." "$notes")"
+          fi
           if gh release view "$tag" --repo "$GH_REPO" >/dev/null 2>&1; then
+            gh release edit "$tag" --repo "$GH_REPO" --notes "$notes"
             gh release upload "$tag" "$asset" --repo "$GH_REPO" --clobber
           else
             args=(release create "$tag" "$asset" --repo "$GH_REPO" --title "$tag" --notes "$notes")

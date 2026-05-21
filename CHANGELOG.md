@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.1 - 2026-05-21
+
+### Fixed
+
+- Fixed controller direction merging so D-pad and analog stick bindings no
+  longer cancel each other when both are mapped to the same movement action.
+
 ## 0.6.0 - 2026-05-10
 
 ### Added
