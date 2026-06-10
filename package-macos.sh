@@ -2,7 +2,11 @@
 set -euo pipefail
 
 VERSION="$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "([^"]+)"/\1/')"
-OUT_DIR="dist/freeplay-gametalk-v${VERSION}-macos"
+# Tag the package by host architecture so arm64 and Intel builds don't collide
+# (uname -m yields "arm64" on Apple Silicon, "x86_64" on Intel). CI builds one
+# per runner; the matching arch is what users download.
+ARCH="$(uname -m)"
+OUT_DIR="dist/freeplay-gametalk-v${VERSION}-macos-${ARCH}"
 ZIP_FILE="${OUT_DIR}.tar.gz"
 EXE_NAME="freeplay"
 
@@ -49,8 +53,8 @@ ROM files are not distributed with Freeplay.
 EOF
 
 cat > "$OUT_DIR/README.txt" <<EOF
-freeplay-gametalk v$VERSION (macOS)
-===================================
+freeplay-gametalk v$VERSION (macOS $ARCH)
+=========================================
 
 PREREQS (one-time, system-wide):
   Install Homebrew if you don't have it (https://brew.sh), then:
@@ -79,8 +83,9 @@ INSTALL:
 TROUBLESHOOTING:
   - "image not found: libSDL2-2.0.0.dylib" -> brew install sdl2 sdl2_ttf
   - "fbneo_libretro.dylib not found"       -> ensure it's beside ./freeplay
-  - Apple Silicon: build was produced for the host arch of the CI runner.
-    If your Mac arch differs, build locally with package-macos.sh.
+  - Wrong-arch download: releases ship separate arm64 and x86_64 archives.
+    On Apple Silicon use -macos-arm64; on Intel use -macos-x86_64.
+    Check with: uname -m
 
 NOTE:
   This is a folder package, not a signed .app bundle yet. Code-signing and
