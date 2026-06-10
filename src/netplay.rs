@@ -46,8 +46,9 @@ pub fn start_session(
     local_port: u16,
     local_handle: usize,
     remote_addr: SocketAddr,
+    input_delay: u32,
 ) -> Result<Session, Box<dyn std::error::Error>> {
-    start_session_verbose(local_port, local_handle, remote_addr, |_| {})
+    start_session_verbose(local_port, local_handle, remote_addr, input_delay, |_| {})
 }
 
 /// Same as `start_session` but each step reports progress through `log_fn`.
@@ -58,6 +59,7 @@ pub fn start_session_verbose<F: FnMut(&str)>(
     local_port: u16,
     local_handle: usize,
     remote_addr: SocketAddr,
+    input_delay: u32,
     mut log_fn: F,
 ) -> Result<Session, Box<dyn std::error::Error>> {
     assert!(local_handle < 2, "local_handle must be 0 or 1");
@@ -81,7 +83,7 @@ pub fn start_session_verbose<F: FnMut(&str)>(
             log_fn(&format!("[session] with_fps err: {e}"));
             e
         })?
-        .with_input_delay(3)
+        .with_input_delay(input_delay as usize)
         .with_max_prediction_window(8)
         .map_err(|e| {
             log_fn(&format!("[session] with_max_prediction_window err: {e}"));
@@ -90,7 +92,7 @@ pub fn start_session_verbose<F: FnMut(&str)>(
         .with_disconnect_notify_delay(std::time::Duration::from_millis(400))
         .with_disconnect_timeout(std::time::Duration::from_millis(1500))
         .with_desync_detection_mode(ggrs::DesyncDetection::On { interval: 30 });
-    log_fn("[session] builder configured (fps=55 delay=3 window=8 desync=on, drop=1.5s)");
+    log_fn(&format!("[session] builder configured (fps=55 delay={input_delay} window=8 desync=on, drop=1.5s)"));
 
     builder = builder
         .add_player(PlayerType::Local, local_handle)
@@ -132,6 +134,7 @@ pub fn start_session_with_socket<S>(
     local_handle: usize,
     remote_addr: SocketAddr,
     socket: S,
+    input_delay: u32,
     mut log_fn: impl FnMut(&str),
 ) -> Result<P2PSession<GgrsConfig>, ggrs::GgrsError>
 where
@@ -146,7 +149,7 @@ where
             log_fn(&format!("[session] with_fps err: {e}"));
             e
         })?
-        .with_input_delay(3)
+        .with_input_delay(input_delay as usize)
         .with_max_prediction_window(8)
         .map_err(|e| {
             log_fn(&format!("[session] with_max_prediction_window err: {e}"));
@@ -155,7 +158,7 @@ where
         .with_disconnect_notify_delay(std::time::Duration::from_millis(2000))
         .with_disconnect_timeout(std::time::Duration::from_millis(10000))
         .with_desync_detection_mode(ggrs::DesyncDetection::On { interval: 30 });
-    log_fn("[session] (relay) builder configured (drop=10s)");
+    log_fn(&format!("[session] (relay) builder configured (delay={input_delay} drop=10s)"));
 
     builder = builder
         .add_player(PlayerType::Local, local_handle)

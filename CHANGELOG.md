@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.7.0 - 2026-06-10
+
+### Added
+
+- Added a configurable GGRS input delay (`input_delay` in `config.toml`,
+  default 3, range 0–8). Higher values trade input latency for fewer rollbacks
+  on high-latency connections; the value is now threaded through direct UDP and
+  TURN-relay netplay sessions.
+
+### Fixed
+
+- Hardened netplay desync detection by mixing an MK2 sync word into the GGRS
+  savestate checksum, so divergent states are caught earlier instead of
+  surfacing as a late desync.
+- Corrected the MK2 SYSTEM_RAM addresses (game state, player/match win counts,
+  round number, winner status, player health, hitbox-overlay flag, freeze
+  timer, and player positions) to match the current ROM map. This restores
+  accurate live scoring, the hitbox overlay, health/freeze trainer pokes, and
+  Lab/drone positioning.
+
 ## 0.6.1 - 2026-05-21
 
 ### Fixed

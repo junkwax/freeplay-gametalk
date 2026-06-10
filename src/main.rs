@@ -783,15 +783,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     const GHOST_CAP_PER_PEER: u32 = 3;
     let mut ghost_library = ghost::Library::load_default();
     let mut net_recording: Option<ghost::NetRecording> = None;
-    // Current mk2.map: f_colbox bit 0x0112bb90 -> MAME byte 0x225772,
-    // which maps to FBNeo SYSTEM_RAM offset 0x25772.
-    const HITBOX_FLAG_ADDR: usize = 0x25772;
+    // Current mk2.map: f_colbox bit 0x0112bbd0 -> MAME byte 0x22577a,
+    // which maps to FBNeo SYSTEM_RAM offset 0x2577a.
+    const HITBOX_FLAG_ADDR: usize = 0x2577A;
 
     let mut trainer = memory::PokeList::new();
     trainer.add(
         "p1_health",
         memory::Poke::U16 {
-            addr: 0x253D6,
+            addr: 0x253DC,
             value: 0x00A1,
             endian: memory::Endian::Little,
         },
@@ -799,7 +799,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     trainer.add(
         "p2_health",
         memory::Poke::U16 {
-            addr: 0x25550,
+            addr: 0x25556,
             value: 0x00A1,
             endian: memory::Endian::Little,
         },
@@ -820,18 +820,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     trainer.add_with_release(
         "freeze_timer",
         memory::Poke::U16 {
-            addr: 0x250EE,
+            addr: 0x250F4,
             value: 0x0001,
             endian: memory::Endian::Little,
         },
         memory::Poke::U16 {
-            addr: 0x250EE,
+            addr: 0x250F4,
             value: 0x0000,
             endian: memory::Endian::Little,
         },
     );
 
-    const GSTATE_ADDR: usize = 0x253B2;
+    const GSTATE_ADDR: usize = 0x253B8;
     const GS_AMODE: u16 = 0x01;
     let mut auto_start_frame: u32 = 0;
     let mut auto_start_done = false;
@@ -859,8 +859,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     const MATCH_WIN_TARGET: u16 = 2;
     let mut session_p1_wins: u32 = 0;
     let mut session_p2_wins: u32 = 0;
-    const P1_HP_ADDR: usize = 0x253D6;
-    const P2_HP_ADDR: usize = 0x25550;
+    const P1_HP_ADDR: usize = 0x253DC;
+    const P2_HP_ADDR: usize = 0x25556;
     let mut ghost_in_fight: bool = false;
 
     let mut net_session: Option<netplay::Session> = None;
@@ -1638,6 +1638,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 *local_port,
                                                 *player,
                                                 *peer,
+                                                cfg.input_delay,
                                             ) {
                                                 Ok(s) => {
                                                     net_session = Some(s);
@@ -4341,6 +4342,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     local_handle,
                                                     peer_label,
                                                     socket,
+                                                    cfg.input_delay,
                                                     |line: &str| {
                                                         println!("[net] {}", line);
                                                         if let Some(f) = log_ref.as_mut() {
@@ -4367,6 +4369,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             menu::DEFAULT_NETPLAY_PORT,
                                             local_handle,
                                             stun_peer,
+                                            cfg.input_delay,
                                             |line: &str| {
                                                 println!("[net] {}", line);
                                                 if let Some(f) = log_ref.as_mut() {

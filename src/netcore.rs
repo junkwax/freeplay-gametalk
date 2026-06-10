@@ -48,7 +48,7 @@ pub fn reset_for_netplay(
     ghost_recording: &mut Option<ghost::Recording>,
 ) {
     use memory::{poke_u16, Endian};
-    const ZERO_TARGETS: &[usize] = &[0x250EE, 0x25772];
+    const ZERO_TARGETS: &[usize] = &[0x250F4, 0x2577A, 0x24AA8];
     for addr in ZERO_TARGETS {
         poke_u16(core, *addr, 0x0000, Endian::Little);
     }
@@ -279,7 +279,11 @@ pub fn step_netplay_frame(
                         }
                     }
                 }
-                let cksum = cksum_with_mask(&blob, runtime.rtc_mask_offset);
+                const NETPLAY_SYNC_ADDR: usize = 0x24AA8;
+                let mut cksum = cksum_with_mask(&blob, runtime.rtc_mask_offset);
+                if let Some(sync) = memory::peek_u16(core, NETPLAY_SYNC_ADDR, memory::Endian::Little) {
+                    cksum ^= u128::from(sync) << 112;
+                }
                 dlog!(
                     "net",
                     "SaveGameState frame={frame} bytes={} cksum=0x{:032x}",

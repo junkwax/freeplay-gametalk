@@ -11,10 +11,10 @@
 // between ROM revisions, press Shift+F11 to dump RAM, move char, dump again,
 // and diff with `python ram_diff.py before.bin after.bin`.
 //
-//   P1_X        = 0x253E8  s16   horizontal position
-//   P1_Y        = 0x253EA  s16   vertical position (0=ground)
-//   P2_X        = 0x25562  s16
-//   P2_Y        = 0x25564  s16
+//   P1_X        = 0x253EE  s16   horizontal position
+//   P1_Y        = 0x253F0  s16   vertical position (0=ground)
+//   P2_X        = 0x25568  s16
+//   P2_Y        = 0x2556A  s16
 
 macro_rules! dlog {
     ($($arg:tt)*) => {{
@@ -35,10 +35,10 @@ use crate::retro::{
     RETRO_DEVICE_ID_JOYPAD_UP, RETRO_DEVICE_ID_JOYPAD_X, RETRO_DEVICE_ID_JOYPAD_Y,
 };
 
-const P1_X_ADDR: usize = 0x253E8;
-const P1_Y_ADDR: usize = 0x253EA;
-const P2_X_ADDR: usize = 0x25562;
-const P2_Y_ADDR: usize = 0x25564;
+const P1_X_ADDR: usize = 0x253EE;
+const P1_Y_ADDR: usize = 0x253F0;
+const P2_X_ADDR: usize = 0x25568;
+const P2_Y_ADDR: usize = 0x2556A;
 
 const CLOSE_RANGE: i16 = 60;
 const MID_RANGE: i16 = 140;

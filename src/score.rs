@@ -1,18 +1,18 @@
 //! MK2 round/match score tracking from FBNeo SYSTEM_RAM.
 //!
-//! Symbols (verified by anchoring on `gstate=0x253B2` and walking RAM.ASM):
-//!   p1_matchw  = 0x253DA  (P1 wins this match, u16)
-//!   p2_matchw  = 0x25554  (P2 wins this match, u16)
-//!   round_num  = 0x256D6  (current round, u16)
-//!   winner_status = 0x256D8  (1=P1, 2=P2, 3=finish him, u16)
+//! Symbols (verified by anchoring on `gstate=0x253B8` and walking RAM.ASM):
+//!   p1_matchw  = 0x253E0  (P1 wins this match, u16)
+//!   p2_matchw  = 0x2555A  (P2 wins this match, u16)
+//!   round_num  = 0x256DE  (current round, u16)
+//!   winner_status = 0x256E0  (1=P1, 2=P2, 3=finish him, u16)
 
 use crate::memory::{peek_u16, Endian};
 use crate::retro::Core;
 
-const P1_MATCHW: usize = 0x253DA;
-const P2_MATCHW: usize = 0x25554;
-const ROUND_NUM: usize = 0x256D6;
-const WINNER_STATUS: usize = 0x256D8;
+const P1_MATCHW: usize = 0x253E0;
+const P2_MATCHW: usize = 0x2555A;
+const ROUND_NUM: usize = 0x256DE;
+const WINNER_STATUS: usize = 0x256E0;
 
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Score {

@@ -85,6 +85,12 @@ pub struct Config {
     /// Optional stats service URL for ghost uploads and leaderboards.
     #[serde(default)]
     pub stats_url: String,
+    /// GGRS input delay in frames (default 3). Higher values trade input
+    /// latency for fewer rollbacks on high-latency connections. The MK2
+    /// ROM's +6-tick combo windows support up to 6 frames without missing
+    /// specials. Valid range: 0–8.
+    #[serde(default = "default_input_delay")]
+    pub input_delay: u32,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -213,6 +219,10 @@ impl VideoFilter {
         let next = (idx + delta).rem_euclid(all.len() as i8) as usize;
         all[next]
     }
+}
+
+fn default_input_delay() -> u32 {
+    3
 }
 
 fn default_true() -> bool {

@@ -10,10 +10,10 @@ pub const PUNISH_WINDOW_FRAMES: u32 = 45;
 pub const LATE_WINDOW_FRAMES: u32 = 45;
 pub const DAMAGE_COMBO_GAP_FRAMES: u32 = 70;
 pub const LAB_RESET_SLOT_COUNT: usize = 3;
-const P1_X_ADDR: usize = 0x253E8;
-const P1_Y_ADDR: usize = 0x253EA;
-const P2_X_ADDR: usize = 0x25562;
-const P2_Y_ADDR: usize = 0x25564;
+const P1_X_ADDR: usize = 0x253EE;
+const P1_Y_ADDR: usize = 0x253F0;
+const P2_X_ADDR: usize = 0x25568;
+const P2_Y_ADDR: usize = 0x2556A;
 
 pub struct ResetSlots {
     active_slot: usize,
