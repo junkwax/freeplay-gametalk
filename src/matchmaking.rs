@@ -149,6 +149,43 @@ pub fn check_username_available(
     });
 }
 
+/// Generate Wu-style names and return the first one the stats service reports
+/// as free, so a fresh player is offered an available name to confirm rather
+/// than one that's already taken. Sends exactly one `Available(name)`.
+///
+/// Fails open: if the stats service can't be reached, or every candidate is
+/// taken within the attempt budget, the last generated name is returned anyway
+/// so name generation never hard-blocks Find Match. (`Taken`/`Error` are never
+/// sent — the caller treats the result purely as "here's the name to confirm".)
+pub fn generate_available_username(stats_url: String, tx: Sender<UsernameCheckUpdate>) {
+    std::thread::spawn(move || {
+        const MAX_ATTEMPTS: u64 = 8;
+        let sanitize = |raw: &str| crate::config::sanitize_username(raw);
+        let mut last = sanitize(&crate::wuname::random_username_nonce(0))
+            .unwrap_or_else(crate::config::default_username);
+        for attempt in 0..MAX_ATTEMPTS {
+            let candidate = match sanitize(&crate::wuname::random_username_nonce(attempt)) {
+                Some(name) => name,
+                None => continue,
+            };
+            last = candidate.clone();
+            match check_username_available_inner(&stats_url, &candidate) {
+                Ok(true) => {
+                    let _ = tx.send(UsernameCheckUpdate::Available(candidate));
+                    return;
+                }
+                Ok(false) => continue, // taken — try another
+                Err(_) => {
+                    // Stats unreachable: don't strand the user, offer this name.
+                    let _ = tx.send(UsernameCheckUpdate::Available(candidate));
+                    return;
+                }
+            }
+        }
+        let _ = tx.send(UsernameCheckUpdate::Available(last));
+    });
+}
+
 /// Start a join-to-spar session. Called when Discord delivers an
 /// ACTIVITY_JOIN event containing the xband://join/<room_id> secret.
 pub fn start_join_room(tx: Sender<Update>, room_id: String) {

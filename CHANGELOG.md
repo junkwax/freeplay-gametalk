@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.7.1 - 2026-06-10
+
+### Fixed
+
+- Fixed the Find Match name flow getting stuck on a "Checking name" screen for
+  fresh installs. The bundled environment no longer seeds a fixed username, so
+  a new install again auto-generates a Wu-style name and shows the confirm
+  screen before the first match instead of silently checking a shared default.
+
+### Added
+
+- Find Match now picks an auto-generated name the stats service reports as
+  available before offering it for confirmation, and still re-checks
+  availability when you set a custom name.
+
+### Changed
+
+- macOS releases now ship both Apple Silicon (arm64) and Intel (x86_64)
+  builds as separate archives.
+
 ## 0.7.0 - 2026-06-10
 
 ### Added
