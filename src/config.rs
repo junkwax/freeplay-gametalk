@@ -85,6 +85,12 @@ pub struct Config {
     /// Optional stats service URL for ghost uploads and leaderboards.
     #[serde(default)]
     pub stats_url: String,
+    /// Stable installation identifier used to anchor a persistent guest-stats
+    /// profile when no email is registered. Generated once on first run and
+    /// never shown to the user. Sent to the server as `device_id` in
+    /// `/auth/guest` requests so stats carry across sessions without email.
+    #[serde(default)]
+    pub guest_device_id: String,
     /// GGRS input delay in frames (default 3). Higher values trade input
     /// latency for fewer rollbacks on high-latency connections. The MK2
     /// ROM's +6-tick combo windows support up to 6 frames without missing
@@ -258,7 +264,40 @@ pub fn load() -> Config {
     };
     apply_env_overrides(&mut cfg);
     cfg.volume_percent = cfg.volume_percent.min(100);
+    if cfg.guest_device_id.is_empty() {
+        cfg.guest_device_id = generate_device_id();
+        save(&cfg);
+    }
     cfg
+}
+
+/// Generate a random 32-char hex device ID (128-bit) using only stdlib.
+/// Called once when config has no device_id; result is immediately persisted.
+fn generate_device_id() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let pid = std::process::id() as u128;
+    let sentinel: u64 = 0;
+    let stack_addr = &sentinel as *const u64 as u128;
+    // Mix entropy sources with FNV-1a
+    let mix_a = nanos ^ (pid << 17) ^ (stack_addr >> 3);
+    let mix_b = nanos
+        .wrapping_add(pid)
+        .wrapping_add(stack_addr.wrapping_mul(0x9e37_79b9_7f4a_7c15));
+    let mut h1: u64 = 0xcbf29ce484222325;
+    for b in mix_a.to_le_bytes() {
+        h1 ^= b as u64;
+        h1 = h1.wrapping_mul(0x100000001b3);
+    }
+    let mut h2: u64 = 0x14650fb0739d0383;
+    for b in mix_b.to_le_bytes() {
+        h2 ^= b as u64;
+        h2 = h2.wrapping_mul(0x100000001b3);
+    }
+    format!("{h1:016x}{h2:016x}")
 }
 
 pub fn save(cfg: &Config) {

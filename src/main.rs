@@ -185,7 +185,7 @@ fn start_find_match_queue(
             status: format!("Entering queue as {discord_name}"),
         });
     } else {
-        matchmaking::set_guest_profile(username.clone(), cfg.stats_email.clone());
+        matchmaking::set_guest_profile(username.clone(), cfg.stats_email.clone(), cfg.guest_device_id.clone());
         matchmaking::start_guest(tx);
         *state = AppState::Menu(MenuScreen::Matchmaking {
             status: format!("Entering queue as {username}"),

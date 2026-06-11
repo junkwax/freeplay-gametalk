@@ -71,7 +71,7 @@ const GAME_PORT: u16 = 7000;
 const PUNCH_PAYLOAD: &[u8] = b"MK2PUNCH";
 
 static CURRENT_TOKEN: Mutex<Option<String>> = Mutex::new(None);
-static GUEST_PROFILE: Mutex<Option<(String, String)>> = Mutex::new(None);
+static GUEST_PROFILE: Mutex<Option<(String, String, String)>> = Mutex::new(None);
 
 fn signaling_url() -> Result<String, String> {
     let from_env = crate::config::env_value("FREEPLAY_SIGNALING_URL");
@@ -86,9 +86,9 @@ pub fn current_token() -> Option<String> {
     CURRENT_TOKEN.lock().ok().and_then(|g| g.clone())
 }
 
-pub fn set_guest_profile(username: String, email: String) {
+pub fn set_guest_profile(username: String, email: String, device_id: String) {
     if let Ok(mut g) = GUEST_PROFILE.lock() {
-        *g = Some((username, email));
+        *g = Some((username, email, device_id));
     }
 }
 
@@ -310,7 +310,7 @@ fn run_guest(tx: &Sender<Update>) -> Result<(), String> {
         .lock()
         .ok()
         .and_then(|g| g.clone())
-        .and_then(|(_, email)| crate::config::normalize_email(&email))
+        .and_then(|(_, email, _)| crate::config::normalize_email(&email))
         .is_some();
     let status = if has_profile_email {
         "Signing in with player profile..."
@@ -591,22 +591,34 @@ fn write_cached_token(token: &str) {
 }
 
 fn guest_login() -> Result<String, String> {
-    let (username, email) = GUEST_PROFILE
+    let (username, email, device_id) = GUEST_PROFILE
         .lock()
         .ok()
         .and_then(|g| g.clone())
-        .unwrap_or_else(|| (crate::config::default_username(), String::new()));
+        .unwrap_or_else(|| {
+            (
+                crate::config::default_username(),
+                String::new(),
+                String::new(),
+            )
+        });
     let username = crate::config::sanitize_username(&username)
         .ok_or_else(|| "Username must be 2-24 letters/numbers".to_string())?;
     let email = crate::config::normalize_email(&email).unwrap_or_default();
-    let body = if email.is_empty() {
-        format!(r#"{{"username":"{}"}}"#, json_escape(&username))
-    } else {
+    let body = if !email.is_empty() {
         format!(
             r#"{{"username":"{}","email":"{}"}}"#,
             json_escape(&username),
             json_escape(&email)
         )
+    } else if !device_id.is_empty() {
+        format!(
+            r#"{{"username":"{}","device_id":"{}"}}"#,
+            json_escape(&username),
+            json_escape(&device_id)
+        )
+    } else {
+        format!(r#"{{"username":"{}"}}"#, json_escape(&username))
     };
     let url = format!("{}/auth/guest", signaling_url()?);
     let resp = http_post_json_no_auth(&url, &body)?;

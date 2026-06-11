@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.2 - 2026-06-10
+
+### Fixed
+
+- Guest players without a registered email now accumulate stats persistently.
+  A stable device ID is generated on first run and stored in `config.toml`;
+  it is sent to the matchmaking server so every player gets a consistent profile
+  across sessions without needing to register an account.
+
 ## 0.7.1 - 2026-06-10
 
 ### Fixed
