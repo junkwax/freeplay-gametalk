@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.7.5 - 2026-06-12
+
+### Changed
+
+- macOS releases now build Intel packages on GitHub's current
+  `macos-15-intel` runner and publish both per-architecture `.tar.gz` archives
+  and `.dmg` images.
+
+### Fixed
+
+- Renamed the Wu-name retry variant field so CodeQL no longer flags the
+  username generator as using a hard-coded cryptographic nonce.
+
 ## 0.7.4 - 2026-06-12
 
 ### Added
