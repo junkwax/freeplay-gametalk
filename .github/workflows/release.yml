@@ -254,16 +254,16 @@ jobs:
     needs: validate-version
     strategy:
       # Build both Mac architectures natively, one per runner: macos-14 is
-      # Apple Silicon (arm64), macos-13 is the last Intel (x86_64) runner.
+      # Apple Silicon (arm64), macos-15-intel is GitHub's current Intel label.
       # fail-fast off so a flaky Intel runner doesn't kill the arm64 release.
-      # NOTE: GitHub is sunsetting Intel runners; if macos-13 is retired the
-      # x86_64 entry must move to cross-compilation (harder for the FBNeo C core).
+      # NOTE: If hosted Intel runners disappear entirely, the x86_64 entry
+      # must move to cross-compilation (harder for the FBNeo C core).
       fail-fast: false
       matrix:
         include:
           - runner: macos-14
             arch: arm64
-          - runner: macos-13
+          - runner: macos-15-intel
             arch: x86_64
     runs-on: ${{ matrix.runner }}
     steps:
@@ -312,7 +312,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: freeplay-gametalk-macos-${{ matrix.arch }}
-          path: dist/freeplay-gametalk-v*-macos-${{ matrix.arch }}.tar.gz
+          path: |
+            dist/freeplay-gametalk-v*-macos-${{ matrix.arch }}.tar.gz
+            dist/freeplay-gametalk-v*-macos-${{ matrix.arch }}.dmg
           if-no-files-found: error
 
       - name: Attach to GitHub Release
@@ -327,8 +329,9 @@ jobs:
         run: |
           tag="${REF_NAME}"
           if [ "$EVENT_NAME" != "push" ]; then tag="${INPUT_TAG}"; fi
-          asset="$(ls dist/freeplay-gametalk-v*-macos-*.tar.gz | head -n1)"
-          if [ -z "$asset" ]; then echo "release tarball not found" >&2; exit 1; fi
+          shopt -s nullglob
+          assets=(dist/freeplay-gametalk-v*-macos-*.tar.gz dist/freeplay-gametalk-v*-macos-*.dmg)
+          if [ "${#assets[@]}" -eq 0 ]; then echo "macOS release assets not found" >&2; exit 1; fi
           version="${tag#v}"
           notes="$(awk -v version="$version" '
             $0 ~ "^##[[:space:]]+" version "([[:space:]]|-|$)" { in_section=1; next }
@@ -350,9 +353,9 @@ jobs:
           fi
           if gh release view "$tag" --repo "$GH_REPO" >/dev/null 2>&1; then
             gh release edit "$tag" --repo "$GH_REPO" --notes "$notes"
-            gh release upload "$tag" "$asset" --repo "$GH_REPO" --clobber
+            gh release upload "$tag" "${assets[@]}" --repo "$GH_REPO" --clobber
           else
-            args=(release create "$tag" "$asset" --repo "$GH_REPO" --title "$tag" --notes "$notes")
+            args=(release create "$tag" "${assets[@]}" --repo "$GH_REPO" --title "$tag" --notes "$notes")
             if [ "$INPUT_PRERELEASE" = "true" ]; then args+=(--prerelease); fi
             gh "${args[@]}"
           fi

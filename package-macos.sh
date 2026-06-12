@@ -8,6 +8,7 @@ VERSION="$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "([^"]+)"/\1/
 ARCH="$(uname -m)"
 OUT_DIR="dist/freeplay-gametalk-v${VERSION}-macos-${ARCH}"
 ZIP_FILE="${OUT_DIR}.tar.gz"
+DMG_FILE="${OUT_DIR}.dmg"
 EXE_NAME="freeplay"
 
 rm -rf "$OUT_DIR"
@@ -65,7 +66,7 @@ PREREQS (one-time, system-wide):
   They are NOT shipped in this archive.
 
 INSTALL:
-  1. Extract this archive anywhere.
+  1. Open the DMG or extract the tarball, then keep the Freeplay folder anywhere.
   2. Put your legally-obtained ROM zip (mk2.zip) into the roms/ folder.
   3. (Optional) Edit .env to add a Discord webhook URL if you want a
      personal channel pinged on match results. Out of the box .env
@@ -92,6 +93,19 @@ NOTE:
   notarization are tracked as future work.
 EOF
 
-rm -f "$ZIP_FILE"
+rm -f "$ZIP_FILE" "$DMG_FILE"
 tar -czf "$ZIP_FILE" -C "$(dirname "$OUT_DIR")" "$(basename "$OUT_DIR")"
 echo "Done: $ZIP_FILE"
+
+if ! command -v hdiutil >/dev/null 2>&1; then
+  echo "hdiutil not found; cannot create macOS DMG" >&2
+  exit 1
+fi
+
+hdiutil create \
+  -volname "Freeplay Gametalk v${VERSION} ${ARCH}" \
+  -srcfolder "$OUT_DIR" \
+  -ov \
+  -format UDZO \
+  "$DMG_FILE"
+echo "Done: $DMG_FILE"

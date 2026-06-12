@@ -97,19 +97,19 @@ const NOUNS: &[&str] = &[
 ];
 
 pub fn random_username() -> String {
-    random_username_nonce(0)
+    random_username_variant(0)
 }
 
-/// Like `random_username` but mixes in a caller-supplied nonce so successive
+/// Like `random_username` but mixes in a caller-supplied variant so successive
 /// calls yield distinct names even when the system clock resolution is too
 /// coarse to differ between calls (notably on Windows, where SystemTime can
 /// be stuck at the same value across a tight regenerate loop).
-pub fn random_username_nonce(nonce: u64) -> String {
+pub fn random_username_variant(variant: u64) -> String {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let seed_text = format!("{}-{}-{}-{:p}", now, std::process::id(), nonce, &now);
+    let seed_text = format!("{}-{}-{}-{:p}", now, std::process::id(), variant, &now);
     name_for_seed_text(&seed_text)
 }
 

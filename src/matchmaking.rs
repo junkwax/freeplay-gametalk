@@ -161,10 +161,10 @@ pub fn generate_available_username(stats_url: String, tx: Sender<UsernameCheckUp
     std::thread::spawn(move || {
         const MAX_ATTEMPTS: u64 = 8;
         let sanitize = |raw: &str| crate::config::sanitize_username(raw);
-        let mut last = sanitize(&crate::wuname::random_username_nonce(0))
+        let mut last = sanitize(&crate::wuname::random_username_variant(0))
             .unwrap_or_else(crate::config::default_username);
         for attempt in 0..MAX_ATTEMPTS {
-            let candidate = match sanitize(&crate::wuname::random_username_nonce(attempt)) {
+            let candidate = match sanitize(&crate::wuname::random_username_variant(attempt)) {
                 Some(name) => name,
                 None => continue,
             };

@@ -225,7 +225,8 @@ release packages for **Windows, Linux, and macOS** in parallel:
 
 - Windows: `freeplay-gametalk-v<version>.zip`
 - Linux: `freeplay-gametalk-v<version>-linux.tar.gz`
-- macOS: `freeplay-gametalk-v<version>-macos.tar.gz`
+- macOS: `freeplay-gametalk-v<version>-macos-<arch>.tar.gz`
+- macOS DMG: `freeplay-gametalk-v<version>-macos-<arch>.dmg`
 
 Regular pushes and pull requests also run CI and upload a Windows package
 artifact from the **CI** workflow. Use a version tag when you want builds
