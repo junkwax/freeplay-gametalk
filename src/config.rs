@@ -274,6 +274,7 @@ pub fn load() -> Config {
     };
     apply_env_overrides(&mut cfg);
     cfg.volume_percent = cfg.volume_percent.min(100);
+    cfg.input_delay = cfg.input_delay.min(8);
     if cfg.volume_percent == 0 {
         // Configs written while Config::default() zeroed volume_percent have
         // 0 persisted; nobody chose a silent install, so rescue them to 80.

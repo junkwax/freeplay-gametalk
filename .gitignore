@@ -115,3 +115,7 @@ token
 # Contributors fetch SDL2 separately; FBNeo lives next to freeplay.exe.
 src/*.dll
 src/lib/*.lib
+src/media/MK2FONT1.ANF
+src/media/MK2FONT1.TGA
+.gitignore
+tools/tga2ttf.py

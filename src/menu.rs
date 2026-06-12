@@ -113,6 +113,7 @@ pub enum MenuScreen {
         crt_corner_bend: bool,
         aspect_mode: AspectMode,
         scorebar_style: ScorebarStyle,
+        input_delay: u32,
     },
     /// Lab helpers backed by RAM pokes already used by F-keys.
     Training {
@@ -248,7 +249,7 @@ pub const MAIN_ITEMS: [&str; 9] = [
 ];
 const LAB_MENU_ITEMS: [&str; 2] = ["Start Lab", "Load Ghosts"];
 
-const SETTINGS_ITEMS: [&str; 14] = [
+const SETTINGS_ITEMS: [&str; 15] = [
     "Username",
     "Stats Email",
     "Discord Account",
@@ -260,6 +261,7 @@ const SETTINGS_ITEMS: [&str; 14] = [
     "CRT Glass",
     "Aspect",
     "Scorebar",
+    "Input Delay",
     "Run Doctor",
     "Open Clips Folder",
     "Open Logs Folder",
@@ -327,6 +329,8 @@ pub enum NavResult {
     CycleAspectMode(i8),
     /// Cycle the in-game scorebar layout.
     CycleScorebarStyle(i8),
+    /// Adjust GGRS input delay by signed frames (clamped 0–8 in main.rs).
+    AdjustInputDelay(i8),
     /// Open Training helper menu.
     #[allow(dead_code)]
     OpenTraining,
@@ -501,6 +505,7 @@ impl AppState {
                         crt_corner_bend: true,
                         aspect_mode: AspectMode::Fit,
                         scorebar_style: ScorebarStyle::Centered,
+                        input_delay: 3,
                     });
                     NavResult::OpenSettings
                 }
@@ -630,9 +635,10 @@ impl AppState {
                 8 => NavResult::ToggleCrtGlass,
                 9 => NavResult::CycleAspectMode(1),
                 10 => NavResult::CycleScorebarStyle(1),
-                11 => NavResult::LaunchDoctor,
-                12 => NavResult::OpenClipsFolder,
-                13 => NavResult::OpenLogsFolder,
+                11 => NavResult::AdjustInputDelay(1),
+                12 => NavResult::LaunchDoctor,
+                13 => NavResult::OpenClipsFolder,
+                14 => NavResult::OpenLogsFolder,
                 _ => NavResult::Stay,
             },
             AppState::Menu(MenuScreen::TextEdit { field, value, .. }) => {
@@ -839,6 +845,7 @@ pub fn draw(
             crt_corner_bend,
             aspect_mode,
             scorebar_style,
+            input_delay,
         }) => draw_settings(
             canvas,
             font,
@@ -854,6 +861,7 @@ pub fn draw(
             *crt_corner_bend,
             *aspect_mode,
             *scorebar_style,
+            *input_delay,
             w,
             h,
         )?,
@@ -2389,6 +2397,7 @@ fn draw_settings(
     crt_corner_bend: bool,
     aspect_mode: AspectMode,
     scorebar_style: ScorebarStyle,
+    input_delay: u32,
     w: i32,
     h: i32,
 ) -> Result<(), String> {
@@ -2447,13 +2456,14 @@ fn draw_settings(
             8 => Some(if crt_corner_bend { "ON" } else { "OFF" }.to_string()),
             9 => Some(aspect_mode.label().to_string()),
             10 => Some(scorebar_style.label().to_string()),
+            11 => Some(format!("{input_delay} FRAMES")),
             _ => None,
         };
         if let Some(value) = value {
             let value = fit_line(font, &value, scale, (w / 2).max(120));
             let vw = font.text_width_exact(&value, scale);
             let enabled_colour = match i {
-                0 | 1 | 5 | 6 | 7 | 9 | 10 => Color::RGB(180, 205, 255),
+                0 | 1 | 5 | 6 | 7 | 9 | 10 | 11 => Color::RGB(180, 205, 255),
                 _ if value == "ON" || value == "CONNECTED" => Color::RGB(120, 230, 150),
                 _ => Color::RGB(210, 140, 140),
             };
@@ -2491,9 +2501,10 @@ fn settings_hint(cursor: usize) -> &'static str {
         8 => "CRT glass controls rounded screen corners.",
         9 => "Aspect controls how the game fits the window.",
         10 => "Scorebar changes the online/Lab overlay style.",
-        11 => "Doctor checks ROM, core, networking, and config.",
-        12 => "Open the folder where Ctrl+R clips are written.",
-        13 => "Open runtime logs next to the app.",
+        11 => "Netplay frames of input delay. Lower = snappier, higher = fewer rollbacks. Applies next match.",
+        12 => "Doctor checks ROM, core, networking, and config.",
+        13 => "Open the folder where Ctrl+R clips are written.",
+        14 => "Open runtime logs next to the app.",
         _ => "",
     }
 }

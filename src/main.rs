@@ -1369,6 +1369,54 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 Event::KeyDown {
+                    keycode: Some(Keycode::Left),
+                    repeat: false,
+                    ..
+                } if matches!(
+                    state,
+                    AppState::Menu(MenuScreen::Settings { cursor: 11, .. })
+                ) =>
+                {
+                    cfg.input_delay = cfg.input_delay.saturating_sub(1);
+                    config::save(&cfg);
+                    if let AppState::Menu(MenuScreen::Settings {
+                        ref mut input_delay,
+                        ..
+                    }) = state
+                    {
+                        *input_delay = cfg.input_delay;
+                    }
+                    toast = Some((
+                        format!("Input Delay {} frames (next match)", cfg.input_delay),
+                        Instant::now() + Duration::from_millis(1800),
+                    ));
+                }
+
+                Event::KeyDown {
+                    keycode: Some(Keycode::Right),
+                    repeat: false,
+                    ..
+                } if matches!(
+                    state,
+                    AppState::Menu(MenuScreen::Settings { cursor: 11, .. })
+                ) =>
+                {
+                    cfg.input_delay = (cfg.input_delay + 1).min(8);
+                    config::save(&cfg);
+                    if let AppState::Menu(MenuScreen::Settings {
+                        ref mut input_delay,
+                        ..
+                    }) = state
+                    {
+                        *input_delay = cfg.input_delay;
+                    }
+                    toast = Some((
+                        format!("Input Delay {} frames (next match)", cfg.input_delay),
+                        Instant::now() + Duration::from_millis(1800),
+                    ));
+                }
+
+                Event::KeyDown {
                     keycode: Some(Keycode::F),
                     keymod,
                     repeat: false,
@@ -1873,6 +1921,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         crt_corner_bend: cfg.crt_corner_bend,
                                         aspect_mode: cfg.aspect_mode,
                                         scorebar_style: cfg.scorebar_style,
+                                        input_delay: cfg.input_delay,
                                     });
                                 }
                                 NavResult::OpenTraining => {
@@ -1934,6 +1983,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             crt_corner_bend: cfg.crt_corner_bend,
                                             aspect_mode: cfg.aspect_mode,
                                             scorebar_style: cfg.scorebar_style,
+                                            input_delay: cfg.input_delay,
                                         }),
                                     });
                                 }
@@ -2013,6 +2063,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             crt_corner_bend: cfg.crt_corner_bend,
                                             aspect_mode: cfg.aspect_mode,
                                             scorebar_style: cfg.scorebar_style,
+                                            input_delay: cfg.input_delay,
                                         });
                                     }
                                 },
@@ -2040,6 +2091,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             crt_corner_bend: cfg.crt_corner_bend,
                                             aspect_mode: cfg.aspect_mode,
                                             scorebar_style: cfg.scorebar_style,
+                                            input_delay: cfg.input_delay,
                                         });
                                     } else {
                                         let (tx, rx) = std::sync::mpsc::channel();
@@ -2206,6 +2258,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     }
                                     toast = Some((
                                         format!("Scorebar {}", cfg.scorebar_style.label()),
+                                        Instant::now() + Duration::from_millis(1800),
+                                    ));
+                                }
+                                NavResult::AdjustInputDelay(delta) => {
+                                    // ENTER steps through 0..=8 and wraps; LEFT/RIGHT
+                                    // key handlers clamp at the ends instead.
+                                    cfg.input_delay = if delta < 0 {
+                                        cfg.input_delay.saturating_sub(delta.unsigned_abs() as u32)
+                                    } else if cfg.input_delay >= 8 {
+                                        0
+                                    } else {
+                                        (cfg.input_delay + delta as u32).min(8)
+                                    };
+                                    config::save(&cfg);
+                                    if let AppState::Menu(MenuScreen::Settings {
+                                        ref mut input_delay,
+                                        ..
+                                    }) = state
+                                    {
+                                        *input_delay = cfg.input_delay;
+                                    }
+                                    toast = Some((
+                                        format!(
+                                            "Input Delay {} frames (next match)",
+                                            cfg.input_delay
+                                        ),
                                         Instant::now() + Duration::from_millis(1800),
                                     ));
                                 }
@@ -4287,6 +4365,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     crt_corner_bend: cfg.crt_corner_bend,
                                     aspect_mode: cfg.aspect_mode,
                                     scorebar_style: cfg.scorebar_style,
+                                    input_delay: cfg.input_delay,
                                 });
                                 break;
                             }
