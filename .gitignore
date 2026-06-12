@@ -119,3 +119,4 @@ src/media/MK2FONT1.ANF
 src/media/MK2FONT1.TGA
 .gitignore
 tools/tga2ttf.py
+tools/anf2ttf.py
