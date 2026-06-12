@@ -284,6 +284,11 @@
   </main>
 
   <script>
+    const REPLAY_SOURCES = [
+      "https://freeplay-stats-681135711161.us-central1.run.app/replays/list?limit=100",
+      "replays.json"
+    ];
+
     const state = {
       replays: [],
       query: "",
@@ -416,17 +421,25 @@
     }
 
     async function load() {
-      try {
-        const response = await fetch("replays.json", { cache: "no-store" });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const data = await response.json();
-        state.replays = Array.isArray(data.replays) ? data.replays : [];
-        updated.textContent = data.updated_at ? `Updated ${formatDate(data.updated_at)}` : "Updated --";
-        total.textContent = `${state.replays.length} matches`;
-      } catch (error) {
-        empty.textContent = `Replay index failed to load: ${error.message}`;
-        empty.hidden = false;
+      let lastError = null;
+
+      for (const source of REPLAY_SOURCES) {
+        try {
+          const response = await fetch(source, { cache: "no-store" });
+          if (!response.ok) throw new Error(`${source}: HTTP ${response.status}`);
+          const data = await response.json();
+          state.replays = Array.isArray(data.replays) ? data.replays : [];
+          updated.textContent = data.updated_at ? `Updated ${formatDate(data.updated_at)}` : "Updated live";
+          total.textContent = `${state.replays.length} matches`;
+          render();
+          return;
+        } catch (error) {
+          lastError = error;
+        }
       }
+
+      empty.textContent = `Replay index failed to load: ${lastError ? lastError.message : "unknown error"}`;
+      empty.hidden = false;
       render();
     }
 

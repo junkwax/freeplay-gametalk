@@ -1,177 +1,152 @@
-# freeplay-gametalk
+# Freeplay Gametalk
 
+![Freeplay gameplay screenshot](https://raw.githubusercontent.com/junkwax/freeplay-gametalk/main/screenshot.png)
 
-![freeplay-image](https://raw.githubusercontent.com/junkwax/freeplay-gametalk/main/screenshot.png)
+Freeplay Gametalk is a ready-to-play rollback arcade client for online matches,
+local arcade play, training, replays, stats, and community drones.
 
-freeplay-gametalk is the Freeplay client package: a Rust/SDL2 arcade rollback
-client with username-based matchmaking, drone recording, profile stats, and a
-compact in-game overlay. It wraps an FBNeo libretro core, drives the emulator
-frame by frame, and synchronizes two players with GGRS rollback netcode over
-the public `freeplay-relay` UDP path.
+Bring your own legally obtained compatible ROM zip. ROMs are not included.
 
-This repository does not include ROM files, emulator DLLs, private service
-URLs, OAuth client IDs, tokens, or webhooks.
+## Public Links
 
-## Current Build
+- Latest download: https://github.com/junkwax/freeplay-gametalk/releases/latest
+- Public replays: https://junkwax.github.io/freeplay-gametalk/replays/
+- Source repo: https://github.com/junkwax/freeplay-gametalk
 
-- Modern SDL menu with Replays, Profile, Lab, Controls, Settings, and About.
-- Username-based online sign-in; Discord OAuth is not required to match.
-- Optional Discord account linking from Settings for profile lookup and
-  account display.
-- Optional Stats Email setting for portable ratings/history across machines.
-- Discord Rich Presence with join/spectate support when configured.
-- Online matchmaking through a signaling service.
-- Public UDP relay path for cross-NAT online play.
-- Arcade mode for a normal local coin/start arcade run, separate from Lab's
-  training helpers.
-- Best-of-session scoring and a high-resolution fight overlay rendered over
-  the emulator view.
-- Hardware render profiles with local renderer probing and automatic profile
-  recommendation on first launch.
-- Hardware CRT filters, including cached SDL overlays and OpenGL shader modes:
-  `CRT SHADER`, `CRT ARCADE GL`, and `CRT PVM GL`.
-- Render debug HUD with FPS, renderer, active filter, and online overlay status.
-- Window title/version branding as `FREEPLAY v<version>` with packaged
-  `appicon.png` runtime icon support.
-- Profile page with rating, wins, losses, win rate, match history, and Discord
-  avatar support when available.
-- Drone recording, upload/download support, local drone playback, online match
-  replay review, and lab play drone mode.
-- Package script that creates a distributable zip without ROMs or secrets.
+The replay page loads the live community replay feed first, then falls back to
+the static replay list in this repo. The **Watch** button opens the replay in
+the installed Freeplay app through the `xband://` protocol.
 
-## Hotkeys
+## Quick Start
 
-### Menus
+1. Download the latest release for your system.
+2. Extract the archive somewhere simple, like `C:\Games\Freeplay`.
+3. Put your compatible ROM zip in the `roms` folder.
+4. Run `freeplay.exe`.
+5. Open **Controls** if you want to bind a keyboard or controller.
+6. Pick **Arcade** for local play, **Lab** for practice, or **Find Match** for
+   online play.
 
-- `Up`/`Down` or controller D-pad: move selection.
-- `Enter`, numpad `Enter`, controller `A`, or controller `Start`: confirm.
-- `Esc`, controller `B`, or controller `Back`: go back/cancel.
-- `Tab`, `Left`/`Right`, or controller D-pad left/right: switch P1/P2 on
-  screens that support it.
-- Find Match asks for a public name the first time a generated name needs
-  confirmation. After the name is accepted once, or after a custom saved name
-  checks out, future queues skip the name box unless the name is taken.
-- `Arcade` starts a normal local arcade run. Insert coin/start through your
-  bindings; Lab dummy controls, Lab assist, training pokes, and the extra
-  scorebar overlay stay off.
-- `Lab` opens a compact submenu for Start Lab and Load Drones.
-- `Replays` opens saved online match replays and public replay archive entries.
-- `Shift+D`: open Doctor from menu screens.
+On first launch, Freeplay creates a public player name for you. You can keep it
+or change it in **Settings**. Discord login is optional; you can play ranked
+without it.
 
-### Lab And Local Play
+## What You Get
 
-- `Esc`: return to the main menu.
-- `F2`: toggle hitbox overlay.
-- `F3`: toggle infinite health.
-- `F4`: toggle freeze timer.
-- `F5`: cycle Lab dummy mode (`STAND`, `CROUCH`, `BLOCK`, `CROUCH BLOCK`,
-  `JUMP`, `JUMP IN`, `REV MASH`, `THROW TECH`, `WAKE BLOCK`, `OFF`). Active
-  dummy modes start Lab as a local 2P match and own P2 inputs; `OFF` keeps the
-  old single-player/CPU behavior.
-- `Ctrl+F5`: record P2's live controls for up to 5 seconds, then loop them as
-  the Lab dummy. Press `Ctrl+F5` again to stop early.
-- `Shift+F5`: clear the recorded dummy loop and return to the selected simple
-  dummy mode.
-- `F6`: load the active Lab reset slot.
-- `Ctrl+F6`: quick position reset. Each press applies the current preset and
-  advances the next preset through `MID`, `P2 CORNER`, and `P1 CORNER`.
-- `F7`: save the active Lab reset slot.
-- `Ctrl+F7`: cycle Lab reset slots `S1`/`S2`/`S3`; an asterisk in the Lab
-  assist panel means that slot has a saved reset.
-- `F8`: load/play full drone playback from `ghost.bin`.
-- `F9`: start/stop local drone recording.
-- `F10`: toggle Punish Trainer when no drone playback is active. It arms when
-  the recorded dummy loop ends, then scores `PUNISH`, `LATE`, `BLOCKED`, or
-  `MISSED` from P2 health and P1 attacks.
-- Lab assist also tracks P2 damage, hit count, attempts, and best damage while
-  fighting.
-- `Shift+F10`: reset Punish Trainer and damage stats.
-- `F10`: toggle reactive drone behavior while drone playback is active.
-- `F12`: play against a logic-driven P2 drone opponent.
-- `F11`: show/hide the Lab assist panel, including P1 input history.
-- `Ctrl+R`: start/stop MP4 clip recording.
-- `Ctrl+F`: cycle video filter.
-- `Ctrl+A`: cycle aspect mode.
-- `Ctrl+F10`: toggle render debug HUD.
+- Online matchmaking with rollback netcode.
+- Public UDP relay support for players behind home routers or strict NATs.
+- Player profile, rating, wins, losses, and recent match history.
+- Local and public replay review.
+- Automatic upload of completed online match replays when the stats service is
+  configured.
+- Training Lab with dummy behavior, resets, hitboxes, punish practice, clips,
+  and drone playback.
+- Arcade mode for normal local play without Lab helpers.
+- Controller-friendly menus.
+- CRT/video filters and render profiles.
+- Discord Rich Presence, join, and spectate support when configured.
 
-### Online And Replay
+## Playing Online
 
-- `T`: open online chat.
+1. Choose **Find Match**.
+2. Confirm your public name.
+3. Wait for an opponent.
+4. Play the set.
+5. When the game ends, Freeplay saves the replay and posts the result to the
+   stats service.
+
+Useful online buttons:
+
+- `T`: open chat.
 - `Enter` or controller `Start`: send chat.
 - `Esc`, controller `B`, or controller `Back`: close chat.
-- `F1`: leave an online set gracefully.
-- `F11`: show/hide network stats while matchmaking or online. The panel is
-  hidden by default and shows FPS, ping, rollback/load counts, frames behind,
-  send rate, and a connection-quality label once connected.
-- `Ctrl+F10`: show/hide render stats while online. This stays separate from
-  the SDL netplay/chat overlays and shows FPS, renderer, and active filter.
-- On the online match-ended screen, press `R` or controller `Y` to review the
-  replay saved from that set.
-- The Replays menu can also load public archive replays from GitHub. Selecting
-  one downloads it locally and opens the same in-app review screen.
-- `Space`, `Enter`, or controller `Start`: pause/resume replay review.
-- `.`, or controller `A`: step one replay frame while paused.
-- `Left`/`Right`, or controller D-pad left/right: jump replay review by 5 seconds.
-- `Up`/`Down`, or controller D-pad up/down: adjust replay review speed.
-- `F`, or controller `Guide`: cycle replay event filters (`ALL`, `HITS`,
-  `LEARN`, `BOOKMARKS`, `ROUNDS`, `END`).
-- `PageUp`/`PageDown`, or controller `LB`/`RB`: jump to previous/next replay
-  event in the active filter.
-- Replay review shows a right-side event list for round starts, hits, and match
-  end markers plus manual bookmarks when there is enough screen space.
-- Replay review auto-marks learning moments including first hit, big damage,
-  low-health scramble, and P1/P2 round wins.
-- Replays shows replay duration/date metadata; press `Delete` or
-  controller `X` to remove the selected replay, `N` or controller `RB` to edit
-  its note, and `O` or controller `Y` to open the replay folder.
-- `M` or controller right-stick click: add/remove a bookmark at the current
-  replay frame.
-- `Delete` or controller left-stick click: remove the nearest replay bookmark.
-- `I`/`O`, or controller `X`/`Y`: set replay clip in/out marks.
-- `Ctrl+R`: export the marked replay review segment as an MP4 clip.
-- `C`: clear replay clip marks.
-- `Esc`, controller `B`, or controller `Back`: stop replay review and return to
-  Replays.
-- `Shift+F11`: dump SYSTEM_RAM for diagnostics.
-- `Shift+F9`: run the rewind determinism test.
+- `F1`: leave the online set.
+- `F11`: show or hide network stats.
+- `R` or controller `Y` after a game: review the replay that was just saved.
 
-## Requirements
+## Watching Replays
 
-- Windows, Linux, or macOS
-- Rust stable toolchain
-- SDL2 runtime libraries:
-  - **Windows**: SDL2.dll + SDL2_ttf.dll next to the executable (bundled in
-    the packaged Windows release)
-  - **Linux**: `libsdl2-2.0-0` and `libsdl2-ttf-2.0-0` from your distro
-    (Debian/Ubuntu); equivalents on Fedora/Arch
-  - **macOS**: `brew install sdl2 sdl2_ttf`
-- FBNeo libretro core available next to the executable
-- A legally obtained compatible ROM zip supplied by the user
-- Optional backend services for online features
-- Optional Discord application for Rich Presence
+You have two replay paths:
 
-## Configuration
+- In the app: open **Replays** to watch your local replays and public community
+  replays.
+- On the web: open https://junkwax.github.io/freeplay-gametalk/replays/
 
-Copy `.env.example` to `.env` for local development and fill in your private
-values:
+The public page shows uploaded community replays. Press **Watch** to launch
+Freeplay and review the match in the app, or **Download** to save the replay
+file.
 
-```env
-FREEPLAY_SIGNALING_URL=https://your-signaling-service.example.com
-FREEPLAY_STATS_URL=https://your-stats-service.example.com
-FREEPLAY_USERNAME=Player
-FREEPLAY_DISCORD_CLIENT_ID=your-discord-application-id
-FREEPLAY_DISCORD_WEBHOOK_URL=
+Replay review controls:
+
+- `Space`, `Enter`, or controller `Start`: pause or resume.
+- `.` or controller `A`: step one frame while paused.
+- `Left`/`Right` or D-pad left/right: jump 5 seconds.
+- `Up`/`Down` or D-pad up/down: change replay speed.
+- `PageUp`/`PageDown` or controller `LB`/`RB`: jump between replay events.
+- `F` or controller `Guide`: cycle event filters.
+- `Esc`, controller `B`, or controller `Back`: return to Replays.
+
+## Menus And Settings
+
+- `Up`/`Down` or controller D-pad: move.
+- `Enter`, numpad `Enter`, controller `A`, or controller `Start`: select.
+- `Esc`, controller `B`, or controller `Back`: go back.
+- `Left`/`Right` or D-pad left/right: change settings and tabbed options.
+
+Settings lets you change your player name, optional stats email, renderer,
+video filter, display mode, controller bindings, and Discord account link.
+
+## Lab And Drones
+
+Use **Lab** when you want to practice instead of queueing online.
+
+- `F2`: hitboxes.
+- `F3`: infinite health.
+- `F4`: freeze timer.
+- `F5`: cycle dummy behavior.
+- `Ctrl+F5`: record a short dummy loop.
+- `F6`: load reset.
+- `F7`: save reset.
+- `F9`: start or stop local drone recording.
+- `F10`: Punish Trainer, or reactive drone behavior during drone playback.
+- `F11`: Lab assist panel.
+- `F12`: play against the logic-driven P2 drone.
+- `Ctrl+R`: record an MP4 clip.
+
+Drone files are still stored under the `ghosts` folder for compatibility with
+older builds, but the app labels them as drones.
+
+## Troubleshooting
+
+Run Doctor from the menu with `Shift+D`, or from a terminal:
+
+```powershell
+freeplay.exe --doctor
 ```
 
-`.env` is ignored by git. Keep real service URLs, Discord IDs, and webhook URLs
-out of commits. The in-app Settings screen also stores the saved player name and
-optional stats email in `config.toml`.
+Common fixes:
 
-`config.toml` is also ignored because it can contain local controller bindings
-and private webhook settings. The app can still run with defaults, and user
-configuration should stay local.
+- If the game does not start, make sure the ROM zip is inside `roms`.
+- If online play does not start, check that the release includes the bundled
+  `.env` file and that your firewall allows Freeplay.
+- If controller input feels wrong, open **Controls** and rebind.
+- If the public replay page is empty, there may not be uploaded replays yet.
+- If **Watch** on the replay page does nothing, launch Freeplay once so Windows
+  registers the `xband://` link handler.
 
-## Build
+## What Is Not Included
+
+This repo and its release packages do not include ROM files, private service
+tokens, OAuth secrets, webhooks, or paid/commercial emulator packages.
+
+## For Developers
+
+Install Rust stable and SDL2 development/runtime libraries.
+
+Windows release packages include the needed SDL runtime DLLs. Linux and macOS
+users install SDL2 through their package manager.
+
+Basic commands:
 
 ```powershell
 cargo check
@@ -185,11 +160,23 @@ The release executable is written to:
 target\release\freeplay.exe
 ```
 
-The Windows icon resource is embedded when the Windows SDK resource compiler is
-available. Packaged builds require the transparent runtime SDL window icon at
-`appicon.png`.
+Package a Windows release:
 
-## Build FBNeo Core
+```powershell
+.\package.ps1
+```
+
+Package Linux or macOS:
+
+```bash
+./package-linux.sh
+./package-macos.sh
+```
+
+The package scripts create archives in `dist` and include an empty `roms`
+folder. ROMs are intentionally not packaged.
+
+## FBNeo Core
 
 FBNeo is open source, but its license is non-commercial. Do not sell packages
 containing FBNeo, and do not commit compiled cores to this repo.
@@ -205,8 +192,8 @@ Build the libretro core locally:
 ./tools/build-fbneo-macos.sh
 ```
 
-The scripts clone/update `vendor/FBNeo`, build the libretro target, and copy
-the result into `cores/`:
+The scripts clone or update `vendor/FBNeo`, build the libretro target, and copy
+the result into `cores`:
 
 ```text
 Windows: cores\fbneo_libretro.dll
@@ -214,213 +201,72 @@ Linux:   cores/fbneo_libretro.so
 macOS:   cores/fbneo_libretro.dylib
 ```
 
-Both `vendor/` and `cores/` are ignored by git.
+Both `vendor` and `cores` are ignored by git.
 
-## Package
+## Configuration
 
-```powershell
-.\package.ps1
+Release builds include public defaults. Local developers can copy
+`.env.example` to `.env` and set private service values:
+
+```env
+FREEPLAY_SIGNALING_URL=https://your-signaling-service.example.com
+FREEPLAY_STATS_URL=https://your-stats-service.example.com
+FREEPLAY_USERNAME=Player
+FREEPLAY_DISCORD_CLIENT_ID=your-discord-application-id
+FREEPLAY_DISCORD_WEBHOOK_URL=
 ```
 
-```bash
-./package-linux.sh
-./package-macos.sh
-```
-
-The package script creates `dist\freeplay-gametalk-v<version>.zip` and copies the
-executable, runtime DLLs, media assets, app icon, registry helper, and an empty
-`roms\` folder. ROM files are intentionally not included.
-
-## Release Automation
-
-GitHub Actions includes `.github/workflows/release.yml`. It now produces
-release packages for **Windows, Linux, and macOS** in parallel:
-
-- Windows: `freeplay-gametalk-v<version>.zip`
-- Linux: `freeplay-gametalk-v<version>-linux.tar.gz`
-- macOS: `freeplay-gametalk-v<version>-macos-<arch>.tar.gz`
-- macOS DMG: `freeplay-gametalk-v<version>-macos-<arch>.dmg`
-
-Regular pushes and pull requests also run CI and upload a Windows package
-artifact from the **CI** workflow. Use a version tag when you want builds
-published as a GitHub Release.
-
-Create and publish a release by pushing a version tag:
-
-```powershell
-git tag v0.6.0
-git push origin v0.6.0
-```
-
-The release workflow fails if the pushed tag does not match the version in
-`Cargo.toml`, so every released build gets a new version and every commit build
-gets a distinct git revision in the app footer/logged metadata.
-
-You can also run the **Release** workflow manually from GitHub Actions and
-provide a tag. The workflow builds packages for all three platforms, uploads
-them as artifacts, and attaches the archives to a GitHub Release.
-
-### FBNeo pin
-
-The Linux/macOS jobs build the FBNeo libretro core from
-`finalburnneo/FBNeo`. The commit/branch is controlled by the `FBNEO_REF`
-env var at the top of `release.yml` (default: `master`). Both build scripts
-(`tools/build-fbneo-{linux,macos}.sh`) honor the same `FBNEO_REF` env var
-when run locally, so a release build can be reproduced bit-for-bit. CI also
-caches `vendor/FBNeo` and `cores/` keyed on this ref so repeat builds skip
-the ~10–20 minute FBNeo compile.
-
-Bump `FBNEO_REF` to a specific commit SHA when you want to lock netplay
-savestate compatibility across releases.
-
-The automated release does not include ROM files. SDL2 runtime libraries
-are NOT bundled in the Linux/macOS archives — users install them via their
-package manager (see the per-platform README inside each archive).
-
-## Runtime Files
-
-Expected next to the executable for a packaged build:
-
-```text
-freeplay.exe
-fbneo_libretro.dll        Windows
-fbneo_libretro.so         Linux
-fbneo_libretro.dylib      macOS
-SDL2.dll
-SDL2_ttf.dll
-media\
-roms\
-appicon.png
-```
-
-Development builds can also resolve media from `src\media`.
-
-The only tracked TTF is `src\media\mk2.ttf`. Its upstream source is:
-https://www.mortalkombatwarehouse.com/site/fonts/mortalkombat2.ttf
-
-## Online Flow
-
-For public release builds:
-
-1. Download the latest `freeplay-gametalk-v<version>.zip` from GitHub Releases.
-2. Extract it, then put your legally obtained ROM zip in `roms\`.
-3. Run `freeplay.exe`.
-4. Open Settings if you want to change your public username or add an optional
-   stats email.
-5. Optional: choose `Discord Account` in Settings to connect Discord. Your
-   browser opens; after authorization, close the browser tab and return to
-   Freeplay.
-6. Select Find Match, confirm a player name, then enter the queue.
-7. During an online match, press `T` to chat, Enter/Start to send, or Esc/B/Back to close.
-8. Completed online sets save full-match replays; use Replays to review.
-9. Press `F1` to leave the set.
-
-Under the hood:
-
-1. The client discovers its public UDP endpoint.
-2. The signaling service pairs compatible players.
-3. Relay credentials are minted for the shared room.
-4. Both clients send netplay packets to `freeplay-relay`, which forwards
-   traffic between the two registered peers.
-5. Match results and spectator state are posted through the HTTPS matchmaking
-   service; replay and drone storage lives on the stats service.
-
-Stats, replay uploads, and drone uploads are disabled when `FREEPLAY_STATS_URL`
-is missing.
-Without a Stats Email, ratings are tied to the confirmed player-name identity.
-Add the same email on another machine to keep using the same stats identity there.
-Discord presence is disabled when `FREEPLAY_DISCORD_CLIENT_ID` is missing.
-
-## Discord Rich Presence
-
-The client publishes activity through the local Discord desktop app when
-`FREEPLAY_DISCORD_CLIENT_ID` is configured.
-
-Recommended Rich Presence art asset keys in the Discord Developer Portal:
-
-```text
-freeplay
-training
-netplay
-matchmaking
-ghost
-spectate
-```
-
-Asset keys are lowercased by Discord. The client uses:
-
-- Stable elapsed timers for active play/lab/netplay sessions
-- State-specific small art
-- Live opponent and score text during netplay
-- Join secrets for lab spar invites
-- Spectate secrets for active online matches
-
-When a player is in an online match, Discord desktop can show a Watch/Spectate
-action on their profile card. Clicking it opens Freeplay through
-`xband://watch/<session>` and lands on the watch-match screen, which follows
-the live score/frame state exposed by the signaling service. This requires the
-viewer to have launched Freeplay at least once so the `xband://` protocol is
-registered locally, and it depends on Discord desktop Rich Presence being
-enabled for both users.
-
-Spectate requests are routed separately from join requests so Discord profile
-actions do not accidentally queue the viewer into the match.
-
-## Drones
-
-Drone recordings are written under `ghosts\` next to the executable for
-compatibility with earlier builds. When stats
-upload is configured and the client has a username identity, completed netplay
-recordings can be uploaded for community drone playback. Local drone files and
-upload queues are ignored by git.
+`.env` and `config.toml` are ignored by git. Keep private URLs, tokens, Discord
+IDs, and webhook values out of commits.
 
 ## Public Replay Page
 
-`docs/replays/index.html` is a GitHub Pages-ready replay index. Add public
-`.ncrp` files under `docs/replays/files/`, then add matching entries to
-`docs/replays/replays.json` with player names, scores, outcome, and file path.
-The page's Watch link opens Freeplay through `xband://replay?url=...`; Freeplay
-downloads the replay locally and opens the in-app review screen. The in-app
-Replays menu reads the same public index and can load anyone's listed replay.
+The web replay page lives in `docs/replays/index.html` and is served by GitHub
+Pages from the `main` branch's `/docs` folder:
 
-For live community uploads, the app posts completed online `.ncrp` files to
-`FREEPLAY_STATS_URL/replays/upload` and loads `FREEPLAY_STATS_URL/replays/list`
-before falling back to the GitHub Pages JSON. The relay server is only for UDP
-netplay packets; persistent replay storage belongs to `freeplay-stats`.
+```text
+https://junkwax.github.io/freeplay-gametalk/replays/
+```
+
+The page loads:
+
+1. Live uploads from `https://freeplay-stats-681135711161.us-central1.run.app/replays/list`.
+2. Static fallback entries from `docs/replays/replays.json`.
+
+To add a hand-picked replay to the static fallback, put the `.ncrp` file under
+`docs/replays/files` and add its player names, score, outcome, date, and file
+path to `docs/replays/replays.json`.
+
+## Online Services
+
+Freeplay uses three public service pieces:
+
+- Signaling service: account/session, matchmaking, spectate, incidents, and
+  match result forwarding.
+- Relay server: UDP packet forwarding for online play.
+- Stats service: leaderboard, profiles, match history, replay uploads, replay
+  downloads, and drone uploads.
+
+The relay server is only for live UDP netplay packets. Persistent replay and
+drone storage belongs to the stats service.
+
+## Release Automation
+
+GitHub Actions builds release packages for Windows, Linux, and macOS when a
+version tag is pushed.
+
+```powershell
+git tag v0.7.7
+git push github v0.7.7
+```
+
+The release workflow checks that the tag matches the version in `Cargo.toml`.
+Automated releases do not include ROM files.
 
 ## Repo Hygiene
 
-The repository intentionally ignores:
-
-- ROM zips and generated release zips
-- SDL/FBNeo runtime binaries in `src\`
-- local logs, save states, drones, and tokens
-- saved replay files
-- `.env` and local `config.toml`
-- local agent notes and scratch scripts
-- `Cargo.lock`
-
-`README.md` is the only markdown file intended to remain tracked.
-
-## Useful Commands
-
-```powershell
-cargo check
-cargo build --release
-cargo run -- --doctor
-.\package.ps1
-git status --short
-git ls-files
-```
-
-`freeplay --doctor` checks local setup without opening the SDL window: `.env`,
-backend values, ROM zip, FBNeo core, and the mk2 scoreboard font.
-
-## Notes For Contributors
-
-Keep public commits free of ROMs, third-party runtime DLLs, private URLs,
-Discord application secrets, webhook URLs, OAuth tokens, logs, drone recordings,
-and generated packages. Prefer configuration through `.env` or local ignored
-files.
+The repository intentionally ignores ROM zips, generated release archives,
+runtime binaries in `src`, local logs, save states, drones, replay files,
+tokens, `.env`, and local `config.toml`.
 
 See `NOTICE.md` for FBNeo and ROM distribution notes.
