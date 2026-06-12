@@ -14,6 +14,7 @@ use crate::input;
 use crate::lab;
 use crate::match_replay;
 use crate::memory;
+use crate::mk2_addrs;
 use crate::netplay;
 use crate::retro::{self, SILENT_MODE};
 
@@ -48,8 +49,7 @@ pub fn reset_for_netplay(
     ghost_recording: &mut Option<ghost::Recording>,
 ) {
     use memory::{poke_u16, Endian};
-    const ZERO_TARGETS: &[usize] = &[0x250F4, 0x2577A, 0x24AA8];
-    for addr in ZERO_TARGETS {
+    for addr in mk2_addrs::ZERO_TARGETS {
         poke_u16(core, *addr, 0x0000, Endian::Little);
     }
     trainer.set_enabled("hitboxes", false);
@@ -279,9 +279,10 @@ pub fn step_netplay_frame(
                         }
                     }
                 }
-                const NETPLAY_SYNC_ADDR: usize = 0x24AA8;
                 let mut cksum = cksum_with_mask(&blob, runtime.rtc_mask_offset);
-                if let Some(sync) = memory::peek_u16(core, NETPLAY_SYNC_ADDR, memory::Endian::Little) {
+                if let Some(sync) =
+                    memory::peek_u16(core, mk2_addrs::NETPLAY_SYNC_ADDR, memory::Endian::Little)
+                {
                     cksum ^= u128::from(sync) << 112;
                 }
                 dlog!(

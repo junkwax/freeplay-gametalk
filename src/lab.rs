@@ -3,6 +3,7 @@
 //! The arcade game does not have a native training mode. To get a controllable
 //! dummy, Lab starts a local two-player match and owns P2's input port.
 
+use crate::mk2_addrs;
 use crate::{input::Action, memory, retro::Core};
 
 pub const MAX_DUMMY_RECORDING_FRAMES: usize = 55 * 5;
@@ -10,11 +11,6 @@ pub const PUNISH_WINDOW_FRAMES: u32 = 45;
 pub const LATE_WINDOW_FRAMES: u32 = 45;
 pub const DAMAGE_COMBO_GAP_FRAMES: u32 = 70;
 pub const LAB_RESET_SLOT_COUNT: usize = 3;
-const P1_X_ADDR: usize = 0x253EE;
-const P1_Y_ADDR: usize = 0x253F0;
-const P2_X_ADDR: usize = 0x25568;
-const P2_Y_ADDR: usize = 0x2556A;
-
 pub struct ResetSlots {
     active_slot: usize,
     slots: [Option<Vec<u8>>; LAB_RESET_SLOT_COUNT],
@@ -110,10 +106,10 @@ impl Default for PositionPreset {
 
 pub fn apply_position_preset(core: &Core, preset: PositionPreset) {
     let (p1_x, p2_x) = preset.coords();
-    memory::poke_u16(core, P1_X_ADDR, p1_x, memory::Endian::Little);
-    memory::poke_u16(core, P2_X_ADDR, p2_x, memory::Endian::Little);
-    memory::poke_u16(core, P1_Y_ADDR, 0, memory::Endian::Little);
-    memory::poke_u16(core, P2_Y_ADDR, 0, memory::Endian::Little);
+    memory::poke_u16(core, mk2_addrs::P1_X_ADDR, p1_x, memory::Endian::Little);
+    memory::poke_u16(core, mk2_addrs::P2_X_ADDR, p2_x, memory::Endian::Little);
+    memory::poke_u16(core, mk2_addrs::P1_Y_ADDR, 0, memory::Endian::Little);
+    memory::poke_u16(core, mk2_addrs::P2_Y_ADDR, 0, memory::Endian::Little);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

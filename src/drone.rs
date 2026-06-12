@@ -16,6 +16,8 @@
 //   P2_X        = 0x25568  s16
 //   P2_Y        = 0x2556A  s16
 
+use crate::mk2_addrs;
+
 macro_rules! dlog {
     ($($arg:tt)*) => {{
         let msg = format!($($arg)*);
@@ -34,11 +36,6 @@ use crate::retro::{
     RETRO_DEVICE_ID_JOYPAD_L, RETRO_DEVICE_ID_JOYPAD_LEFT, RETRO_DEVICE_ID_JOYPAD_RIGHT,
     RETRO_DEVICE_ID_JOYPAD_UP, RETRO_DEVICE_ID_JOYPAD_X, RETRO_DEVICE_ID_JOYPAD_Y,
 };
-
-const P1_X_ADDR: usize = 0x253EE;
-const P1_Y_ADDR: usize = 0x253F0;
-const P2_X_ADDR: usize = 0x25568;
-const P2_Y_ADDR: usize = 0x2556A;
 
 const CLOSE_RANGE: i16 = 60;
 const MID_RANGE: i16 = 140;
@@ -76,10 +73,14 @@ pub struct GameState {
 impl GameState {
     pub fn read(core: &Core) -> Self {
         Self {
-            p1_x: memory::peek_u16(core, P1_X_ADDR, memory::Endian::Little).unwrap_or(0) as i16,
-            p1_y: memory::peek_u16(core, P1_Y_ADDR, memory::Endian::Little).unwrap_or(0) as i16,
-            p2_x: memory::peek_u16(core, P2_X_ADDR, memory::Endian::Little).unwrap_or(0) as i16,
-            p2_y: memory::peek_u16(core, P2_Y_ADDR, memory::Endian::Little).unwrap_or(0) as i16,
+            p1_x: memory::peek_u16(core, mk2_addrs::P1_X_ADDR, memory::Endian::Little).unwrap_or(0)
+                as i16,
+            p1_y: memory::peek_u16(core, mk2_addrs::P1_Y_ADDR, memory::Endian::Little).unwrap_or(0)
+                as i16,
+            p2_x: memory::peek_u16(core, mk2_addrs::P2_X_ADDR, memory::Endian::Little).unwrap_or(0)
+                as i16,
+            p2_y: memory::peek_u16(core, mk2_addrs::P2_Y_ADDR, memory::Endian::Little).unwrap_or(0)
+                as i16,
         }
     }
 

@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.7.6 - 2026-06-12
+
+### Added
+
+- Added hardware render profiles with local renderer probing and automatic
+  profile recommendation on first launch.
+- Added OpenGL CRT shader filters: balanced CRT Shader, heavier CRT Arcade GL,
+  and sharper CRT PVM GL.
+- Added a `Ctrl+F10` render debug overlay with FPS, renderer, active filter, and
+  online-overlay status.
+- Added `appicon.png` as the runtime window icon source and refreshed packaged
+  icon assets.
+
+### Changed
+
+- The application window title now shows `FREEPLAY v<version>`.
+- The Windows executable description now says `Freeplay - Netplay Client`.
+- Netplay player-name overlays appear during the round intro again instead of
+  waiting until the fighters have fully spawned.
+
+### Fixed
+
+- Restored OpenGL state after CRT shader rendering so SDL menu and netplay
+  overlays continue drawing correctly after leaving arcade or switching views.
+
 ## 0.7.5 - 2026-06-12
 
 ### Changed

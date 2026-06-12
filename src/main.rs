@@ -12,6 +12,7 @@ mod discord_webhook;
 mod doctor;
 mod drone;
 mod font;
+mod gl_crt;
 mod ghost;
 mod incident;
 mod input;
@@ -23,6 +24,8 @@ mod matchmaking;
 mod memory;
 mod menu;
 mod menu_input;
+mod mk2_addrs;
+mod mk2_perf;
 mod netcore;
 mod netplay;
 mod png;
@@ -46,9 +49,10 @@ use crate::menu::{AppState, MenuScreen, NavResult, LOGICAL_H, LOGICAL_W};
 use crate::menu_input::{capture_rebind, event_to_menu_nav, is_cancel, is_clear, MenuNav};
 use crate::netcore::{reset_for_netplay, step_netplay_frame, NetRuntime};
 use crate::render::{
-    draw_chat_overlay, draw_emu_frame, draw_fight_overlay, draw_lab_assist_overlay,
-    draw_net_stats_overlay, draw_replay_review_overlay, ensure_core_loaded, format_probe_result,
-    route_player, OverlayCache,
+    build_window_canvas, draw_chat_overlay, draw_emu_frame, draw_fight_overlay,
+    draw_lab_assist_overlay, draw_net_stats_overlay, draw_replay_review_overlay,
+    draw_render_debug_overlay, ensure_core_loaded, format_probe_result, netplay_safe_filter,
+    recommended_profile, renderer_name, route_player, OverlayCache,
 };
 use crate::retro::*;
 use crate::session::{
@@ -62,7 +66,7 @@ use sdl2::keyboard::{Keycode, Mod, Scancode};
 use sdl2::pixels::{Color, PixelFormatEnum};
 use sdl2::render::BlendMode;
 use sdl2::surface::Surface;
-use sdl2::video::FullscreenType;
+use sdl2::video::{FullscreenType, Window};
 use std::time::{Duration, Instant};
 
 const CHAT_MAX_LINES: usize = 8;
@@ -70,15 +74,14 @@ const CHAT_MAX_LINES: usize = 8;
 #[cfg(target_os = "windows")]
 fn launch_debugger() -> std::io::Result<()> {
     let exe = std::env::current_exe()?;
+    let title = format!("FREEPLAY DOCTOR v{}", version::VERSION);
     std::process::Command::new("cmd")
-        .args([
-            "/C",
-            "start",
-            "Freeplay Doctor",
-            "cmd",
-            "/K",
-            &format!("\"{}\" --doctor", exe.display()),
-        ])
+        .arg("/C")
+        .arg("start")
+        .arg(title)
+        .arg("cmd")
+        .arg("/K")
+        .arg(format!("\"{}\" --doctor", exe.display()))
         .spawn()
         .map(|_| ())
 }
@@ -90,6 +93,75 @@ fn launch_debugger() -> std::io::Result<()> {
         .arg("--doctor")
         .spawn()
         .map(|_| ())
+}
+
+fn app_window_title() -> String {
+    format!("FREEPLAY v{}", version::VERSION)
+}
+
+fn render_probe_window_title() -> String {
+    format!("{} RENDER PROBE", app_window_title())
+}
+
+fn set_app_window_icon(window: &mut Window) {
+    for path in ["appicon.png", "src/appicon.png"] {
+        match set_window_icon_from_png(window, path) {
+            Ok(()) => {
+                println!("[window] icon loaded from {path}");
+                return;
+            }
+            Err(_) => {}
+        }
+    }
+}
+
+fn set_window_icon_from_png(window: &mut Window, path: &str) -> Result<(), String> {
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    let (rgba, width, height) =
+        png::decode_png(&bytes).ok_or_else(|| "unsupported PNG icon format".to_string())?;
+    let (mut rgba, width, height) = square_icon_rgba(&rgba, width, height, 256)?;
+    let pitch = width
+        .checked_mul(4)
+        .ok_or_else(|| "PNG icon width is too large".to_string())?;
+    let surface = Surface::from_data(&mut rgba, width, height, pitch, PixelFormatEnum::RGBA32)?;
+    window.set_icon(surface);
+    Ok(())
+}
+
+fn square_icon_rgba(
+    src: &[u8],
+    width: u32,
+    height: u32,
+    max_size: u32,
+) -> Result<(Vec<u8>, u32, u32), String> {
+    if width == 0 || height == 0 || max_size == 0 {
+        return Err("PNG icon dimensions are empty".to_string());
+    }
+    let expected_len = width as usize * height as usize * 4;
+    if src.len() < expected_len {
+        return Err("PNG icon data is truncated".to_string());
+    }
+
+    let max_dim = width.max(height);
+    let target = max_dim.min(max_size).max(1);
+    let draw_w = ((width as u64 * target as u64) / max_dim as u64).max(1) as u32;
+    let draw_h = ((height as u64 * target as u64) / max_dim as u64).max(1) as u32;
+    let offset_x = (target - draw_w) / 2;
+    let offset_y = (target - draw_h) / 2;
+    let mut out = vec![0_u8; target as usize * target as usize * 4];
+
+    for y in 0..draw_h {
+        let src_y = ((y as u64 * height as u64) / draw_h as u64).min(height as u64 - 1) as u32;
+        for x in 0..draw_w {
+            let src_x = ((x as u64 * width as u64) / draw_w as u64).min(width as u64 - 1) as u32;
+            let src_idx = (src_y as usize * width as usize + src_x as usize) * 4;
+            let dst_idx =
+                ((y + offset_y) as usize * target as usize + (x + offset_x) as usize) * 4;
+            out[dst_idx..dst_idx + 4].copy_from_slice(&src[src_idx..src_idx + 4]);
+        }
+    }
+
+    Ok((out, target, target))
 }
 
 fn toast_payload(toast: &Option<(String, Instant)>) -> Option<menu::Toast<'_>> {
@@ -115,6 +187,14 @@ fn close_chat(chat_open: &mut bool, chat_draft: &mut String) {
     *chat_open = false;
     chat_draft.clear();
     input::clear_all_inputs();
+}
+
+fn video_filter_toast_message(filter: config::VideoFilter, renderer: &str) -> String {
+    if filter.uses_opengl_shader() && !renderer.eq_ignore_ascii_case("opengl") {
+        format!("Video Filter {} (restart for OpenGL)", filter.label())
+    } else {
+        format!("Video Filter {}", filter.label())
+    }
 }
 
 fn send_chat_draft(
@@ -185,7 +265,11 @@ fn start_find_match_queue(
             status: format!("Entering queue as {discord_name}"),
         });
     } else {
-        matchmaking::set_guest_profile(username.clone(), cfg.stats_email.clone(), cfg.guest_device_id.clone());
+        matchmaking::set_guest_profile(
+            username.clone(),
+            cfg.stats_email.clone(),
+            cfg.guest_device_id.clone(),
+        );
         matchmaking::start_guest(tx);
         *state = AppState::Menu(MenuScreen::Matchmaking {
             status: format!("Entering queue as {username}"),
@@ -387,6 +471,7 @@ fn net_stats_detail_rows(
     local_frames_behind: Option<&str>,
     remote_frames_behind: Option<&str>,
     ping_ms: Option<i32>,
+    mk2_perf: Option<mk2_perf::Mk2PerfSample>,
 ) -> Vec<String> {
     let mut rows = Vec::new();
     if let Some(ms) = ping_ms {
@@ -408,6 +493,9 @@ fn net_stats_detail_rows(
     }
     if let Some(kbps) = kbps_sent {
         rows.push(format!("SEND {kbps} KB/S"));
+    }
+    if let Some(perf) = mk2_perf {
+        rows.extend(perf.detail_rows());
     }
     rows
 }
@@ -666,10 +754,7 @@ fn write_local_crash_log(summary: &str, location: &str) {
         f,
         "\nPlease attach this file (and freeplay-net.log if present) to an issue at"
     );
-    let _ = writeln!(
-        f,
-        "https://github.com/junkwax/freeplay-gametalk/issues"
-    );
+    let _ = writeln!(f, "https://github.com/junkwax/freeplay-gametalk/issues");
     println!("[crash] wrote {path}");
 }
 
@@ -697,8 +782,40 @@ fn install_panic_incident_hook() {
     }));
 }
 
+fn run_render_probe() -> Result<(), Box<dyn std::error::Error>> {
+    let cfg = config::load();
+    println!(
+        "[render] probe requested profile={}",
+        cfg.render_profile.label()
+    );
+    let sdl_context = sdl2::init()?;
+    let video_subsystem = sdl_context.video()?;
+    let shader_requested = cfg.video_filter.uses_opengl_shader();
+    let render_probe_title = render_probe_window_title();
+    let mut window_builder = video_subsystem.window(&render_probe_title, 640, 480);
+    window_builder.position_centered().hidden();
+    if shader_requested {
+        window_builder.opengl();
+    }
+    let mut window = window_builder.build()?;
+    set_app_window_icon(&mut window);
+    let canvas = build_window_canvas(window, cfg.render_profile, shader_requested)?;
+    if shader_requested {
+        match gl_crt::GlCrtRenderer::new(&canvas) {
+            Ok(_) => println!("[render] CRT shader probe complete"),
+            Err(e) => println!("[render] CRT shader probe failed: {e}"),
+        }
+    }
+    println!("[render] probe complete");
+    Ok(())
+}
+
 #[allow(static_mut_refs)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if cli::render_probe_requested() {
+        return run_render_probe();
+    }
+
     if cli::doctor_requested() {
         let cfg = config::load();
         config::set_signaling_url(cfg.signaling_url.clone());
@@ -737,18 +854,54 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let audio_subsystem = sdl_context.audio()?;
     let controller_subsystem = sdl_context.game_controller()?;
     let mut pads: Pads = open_initial_controllers(&controller_subsystem);
+    let mut cfg = config::load();
 
-    let mut window = video_subsystem
-        .window("Freeplay", 1200, 762)
-        .position_centered()
-        .resizable()
-        .build()?;
-    if let Ok(icon) =
-        Surface::load_bmp("src/app_icon.bmp").or_else(|_| Surface::load_bmp("app_icon.bmp"))
-    {
-        window.set_icon(icon);
+    let main_window_title = app_window_title();
+    let mut window_builder = video_subsystem.window(&main_window_title, 1200, 762);
+    window_builder.position_centered().resizable();
+    if cfg.video_filter.uses_opengl_shader() {
+        window_builder.opengl();
     }
-    let mut canvas = window.into_canvas().target_texture().build()?;
+    let mut window = window_builder.build()?;
+    set_app_window_icon(&mut window);
+    let requested_render_profile = cfg.render_profile;
+    let mut canvas = build_window_canvas(
+        window,
+        cfg.render_profile,
+        cfg.video_filter.uses_opengl_shader(),
+    )?;
+    let mut render_startup_toast: Option<String> = None;
+    if requested_render_profile == config::RenderProfile::Auto {
+        let recommended = recommended_profile(&canvas);
+        if recommended != config::RenderProfile::Auto {
+            let driver = renderer_name(&canvas);
+            println!(
+                "[render] AUTO recommended {} via {}",
+                recommended.label(),
+                driver
+            );
+            cfg.render_profile = recommended;
+            config::save(&cfg);
+            render_startup_toast =
+                Some(format!("Render Auto -> {} ({driver})", recommended.label()));
+        }
+    }
+    let mut crt_shader = if cfg.video_filter.uses_opengl_shader()
+        || renderer_name(&canvas).eq_ignore_ascii_case("opengl")
+    {
+        match gl_crt::GlCrtRenderer::new(&canvas) {
+            Ok(shader) => Some(shader),
+            Err(e) => {
+                println!("[render] CRT shader unavailable: {e}");
+                if cfg.video_filter.uses_opengl_shader() {
+                    render_startup_toast = Some("CRT Shader unavailable; using CRT Deluxe".into());
+                }
+                None
+            }
+        }
+    } else {
+        None
+    };
     canvas.set_blend_mode(BlendMode::Blend);
     canvas.set_logical_size(LOGICAL_W as u32, LOGICAL_H as u32)?;
     let texture_creator = canvas.texture_creator();
@@ -768,7 +921,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut event_pump = sdl_context.event_pump()?;
 
-    let mut cfg = config::load();
     if cfg.fullscreen {
         let _ = canvas.window_mut().set_fullscreen(FullscreenType::Desktop);
     }
@@ -810,15 +962,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     const GHOST_CAP_PER_PEER: u32 = 3;
     let mut ghost_library = ghost::Library::load_default();
     let mut net_recording: Option<ghost::NetRecording> = None;
-    // Current mk2.map: f_colbox bit 0x0112bbd0 -> MAME byte 0x22577a,
-    // which maps to FBNeo SYSTEM_RAM offset 0x2577a.
-    const HITBOX_FLAG_ADDR: usize = 0x2577A;
+    const HITBOX_FLAG_ADDR: usize = mk2_addrs::HITBOX_FLAG_ADDR;
 
     let mut trainer = memory::PokeList::new();
     trainer.add(
         "p1_health",
         memory::Poke::U16 {
-            addr: 0x253DC,
+            addr: mk2_addrs::P1_HP_ADDR,
             value: 0x00A1,
             endian: memory::Endian::Little,
         },
@@ -826,7 +976,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     trainer.add(
         "p2_health",
         memory::Poke::U16 {
-            addr: 0x25556,
+            addr: mk2_addrs::P2_HP_ADDR,
             value: 0x00A1,
             endian: memory::Endian::Little,
         },
@@ -847,18 +997,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     trainer.add_with_release(
         "freeze_timer",
         memory::Poke::U16 {
-            addr: 0x250F4,
+            addr: mk2_addrs::FREEZE_TIMER_ADDR,
             value: 0x0001,
             endian: memory::Endian::Little,
         },
         memory::Poke::U16 {
-            addr: 0x250F4,
+            addr: mk2_addrs::FREEZE_TIMER_ADDR,
             value: 0x0000,
             endian: memory::Endian::Little,
         },
     );
 
-    const GSTATE_ADDR: usize = 0x253B8;
+    const GSTATE_ADDR: usize = mk2_addrs::GSTATE_ADDR;
     const GS_AMODE: u16 = 0x01;
     let mut auto_start_frame: u32 = 0;
     let mut auto_start_done = false;
@@ -873,6 +1023,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut net_runtime = NetRuntime::default();
     let mut net_stats_next_frame: u32 = 0;
     let mut net_stats_visible = false;
+    let mut render_debug_visible = false;
     let mut latest_net_ping_ms: Option<i32> = None;
     let mut latest_net_kbps_sent: Option<String> = None;
     let mut latest_net_local_frames_behind: Option<String> = None;
@@ -886,8 +1037,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     const MATCH_WIN_TARGET: u16 = 2;
     let mut session_p1_wins: u32 = 0;
     let mut session_p2_wins: u32 = 0;
-    const P1_HP_ADDR: usize = 0x253DC;
-    const P2_HP_ADDR: usize = 0x25556;
+    const P1_HP_ADDR: usize = mk2_addrs::P1_HP_ADDR;
+    const P2_HP_ADDR: usize = mk2_addrs::P2_HP_ADDR;
     let mut ghost_in_fight: bool = false;
 
     let mut net_session: Option<netplay::Session> = None;
@@ -937,7 +1088,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut live_matches_rx: Option<std::sync::mpsc::Receiver<matchmaking::LiveMatchesUpdate>> =
         None;
     let mut live_matches_next_refresh = Instant::now();
-    let mut toast: Option<(String, Instant)> = None;
+    let mut toast: Option<(String, Instant)> =
+        render_startup_toast.map(|message| (message, Instant::now() + Duration::from_millis(2600)));
     let frame_duration = Duration::from_micros(18281);
     let mut next_frame_deadline = Instant::now() + frame_duration;
     let mut fps_sample_started = Instant::now();
@@ -954,7 +1106,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     'running: loop {
-
         if chat_open
             || matches!(
                 state,
@@ -1243,7 +1394,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         *video_filter = cfg.video_filter;
                     }
                     toast = Some((
-                        format!("Video Filter {}", cfg.video_filter.label()),
+                        video_filter_toast_message(cfg.video_filter, renderer_name(&canvas)),
                         Instant::now() + Duration::from_millis(1800),
                     ));
                 }
@@ -1267,7 +1418,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         *video_filter = cfg.video_filter;
                     }
                     toast = Some((
-                        format!("Video Filter {}", cfg.video_filter.label()),
+                        video_filter_toast_message(cfg.video_filter, renderer_name(&canvas)),
                         Instant::now() + Duration::from_millis(1800),
                     ));
                 }
@@ -1417,6 +1568,54 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 Event::KeyDown {
+                    keycode: Some(Keycode::Left),
+                    repeat: false,
+                    ..
+                } if matches!(
+                    state,
+                    AppState::Menu(MenuScreen::Settings { cursor: 15, .. })
+                ) =>
+                {
+                    cfg.render_profile = cfg.render_profile.cycle(-1);
+                    config::save(&cfg);
+                    if let AppState::Menu(MenuScreen::Settings {
+                        ref mut render_profile,
+                        ..
+                    }) = state
+                    {
+                        *render_profile = cfg.render_profile;
+                    }
+                    toast = Some((
+                        format!("Render Profile {} (restart)", cfg.render_profile.label()),
+                        Instant::now() + Duration::from_millis(2200),
+                    ));
+                }
+
+                Event::KeyDown {
+                    keycode: Some(Keycode::Right),
+                    repeat: false,
+                    ..
+                } if matches!(
+                    state,
+                    AppState::Menu(MenuScreen::Settings { cursor: 15, .. })
+                ) =>
+                {
+                    cfg.render_profile = cfg.render_profile.cycle(1);
+                    config::save(&cfg);
+                    if let AppState::Menu(MenuScreen::Settings {
+                        ref mut render_profile,
+                        ..
+                    }) = state
+                    {
+                        *render_profile = cfg.render_profile;
+                    }
+                    toast = Some((
+                        format!("Render Profile {} (restart)", cfg.render_profile.label()),
+                        Instant::now() + Duration::from_millis(2200),
+                    ));
+                }
+
+                Event::KeyDown {
                     keycode: Some(Keycode::F),
                     keymod,
                     repeat: false,
@@ -1427,8 +1626,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     cfg.video_filter = cfg.video_filter.cycle(1);
                     config::save(&cfg);
                     toast = Some((
-                        format!("Video Filter {}", cfg.video_filter.label()),
+                        video_filter_toast_message(cfg.video_filter, renderer_name(&canvas)),
                         Instant::now() + Duration::from_millis(1800),
+                    ));
+                }
+
+                Event::KeyDown {
+                    keycode: Some(Keycode::F10),
+                    keymod,
+                    repeat: false,
+                    ..
+                } if state == AppState::Playing
+                    && keymod.intersects(Mod::LCTRLMOD | Mod::RCTRLMOD) =>
+                {
+                    render_debug_visible = !render_debug_visible;
+                    toast = Some((
+                        format!(
+                            "Render debug {}",
+                            if render_debug_visible { "ON" } else { "OFF" }
+                        ),
+                        Instant::now() + Duration::from_millis(1600),
                     ));
                 }
 
@@ -1922,6 +2139,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         aspect_mode: cfg.aspect_mode,
                                         scorebar_style: cfg.scorebar_style,
                                         input_delay: cfg.input_delay,
+                                        render_profile: cfg.render_profile,
                                     });
                                 }
                                 NavResult::OpenTraining => {
@@ -1984,6 +2202,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             aspect_mode: cfg.aspect_mode,
                                             scorebar_style: cfg.scorebar_style,
                                             input_delay: cfg.input_delay,
+                                            render_profile: cfg.render_profile,
                                         }),
                                     });
                                 }
@@ -2064,6 +2283,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             aspect_mode: cfg.aspect_mode,
                                             scorebar_style: cfg.scorebar_style,
                                             input_delay: cfg.input_delay,
+                                            render_profile: cfg.render_profile,
                                         });
                                     }
                                 },
@@ -2092,6 +2312,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             aspect_mode: cfg.aspect_mode,
                                             scorebar_style: cfg.scorebar_style,
                                             input_delay: cfg.input_delay,
+                                            render_profile: cfg.render_profile,
                                         });
                                     } else {
                                         let (tx, rx) = std::sync::mpsc::channel();
@@ -2209,7 +2430,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         *video_filter = cfg.video_filter;
                                     }
                                     toast = Some((
-                                        format!("Video Filter {}", cfg.video_filter.label()),
+                                        video_filter_toast_message(
+                                            cfg.video_filter,
+                                            renderer_name(&canvas),
+                                        ),
                                         Instant::now() + Duration::from_millis(1800),
                                     ));
                                 }
@@ -2285,6 +2509,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             cfg.input_delay
                                         ),
                                         Instant::now() + Duration::from_millis(1800),
+                                    ));
+                                }
+                                NavResult::CycleRenderProfile(delta) => {
+                                    cfg.render_profile = cfg.render_profile.cycle(delta);
+                                    config::save(&cfg);
+                                    if let AppState::Menu(MenuScreen::Settings {
+                                        ref mut render_profile,
+                                        ..
+                                    }) = state
+                                    {
+                                        *render_profile = cfg.render_profile;
+                                    }
+                                    toast = Some((
+                                        format!(
+                                            "Render Profile {} (restart)",
+                                            cfg.render_profile.label()
+                                        ),
+                                        Instant::now() + Duration::from_millis(2200),
                                     ));
                                 }
                                 NavResult::ToggleTraining(kind) => {
@@ -4108,35 +4350,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 canvas.set_logical_size(0, 0)?;
                 canvas.set_draw_color(Color::RGB(0, 0, 0));
                 canvas.clear();
+                let frame_filter =
+                    netplay_safe_filter(&canvas, cfg.video_filter, net_session.is_some());
                 draw_emu_frame(
                     &mut canvas,
                     &mut emu_texture,
                     &texture_creator,
                     &mut overlay_cache,
-                    cfg.video_filter,
+                    crt_shader.as_mut(),
+                    frame_filter,
                     cfg.aspect_mode,
                     cfg.crt_corner_bend,
                 )?;
-                // Draw the fight overlay once the stage/round has loaded. round_num
-                // flips on earlier than HP, so names appear during the intro instead
-                // of waiting until the "FIGHT" callout. Hide it once a match is
-                // decided so arcade endings after Shao Kahn do not keep the plates.
-                let in_fight_screen = core
+                // Netplay names should come up as soon as the round intro starts;
+                // lab/replay overlays still wait for spawned fighters so they do
+                // not cover the VS screen.
+                let overlay_screen = core
                     .as_ref()
                     .map(|c| {
                         let gstate =
                             memory::peek_u16(c, GSTATE_ADDR, memory::Endian::Little).unwrap_or(0);
+                        let p1_hp =
+                            memory::peek_u16(c, P1_HP_ADDR, memory::Endian::Little).unwrap_or(0);
                         let s = score::Score::read(c);
                         let match_decided = s.p1_match_wins >= MATCH_WIN_TARGET
                             || s.p2_match_wins >= MATCH_WIN_TARGET;
-                        gstate != 0
+                        let round_intro_started = gstate != 0
                             && gstate != GS_AMODE
                             && gstate != GS_GAMEOVER
-                            && s.round_num > 0
-                            && !match_decided
+                            && s.round_num > 0;
+                        let fighters_spawned = matches!(gstate, GS_FIGHTING | 0x03) && p1_hp > 0;
+                        !match_decided
+                            && if net_session.is_some() {
+                                round_intro_started
+                            } else {
+                                fighters_spawned
+                            }
                     })
                     .unwrap_or(false);
-                if in_fight_screen
+                if overlay_screen
                     && (net_session.is_some()
                         || local_play_mode.is_lab()
                         || match_replay_playback.is_some())
@@ -4294,6 +4546,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     canvas.set_logical_size(0, 0)?;
                     let (win_w, win_h) = canvas.output_size().unwrap_or((1200, 762));
                     let ping_label = latest_net_ping_ms.map(|ms| format!("{ms} ms"));
+                    let mk2_perf = core.as_ref().and_then(mk2_perf::sample);
                     let detail_rows = net_stats_detail_rows(
                         latest_net_rollback_frames,
                         latest_net_load_count,
@@ -4301,6 +4554,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         latest_net_local_frames_behind.as_deref(),
                         latest_net_remote_frames_behind.as_deref(),
                         latest_net_ping_ms,
+                        mk2_perf,
                     );
                     draw_net_stats_overlay(
                         &mut canvas,
@@ -4313,6 +4567,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &detail_rows,
                     )
                     .map_err(|e| format!("network stats overlay: {e}"))?;
+                    canvas.set_logical_size(LOGICAL_W as u32, LOGICAL_H as u32)?;
+                }
+                if render_debug_visible {
+                    canvas.set_logical_size(0, 0)?;
+                    let renderer = renderer_name(&canvas).to_string();
+                    draw_render_debug_overlay(
+                        &mut canvas,
+                        &mut font,
+                        current_fps,
+                        &renderer,
+                        frame_filter,
+                        net_session.is_some(),
+                    )
+                    .map_err(|e| format!("render debug overlay: {e}"))?;
                     canvas.set_logical_size(LOGICAL_W as u32, LOGICAL_H as u32)?;
                 }
                 if let Some(toast) = toast_payload(&toast) {
@@ -4366,6 +4634,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     aspect_mode: cfg.aspect_mode,
                                     scorebar_style: cfg.scorebar_style,
                                     input_delay: cfg.input_delay,
+                                    render_profile: cfg.render_profile,
                                 });
                                 break;
                             }

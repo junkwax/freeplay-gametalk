@@ -59,6 +59,9 @@ pub struct Config {
     /// Start in desktop fullscreen and keep that preference when toggled.
     #[serde(default)]
     pub fullscreen: bool,
+    /// SDL renderer preference for local hardware rendering experiments.
+    #[serde(default)]
+    pub render_profile: RenderProfile,
     /// Audio output level as a percentage.
     #[serde(default = "default_volume_percent")]
     pub volume_percent: u8,
@@ -145,6 +148,63 @@ impl AudioBuffer {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum RenderProfile {
+    #[default]
+    Auto,
+    Hardware,
+    HardwareVsync,
+    Software,
+}
+
+impl RenderProfile {
+    pub fn label(self) -> &'static str {
+        match self {
+            RenderProfile::Auto => "AUTO",
+            RenderProfile::Hardware => "HARDWARE",
+            RenderProfile::HardwareVsync => "HW VSYNC",
+            RenderProfile::Software => "SOFTWARE",
+        }
+    }
+
+    pub fn cycle(self, delta: i8) -> Self {
+        let all = [
+            RenderProfile::Auto,
+            RenderProfile::Hardware,
+            RenderProfile::HardwareVsync,
+            RenderProfile::Software,
+        ];
+        let idx = all.iter().position(|v| *v == self).unwrap_or(0) as i8;
+        let next = (idx + delta).rem_euclid(all.len() as i8) as usize;
+        all[next]
+    }
+
+    pub fn wants_acceleration(self) -> bool {
+        matches!(self, RenderProfile::Hardware | RenderProfile::HardwareVsync)
+    }
+
+    pub fn wants_software(self) -> bool {
+        matches!(self, RenderProfile::Software)
+    }
+
+    pub fn wants_vsync(self) -> bool {
+        matches!(self, RenderProfile::HardwareVsync)
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "auto" | "default" => Some(RenderProfile::Auto),
+            "hardware" | "accelerated" | "gpu" | "hw" => Some(RenderProfile::Hardware),
+            "hardware_vsync" | "hardware-vsync" | "hw_vsync" | "hw-vsync" | "vsync" => {
+                Some(RenderProfile::HardwareVsync)
+            }
+            "software" | "sw" => Some(RenderProfile::Software),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum VideoFilter {
     #[default]
     Sharp,
@@ -152,6 +212,10 @@ pub enum VideoFilter {
     Scanlines,
     CrtLite,
     CrtArcade,
+    CrtDeluxe,
+    CrtShader,
+    CrtArcadeShader,
+    CrtPvmShader,
     CrtCabinet,
     PvmSharp,
 }
@@ -216,6 +280,10 @@ impl VideoFilter {
             VideoFilter::Scanlines => "SCANLINES",
             VideoFilter::CrtLite => "CRT LITE",
             VideoFilter::CrtArcade => "CRT ARCADE",
+            VideoFilter::CrtDeluxe => "CRT DELUXE",
+            VideoFilter::CrtShader => "CRT SHADER",
+            VideoFilter::CrtArcadeShader => "CRT ARCADE GL",
+            VideoFilter::CrtPvmShader => "CRT PVM GL",
             VideoFilter::CrtCabinet => "CRT CABINET",
             VideoFilter::PvmSharp => "PVM SHARP",
         }
@@ -228,12 +296,69 @@ impl VideoFilter {
             VideoFilter::Scanlines,
             VideoFilter::CrtLite,
             VideoFilter::CrtArcade,
+            VideoFilter::CrtDeluxe,
+            VideoFilter::CrtShader,
+            VideoFilter::CrtArcadeShader,
+            VideoFilter::CrtPvmShader,
             VideoFilter::CrtCabinet,
             VideoFilter::PvmSharp,
         ];
         let idx = all.iter().position(|v| *v == self).unwrap_or(0) as i8;
         let next = (idx + delta).rem_euclid(all.len() as i8) as usize;
         all[next]
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        let normalized = raw
+            .trim()
+            .to_ascii_lowercase()
+            .replace('-', "_")
+            .replace(' ', "_");
+        match normalized.as_str() {
+            "sharp" | "nearest" => Some(VideoFilter::Sharp),
+            "smooth" | "linear" => Some(VideoFilter::Smooth),
+            "scanlines" | "scanline" => Some(VideoFilter::Scanlines),
+            "crt_lite" | "lite" => Some(VideoFilter::CrtLite),
+            "crt_arcade" | "arcade" => Some(VideoFilter::CrtArcade),
+            "crt_deluxe" | "deluxe" => Some(VideoFilter::CrtDeluxe),
+            "crt_shader" | "shader" | "glsl" | "fightcade" | "fightcade_crt" => {
+                Some(VideoFilter::CrtShader)
+            }
+            "crt_arcade_gl" | "arcade_gl" | "crt_shader_arcade" | "shader_arcade" => {
+                Some(VideoFilter::CrtArcadeShader)
+            }
+            "crt_pvm_gl" | "pvm_gl" | "crt_shader_pvm" | "shader_pvm" => {
+                Some(VideoFilter::CrtPvmShader)
+            }
+            "crt_cabinet" | "cabinet" => Some(VideoFilter::CrtCabinet),
+            "pvm_sharp" | "pvm" => Some(VideoFilter::PvmSharp),
+            _ => None,
+        }
+    }
+
+    pub fn needs_hardware_budget(self) -> bool {
+        matches!(
+            self,
+            VideoFilter::CrtArcade
+                | VideoFilter::CrtDeluxe
+                | VideoFilter::CrtShader
+                | VideoFilter::CrtArcadeShader
+                | VideoFilter::CrtPvmShader
+                | VideoFilter::CrtCabinet
+        )
+    }
+
+    pub fn uses_opengl_shader(self) -> bool {
+        self.opengl_shader_mode().is_some()
+    }
+
+    pub fn opengl_shader_mode(self) -> Option<i32> {
+        match self {
+            VideoFilter::CrtShader => Some(0),
+            VideoFilter::CrtArcadeShader => Some(1),
+            VideoFilter::CrtPvmShader => Some(2),
+            _ => None,
+        }
     }
 }
 
@@ -345,6 +470,12 @@ fn apply_env_overrides(cfg: &mut Config) {
     }
     if let Some(v) = env_value("FREEPLAY_DISCORD_WEBHOOK_URL") {
         cfg.discord_webhook_url = v;
+    }
+    if let Some(v) = env_value("FREEPLAY_RENDER_PROFILE").and_then(|v| RenderProfile::parse(&v)) {
+        cfg.render_profile = v;
+    }
+    if let Some(v) = env_value("FREEPLAY_VIDEO_FILTER").and_then(|v| VideoFilter::parse(&v)) {
+        cfg.video_filter = v;
     }
     if let Some(v) = env_value("FREEPLAY_STATS_URL") {
         cfg.stats_url = v;
@@ -493,7 +624,21 @@ mod tests {
         assert_eq!(cfg.volume_percent, 100);
         assert!(cfg.discord_rpc_enabled);
         assert!(cfg.crt_corner_bend);
+        assert_eq!(cfg.render_profile, RenderProfile::Auto);
         assert_eq!(cfg.input_delay, 3);
+    }
+
+    #[test]
+    fn video_filter_parses_deluxe_aliases() {
+        assert_eq!(VideoFilter::parse("crt_deluxe"), Some(VideoFilter::CrtDeluxe));
+        assert_eq!(VideoFilter::parse("CRT Deluxe"), Some(VideoFilter::CrtDeluxe));
+        assert_eq!(VideoFilter::parse("fightcade"), Some(VideoFilter::CrtShader));
+        assert_eq!(VideoFilter::parse("crt shader"), Some(VideoFilter::CrtShader));
+        assert_eq!(
+            VideoFilter::parse("crt arcade gl"),
+            Some(VideoFilter::CrtArcadeShader)
+        );
+        assert_eq!(VideoFilter::parse("pvm gl"), Some(VideoFilter::CrtPvmShader));
     }
 
     #[test]

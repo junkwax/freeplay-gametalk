@@ -29,6 +29,8 @@ fn main() {
     // src changes for the main build, but build scripts need explicit hints.
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src");
+    println!("cargo:rerun-if-changed=src/app.ico");
+    println!("cargo:rerun-if-changed=appicon.png");
     print_git_rerun_hints();
 }
 
@@ -144,7 +146,7 @@ BEGIN
     BLOCK "040904B0"
     BEGIN
       VALUE "CompanyName", "Freeplay (github.com/junkwax/freeplay-gametalk)"
-      VALUE "FileDescription", "Freeplay - MK2 netplay client"
+      VALUE "FileDescription", "Freeplay - Netplay Client"
       VALUE "FileVersion", "{semver}"
       VALUE "ProductName", "Freeplay"
       VALUE "ProductVersion", "{semver}"

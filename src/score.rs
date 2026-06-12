@@ -1,18 +1,10 @@
 //! MK2 round/match score tracking from FBNeo SYSTEM_RAM.
 //!
-//! Symbols (verified by anchoring on `gstate=0x253B8` and walking RAM.ASM):
-//!   p1_matchw  = 0x253E0  (P1 wins this match, u16)
-//!   p2_matchw  = 0x2555A  (P2 wins this match, u16)
-//!   round_num  = 0x256DE  (current round, u16)
-//!   winner_status = 0x256E0  (1=P1, 2=P2, 3=finish him, u16)
+//! Address constants live in `mk2_addrs`, generated from mk2-main's `mk2.map`.
 
 use crate::memory::{peek_u16, Endian};
+use crate::mk2_addrs;
 use crate::retro::Core;
-
-const P1_MATCHW: usize = 0x253E0;
-const P2_MATCHW: usize = 0x2555A;
-const ROUND_NUM: usize = 0x256DE;
-const WINNER_STATUS: usize = 0x256E0;
 
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Score {
@@ -25,10 +17,10 @@ pub struct Score {
 impl Score {
     pub fn read(core: &Core) -> Score {
         Score {
-            p1_match_wins: peek_u16(core, P1_MATCHW, Endian::Little).unwrap_or(0),
-            p2_match_wins: peek_u16(core, P2_MATCHW, Endian::Little).unwrap_or(0),
-            round_num: peek_u16(core, ROUND_NUM, Endian::Little).unwrap_or(0),
-            winner_status: peek_u16(core, WINNER_STATUS, Endian::Little).unwrap_or(0),
+            p1_match_wins: peek_u16(core, mk2_addrs::P1_MATCHW, Endian::Little).unwrap_or(0),
+            p2_match_wins: peek_u16(core, mk2_addrs::P2_MATCHW, Endian::Little).unwrap_or(0),
+            round_num: peek_u16(core, mk2_addrs::ROUND_NUM, Endian::Little).unwrap_or(0),
+            winner_status: peek_u16(core, mk2_addrs::WINNER_STATUS, Endian::Little).unwrap_or(0),
         }
     }
 }

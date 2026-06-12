@@ -17,6 +17,10 @@ pub fn doctor_requested() -> bool {
     std::env::args().skip(1).any(|arg| arg == "--doctor")
 }
 
+pub fn render_probe_requested() -> bool {
+    std::env::args().skip(1).any(|arg| arg == "--render-probe")
+}
+
 pub fn parse_args() -> NetMode {
     let args: Vec<String> = std::env::args().collect();
     let mut player: Option<usize> = None;
@@ -51,6 +55,9 @@ pub fn parse_args() -> NetMode {
                 i += 2;
             }
             "--doctor" => {
+                i += 1;
+            }
+            "--render-probe" => {
                 i += 1;
             }
             other => {

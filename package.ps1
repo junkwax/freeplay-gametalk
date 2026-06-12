@@ -139,10 +139,11 @@ if (Test-Path "config.toml") {
 # notifications fill it in themselves.
 if ($envSource) {
     $bundled = Get-Content $envSource | Where-Object {
-        # Strip any line that pretends to set a webhook URL or any other
-        # genuinely-private secret. We only ship public values.
+        # Strip webhook URLs and any secret/token/private-key style values.
+        # We only ship public runtime defaults.
         $line = $_.Trim()
-        if ($line -match '^\s*FREEPLAY_DISCORD_WEBHOOK_URL\s*=') {
+        if ($line -match '^\s*FREEPLAY_DISCORD_WEBHOOK_URL\s*=' -or
+            $line -match '^\s*[A-Z0-9_]*(SECRET|TOKEN|PRIVATE_KEY)\s*=') {
             return $false
         }
         return $true
@@ -177,10 +178,12 @@ if ($ttf_path) {
     Write-Host "  ⚠ mk2.ttf not found — app will use bitmap fallback" -ForegroundColor Yellow
 }
 
-if (Test-Path "src\app_icon.bmp") {
-    Copy-Item "src\app_icon.bmp" "$OUT_DIR\app_icon.bmp" -Force
-    Write-Host "  ✓ Copied app_icon.bmp"
+if (-not (Test-Path "appicon.png")) {
+    Write-Host "  ❌ appicon.png not found; packaged builds require a transparent PNG app icon" -ForegroundColor Red
+    exit 1
 }
+Copy-Item "appicon.png" "$OUT_DIR\appicon.png" -Force
+Write-Host "  ✓ Copied appicon.png"
 
 # ── Copy xband.reg ────────────────────────────────────────────────────────────
 if (Test-Path "xband.reg") {

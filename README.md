@@ -26,6 +26,13 @@ URLs, OAuth client IDs, tokens, or webhooks.
   training helpers.
 - Best-of-session scoring and a high-resolution fight overlay rendered over
   the emulator view.
+- Hardware render profiles with local renderer probing and automatic profile
+  recommendation on first launch.
+- Hardware CRT filters, including cached SDL overlays and OpenGL shader modes:
+  `CRT SHADER`, `CRT ARCADE GL`, and `CRT PVM GL`.
+- Render debug HUD with FPS, renderer, active filter, and online overlay status.
+- Window title/version branding as `FREEPLAY v<version>` with packaged
+  `appicon.png` runtime icon support.
 - Profile page with rating, wins, losses, win rate, match history, and Discord
   avatar support when available.
 - Ghost recording, upload/download support, local ghost playback, online match
@@ -85,6 +92,7 @@ URLs, OAuth client IDs, tokens, or webhooks.
 - `Ctrl+R`: start/stop MP4 clip recording.
 - `Ctrl+F`: cycle video filter.
 - `Ctrl+A`: cycle aspect mode.
+- `Ctrl+F10`: toggle render debug HUD.
 
 ### Online And Replay
 
@@ -95,6 +103,8 @@ URLs, OAuth client IDs, tokens, or webhooks.
 - `F11`: show/hide network stats while matchmaking or online. The panel is
   hidden by default and shows FPS, ping, rollback/load counts, frames behind,
   send rate, and a connection-quality label once connected.
+- `Ctrl+F10`: show/hide render stats while online. This stays separate from
+  the SDL netplay/chat overlays and shows FPS, renderer, and active filter.
 - On the online match-ended screen, press `R` or controller `Y` to review the
   replay saved from that set.
 - `Space`, `Enter`, or controller `Start`: pause/resume replay review.
@@ -174,7 +184,8 @@ target\release\freeplay.exe
 ```
 
 The Windows icon resource is embedded when the Windows SDK resource compiler is
-available. The app also sets the runtime SDL window icon from `app_icon.bmp`.
+available. Packaged builds require the transparent runtime SDL window icon at
+`appicon.png`.
 
 ## Build FBNeo Core
 
@@ -277,7 +288,7 @@ SDL2.dll
 SDL2_ttf.dll
 media\
 roms\
-app_icon.bmp
+appicon.png
 ```
 
 Development builds can also resolve media from `src\media`.

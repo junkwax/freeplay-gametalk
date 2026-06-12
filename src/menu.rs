@@ -1,5 +1,5 @@
 //! In-engine menu: list-based screens, pad/keyboard navigation, rebind flow.
-use crate::config::{AspectMode, AudioBuffer, ScorebarStyle, VideoFilter};
+use crate::config::{AspectMode, AudioBuffer, RenderProfile, ScorebarStyle, VideoFilter};
 use crate::font::Font;
 use crate::input::{is_action_active, Action, Binding, Bindings, Player, PlayerBindings};
 use crate::matchmaking::{HistoryRow, LeaderboardRow, LiveMatch, ProfileData, RemoteGhostMeta};
@@ -114,6 +114,7 @@ pub enum MenuScreen {
         aspect_mode: AspectMode,
         scorebar_style: ScorebarStyle,
         input_delay: u32,
+        render_profile: RenderProfile,
     },
     /// Lab helpers backed by RAM pokes already used by F-keys.
     Training {
@@ -249,7 +250,7 @@ pub const MAIN_ITEMS: [&str; 9] = [
 ];
 const LAB_MENU_ITEMS: [&str; 2] = ["Start Lab", "Load Ghosts"];
 
-const SETTINGS_ITEMS: [&str; 15] = [
+const SETTINGS_ITEMS: [&str; 16] = [
     "Username",
     "Stats Email",
     "Discord Account",
@@ -265,6 +266,7 @@ const SETTINGS_ITEMS: [&str; 15] = [
     "Run Doctor",
     "Open Clips Folder",
     "Open Logs Folder",
+    "Render Profile",
 ];
 const TRAINING_ITEMS: [&str; 3] = ["Hitbox View", "Infinite Health", "Freeze Timer"];
 
@@ -331,6 +333,8 @@ pub enum NavResult {
     CycleScorebarStyle(i8),
     /// Adjust GGRS input delay by signed frames (clamped 0–8 in main.rs).
     AdjustInputDelay(i8),
+    /// Cycle SDL renderer backend preference for hardware tests.
+    CycleRenderProfile(i8),
     /// Open Training helper menu.
     #[allow(dead_code)]
     OpenTraining,
@@ -506,6 +510,7 @@ impl AppState {
                         aspect_mode: AspectMode::Fit,
                         scorebar_style: ScorebarStyle::Centered,
                         input_delay: 3,
+                        render_profile: RenderProfile::Auto,
                     });
                     NavResult::OpenSettings
                 }
@@ -639,6 +644,7 @@ impl AppState {
                 12 => NavResult::LaunchDoctor,
                 13 => NavResult::OpenClipsFolder,
                 14 => NavResult::OpenLogsFolder,
+                15 => NavResult::CycleRenderProfile(1),
                 _ => NavResult::Stay,
             },
             AppState::Menu(MenuScreen::TextEdit { field, value, .. }) => {
@@ -846,6 +852,7 @@ pub fn draw(
             aspect_mode,
             scorebar_style,
             input_delay,
+            render_profile,
         }) => draw_settings(
             canvas,
             font,
@@ -862,6 +869,7 @@ pub fn draw(
             *aspect_mode,
             *scorebar_style,
             *input_delay,
+            *render_profile,
             w,
             h,
         )?,
@@ -1317,7 +1325,8 @@ fn draw_main(
     }
 
     if !rom_present {
-        let ready_line = "Place mk2.zip in the roms folder (detected automatically) - Shift+D runs Doctor";
+        let ready_line =
+            "Place mk2.zip in the roms folder (detected automatically) - Shift+D runs Doctor";
         let s = small_scale(h);
         let ready_w = font.text_width_exact(ready_line, s);
         let panel_w = (ready_w + 18).min(w - 56).max(ready_w + 8);
@@ -2398,6 +2407,7 @@ fn draw_settings(
     aspect_mode: AspectMode,
     scorebar_style: ScorebarStyle,
     input_delay: u32,
+    render_profile: RenderProfile,
     w: i32,
     h: i32,
 ) -> Result<(), String> {
@@ -2457,13 +2467,14 @@ fn draw_settings(
             9 => Some(aspect_mode.label().to_string()),
             10 => Some(scorebar_style.label().to_string()),
             11 => Some(format!("{input_delay} FRAMES")),
+            15 => Some(render_profile.label().to_string()),
             _ => None,
         };
         if let Some(value) = value {
             let value = fit_line(font, &value, scale, (w / 2).max(120));
             let vw = font.text_width_exact(&value, scale);
             let enabled_colour = match i {
-                0 | 1 | 5 | 6 | 7 | 9 | 10 | 11 => Color::RGB(180, 205, 255),
+                0 | 1 | 5 | 6 | 7 | 9 | 10 | 11 | 15 => Color::RGB(180, 205, 255),
                 _ if value == "ON" || value == "CONNECTED" => Color::RGB(120, 230, 150),
                 _ => Color::RGB(210, 140, 140),
             };
@@ -2505,6 +2516,7 @@ fn settings_hint(cursor: usize) -> &'static str {
         12 => "Doctor checks ROM, core, networking, and config.",
         13 => "Open the folder where Ctrl+R clips are written.",
         14 => "Open runtime logs next to the app.",
+        15 => "Renderer backend for local hardware output tests. Restart applies.",
         _ => "",
     }
 }

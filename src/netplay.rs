@@ -92,7 +92,9 @@ pub fn start_session_verbose<F: FnMut(&str)>(
         .with_disconnect_notify_delay(std::time::Duration::from_millis(400))
         .with_disconnect_timeout(std::time::Duration::from_millis(1500))
         .with_desync_detection_mode(ggrs::DesyncDetection::On { interval: 30 });
-    log_fn(&format!("[session] builder configured (fps=55 delay={input_delay} window=8 desync=on, drop=1.5s)"));
+    log_fn(&format!(
+        "[session] builder configured (fps=55 delay={input_delay} window=8 desync=on, drop=1.5s)"
+    ));
 
     builder = builder
         .add_player(PlayerType::Local, local_handle)
@@ -158,7 +160,9 @@ where
         .with_disconnect_notify_delay(std::time::Duration::from_millis(2000))
         .with_disconnect_timeout(std::time::Duration::from_millis(10000))
         .with_desync_detection_mode(ggrs::DesyncDetection::On { interval: 30 });
-    log_fn(&format!("[session] (relay) builder configured (delay={input_delay} drop=10s)"));
+    log_fn(&format!(
+        "[session] (relay) builder configured (delay={input_delay} drop=10s)"
+    ));
 
     builder = builder
         .add_player(PlayerType::Local, local_handle)

@@ -32,7 +32,8 @@ fi
 [ -f "NOTICE.md" ] && cp "NOTICE.md" "$OUT_DIR/NOTICE.md"
 
 # Bundle a working .env with public defaults. Local .env wins if present
-# (dev/self-host overrides); otherwise fall back to .env.public.
+# (dev/self-host overrides); otherwise fall back to .env.public. Webhook URL
+# and secret/token/private-key style values are always stripped.
 ENV_SOURCE=""
 if [ -f ".env" ]; then
   ENV_SOURCE=".env"
@@ -42,11 +43,16 @@ elif [ -f ".env.example" ]; then
   ENV_SOURCE=".env.example"
 fi
 if [ -n "$ENV_SOURCE" ]; then
-  grep -v -E '^\s*FREEPLAY_DISCORD_WEBHOOK_URL\s*=' "$ENV_SOURCE" > "$OUT_DIR/.env"
+  grep -v -E '^[[:space:]]*FREEPLAY_DISCORD_WEBHOOK_URL[[:space:]]*=|^[[:space:]]*[A-Z0-9_]*(SECRET|TOKEN|PRIVATE_KEY)[[:space:]]*=' "$ENV_SOURCE" > "$OUT_DIR/.env"
   printf '\n# Optional — your own Discord channel webhook for match notifications.\nFREEPLAY_DISCORD_WEBHOOK_URL=\n' >> "$OUT_DIR/.env"
   echo "Bundled .env from $ENV_SOURCE (public defaults, no secrets)"
 fi
 [ -f "src/media/mk2.ttf" ] && cp "src/media/mk2.ttf" "$OUT_DIR/media/mk2.ttf"
+if [ ! -f "appicon.png" ]; then
+  echo "error: appicon.png not found; packaged builds require a transparent PNG app icon" >&2
+  exit 1
+fi
+cp "appicon.png" "$OUT_DIR/appicon.png"
 
 cat > "$OUT_DIR/roms/README.txt" <<'EOF'
 Place your legally-obtained ROM zip here.

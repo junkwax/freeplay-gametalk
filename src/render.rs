@@ -7,6 +7,7 @@
 //! adjacent to draw paths in the call graph, so they ride along here rather
 //! than getting their own one-function modules.
 
+use crate::config::RenderProfile;
 use crate::font::Font;
 use crate::input;
 use crate::netplay;
@@ -19,6 +20,13 @@ use crate::version;
 use sdl2::audio::{AudioQueue, AudioSpecDesired};
 use sdl2::pixels::{Color, PixelFormatEnum};
 use sdl2::rect::Rect;
+use sdl2::render::Canvas;
+use sdl2::video::Window;
+
+const SDL_RENDERER_SOFTWARE_FLAG: u32 = 0x0000_0001;
+const SDL_RENDERER_ACCELERATED_FLAG: u32 = 0x0000_0002;
+const SDL_RENDERER_PRESENTVSYNC_FLAG: u32 = 0x0000_0004;
+const SDL_RENDERER_TARGETTEXTURE_FLAG: u32 = 0x0000_0008;
 
 /// Choose which set of input bindings to apply this frame. In netplay,
 /// each peer ALWAYS controls the local handle (P1 if local_handle=0,
@@ -225,6 +233,191 @@ fn platform_core_name() -> &'static str {
     }
 }
 
+pub fn build_window_canvas(
+    window: Window,
+    profile: RenderProfile,
+    shader_requested: bool,
+) -> Result<Canvas<Window>, String> {
+    let requested_driver = requested_render_driver(profile, shader_requested);
+    if let Some(driver) = requested_driver.as_deref() {
+        let _ = sdl2::hint::set("SDL_RENDER_DRIVER", driver);
+    }
+    let _ = sdl2::hint::set("SDL_RENDER_BATCHING", "1");
+
+    let mut builder = window.into_canvas().target_texture();
+    if profile.wants_acceleration() {
+        builder = builder.accelerated();
+    }
+    if profile.wants_software() {
+        builder = builder.software();
+    }
+    if profile.wants_vsync() {
+        builder = builder.present_vsync();
+    }
+
+    let canvas = builder.build().map_err(|e| e.to_string())?;
+    log_renderer_choice(&canvas, profile, requested_driver.as_deref());
+    Ok(canvas)
+}
+
+fn requested_render_driver(profile: RenderProfile, shader_requested: bool) -> Option<String> {
+    if shader_requested {
+        if let Some(driver) = available_render_driver("opengl") {
+            println!("[render] CRT SHADER requested; forcing SDL renderer: {driver}");
+            return Some(driver);
+        }
+        println!("[render] CRT SHADER requested but SDL opengl renderer is not available");
+    }
+
+    if let Some(driver) = std::env::var("FREEPLAY_RENDER_DRIVER")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+    {
+        return match available_render_driver(&driver) {
+            Some(driver) => Some(driver),
+            None => {
+                println!(
+                    "[render] requested SDL driver '{driver}' is not available; using SDL choice"
+                );
+                None
+            }
+        };
+    }
+
+    if profile.wants_software() {
+        return Some("software".to_string());
+    }
+
+    if profile.wants_acceleration() {
+        if let Some(driver) = preferred_hardware_render_driver() {
+            println!("[render] preferred SDL hardware driver on this platform: {driver}");
+        }
+    }
+
+    None
+}
+
+fn preferred_hardware_render_driver() -> Option<String> {
+    #[cfg(target_os = "windows")]
+    const PREFERRED: &[&str] = &["direct3d11", "direct3d", "opengl"];
+    #[cfg(target_os = "macos")]
+    const PREFERRED: &[&str] = &["metal", "opengl"];
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    const PREFERRED: &[&str] = &["opengl", "opengles2"];
+
+    PREFERRED
+        .iter()
+        .find(|preferred| available_render_driver(preferred).is_some())
+        .map(|driver| (*driver).to_string())
+}
+
+fn available_render_driver(name: &str) -> Option<String> {
+    sdl2::render::drivers()
+        .map(|driver| driver.name.to_string())
+        .find(|driver| driver.eq_ignore_ascii_case(name))
+}
+
+fn log_renderer_choice(
+    canvas: &Canvas<Window>,
+    profile: RenderProfile,
+    requested_driver: Option<&str>,
+) {
+    let available = sdl2::render::drivers()
+        .map(|driver| driver.name.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    println!("[render] available SDL drivers: {available}");
+    if let Some(driver) = requested_driver {
+        println!("[render] requested SDL driver: {driver}");
+    }
+    let info = canvas.info();
+    println!(
+        "[render] profile={} selected={} flags=0x{:x} max_texture={}x{}",
+        profile.label(),
+        info.name,
+        info.flags,
+        info.max_texture_width,
+        info.max_texture_height
+    );
+    log_renderer_capabilities(&info, profile);
+}
+
+fn log_renderer_capabilities(info: &sdl2::render::RendererInfo, profile: RenderProfile) {
+    let software = info.flags & SDL_RENDERER_SOFTWARE_FLAG != 0;
+    let accelerated = info.flags & SDL_RENDERER_ACCELERATED_FLAG != 0;
+    let vsync = info.flags & SDL_RENDERER_PRESENTVSYNC_FLAG != 0;
+    let target_texture = info.flags & SDL_RENDERER_TARGETTEXTURE_FLAG != 0;
+    println!(
+        "[render] capabilities: accelerated={accelerated} target_texture={target_texture} software={software} vsync={vsync}"
+    );
+
+    let recommendation = if accelerated && target_texture {
+        "CRT SHADER is safe when the SDL opengl renderer is selected; CRT DELUXE and current filters are safe with cached hardware overlays"
+    } else if accelerated {
+        "sharp/smooth/scanlines are safe; heavy CRT overlays may cost CPU"
+    } else {
+        "sharp/smooth are safest; avoid heavy CRT filters during netplay"
+    };
+    let profile_recommendation = if accelerated && target_texture {
+        RenderProfile::Hardware
+    } else if software {
+        RenderProfile::Software
+    } else {
+        RenderProfile::Auto
+    };
+    println!(
+        "[render] profile recommendation: {}",
+        profile_recommendation.label()
+    );
+    println!("[render] filter recommendation: {recommendation}");
+
+    if profile.wants_vsync() {
+        println!("[render] netplay note: VSYNC can add latency; prefer HARDWARE for online tests");
+    }
+}
+
+pub fn recommended_profile(canvas: &Canvas<Window>) -> RenderProfile {
+    let info = canvas.info();
+    let accelerated = info.flags & SDL_RENDERER_ACCELERATED_FLAG != 0;
+    let software = info.flags & SDL_RENDERER_SOFTWARE_FLAG != 0;
+    let target_texture = info.flags & SDL_RENDERER_TARGETTEXTURE_FLAG != 0;
+
+    if accelerated && target_texture {
+        RenderProfile::Hardware
+    } else if software {
+        RenderProfile::Software
+    } else {
+        RenderProfile::Auto
+    }
+}
+
+pub fn renderer_name(canvas: &Canvas<Window>) -> &'static str {
+    canvas.info().name
+}
+
+pub fn netplay_safe_filter(
+    canvas: &Canvas<Window>,
+    filter: crate::config::VideoFilter,
+    netplay_active: bool,
+) -> crate::config::VideoFilter {
+    if !netplay_active || !filter.needs_hardware_budget() || has_hardware_filter_budget(canvas) {
+        return filter;
+    }
+    if filter.uses_opengl_shader() {
+        crate::config::VideoFilter::CrtDeluxe
+    } else {
+        crate::config::VideoFilter::Scanlines
+    }
+}
+
+fn has_hardware_filter_budget(canvas: &Canvas<Window>) -> bool {
+    let info = canvas.info();
+    let accelerated = info.flags & SDL_RENDERER_ACCELERATED_FLAG != 0;
+    let target_texture = info.flags & SDL_RENDERER_TARGETTEXTURE_FLAG != 0;
+    accelerated && target_texture
+}
+
 /// Cache key for the pre-rendered filter overlay: the overlay's pixels only
 /// depend on these, so it is rebuilt on filter switch or window resize and
 /// costs a single texture copy per frame otherwise.
@@ -239,6 +432,7 @@ pub fn draw_emu_frame<'a>(
     texture: &mut sdl2::render::Texture<'a>,
     tc: &'a sdl2::render::TextureCreator<sdl2::video::WindowContext>,
     overlay_cache: &mut OverlayCache<'a>,
+    shader: Option<&mut crate::gl_crt::GlCrtRenderer>,
     filter: crate::config::VideoFilter,
     aspect: crate::config::AspectMode,
     crt_corner_bend: bool,
@@ -262,8 +456,37 @@ pub fn draw_emu_frame<'a>(
             apply_scale_quality(filter);
             let (out_w, out_h) = canvas.output_size()?;
             let dst = frame_destination(out_w, out_h, FRAME_WIDTH, FRAME_HEIGHT, aspect);
-            canvas.copy(texture, None, dst)?;
-            draw_video_filter_overlay(canvas, tc, overlay_cache, filter, dst, crt_corner_bend)?;
+            if filter.uses_opengl_shader() {
+                if let (Some(shader), Some(dst)) = (shader, dst) {
+                    let shader_mode = filter.opengl_shader_mode().unwrap_or(0);
+                    if shader
+                        .draw(
+                            canvas,
+                            texture,
+                            dst,
+                            (FRAME_WIDTH, FRAME_HEIGHT),
+                            (out_w, out_h),
+                            shader_mode,
+                        )
+                        .is_ok()
+                    {
+                        return Ok(());
+                    }
+                }
+
+                canvas.copy(texture, None, dst)?;
+                draw_video_filter_overlay(
+                    canvas,
+                    tc,
+                    overlay_cache,
+                    crate::config::VideoFilter::CrtDeluxe,
+                    dst,
+                    crt_corner_bend,
+                )?;
+            } else {
+                canvas.copy(texture, None, dst)?;
+                draw_video_filter_overlay(canvas, tc, overlay_cache, filter, dst, crt_corner_bend)?;
+            }
         }
     }
     Ok(())
@@ -299,7 +522,12 @@ fn frame_destination(
 
 fn apply_scale_quality(filter: crate::config::VideoFilter) {
     let quality = match filter {
-        crate::config::VideoFilter::Smooth | crate::config::VideoFilter::CrtCabinet => "linear",
+        crate::config::VideoFilter::Smooth
+        | crate::config::VideoFilter::CrtDeluxe
+        | crate::config::VideoFilter::CrtShader
+        | crate::config::VideoFilter::CrtArcadeShader
+        | crate::config::VideoFilter::CrtPvmShader
+        | crate::config::VideoFilter::CrtCabinet => "linear",
         _ => "nearest",
     };
     let _ = sdl2::hint::set("SDL_RENDER_SCALE_QUALITY", quality);
@@ -390,6 +618,18 @@ fn draw_overlay_layers(
                 draw_crt_corner_bend(canvas, dst, 26, 74, true)?;
             }
         }
+        crate::config::VideoFilter::CrtDeluxe => {
+            draw_crt_deluxe(canvas, dst, crt_corner_bend)?;
+        }
+        crate::config::VideoFilter::CrtShader => {
+            draw_crt_deluxe(canvas, dst, crt_corner_bend)?;
+        }
+        crate::config::VideoFilter::CrtArcadeShader => {
+            draw_crt_deluxe(canvas, dst, crt_corner_bend)?;
+        }
+        crate::config::VideoFilter::CrtPvmShader => {
+            draw_crt_deluxe(canvas, dst, crt_corner_bend)?;
+        }
         crate::config::VideoFilter::CrtCabinet => {
             canvas.set_draw_color(Color::RGBA(255, 205, 135, 24));
             canvas.fill_rect(dst)?;
@@ -414,6 +654,26 @@ fn draw_overlay_layers(
     Ok(())
 }
 
+fn draw_crt_deluxe(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    dst: Rect,
+    crt_corner_bend: bool,
+) -> Result<(), String> {
+    canvas.set_draw_color(Color::RGBA(255, 226, 184, 14));
+    canvas.fill_rect(dst)?;
+    draw_soft_center_glow(canvas, dst)?;
+    draw_horizontal_beam_glow(canvas, dst)?;
+    draw_deluxe_scanlines(canvas, dst, 58, 24)?;
+    draw_deluxe_slot_mask(canvas, dst, 24)?;
+    draw_convergence_fringe(canvas, dst, 12)?;
+    draw_crt_vignette(canvas, dst, 30, 46, 24)?;
+    if crt_corner_bend {
+        draw_crt_corner_bend(canvas, dst, 30, 84, true)?;
+        draw_glass_sheen(canvas, dst)?;
+    }
+    Ok(())
+}
+
 fn draw_scanlines(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     dst: Rect,
@@ -422,6 +682,139 @@ fn draw_scanlines(
     canvas.set_draw_color(Color::RGBA(0, 0, 0, alpha));
     for y in ((dst.y() + 1)..(dst.y() + dst.height() as i32)).step_by(2) {
         canvas.fill_rect(Rect::new(dst.x(), y, dst.width(), 1))?;
+    }
+    Ok(())
+}
+
+fn draw_deluxe_scanlines(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    dst: Rect,
+    strong_alpha: u8,
+    soft_alpha: u8,
+) -> Result<(), String> {
+    let y0 = dst.y();
+    let y1 = dst.y() + dst.height() as i32;
+    canvas.set_draw_color(Color::RGBA(0, 0, 0, strong_alpha));
+    for y in ((y0 + 1)..y1).step_by(4) {
+        canvas.fill_rect(Rect::new(dst.x(), y, dst.width(), 1))?;
+    }
+    canvas.set_draw_color(Color::RGBA(0, 0, 0, soft_alpha));
+    for y in ((y0 + 3)..y1).step_by(4) {
+        canvas.fill_rect(Rect::new(dst.x(), y, dst.width(), 1))?;
+    }
+    Ok(())
+}
+
+fn draw_deluxe_slot_mask(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    dst: Rect,
+    alpha: u8,
+) -> Result<(), String> {
+    let y = dst.y();
+    let x0 = dst.x();
+    let x1 = dst.x() + dst.width() as i32;
+    let y1 = dst.y() + dst.height() as i32;
+    let h = dst.height();
+    let colors = [
+        Color::RGBA(255, 55, 35, alpha),
+        Color::RGBA(55, 255, 95, alpha),
+        Color::RGBA(60, 120, 255, alpha),
+    ];
+
+    for (offset, color) in colors.into_iter().enumerate() {
+        canvas.set_draw_color(color);
+        for x in ((x0 + offset as i32)..x1).step_by(6) {
+            canvas.fill_rect(Rect::new(x, y, 1, h))?;
+        }
+    }
+
+    canvas.set_draw_color(Color::RGBA(0, 0, 0, alpha / 2));
+    for x in ((x0 + 3)..x1).step_by(6) {
+        canvas.fill_rect(Rect::new(x, y, 1, h))?;
+    }
+    for row in ((y + 3)..y1).step_by(6) {
+        canvas.fill_rect(Rect::new(x0, row, dst.width(), 1))?;
+    }
+    Ok(())
+}
+
+fn draw_soft_center_glow(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    dst: Rect,
+) -> Result<(), String> {
+    let layers = [(18_i32, 12_u8), (12, 9), (7, 6)];
+    for (div, alpha) in layers {
+        let inset_x = (dst.width() as i32 / div).max(1);
+        let inset_y = (dst.height() as i32 / div).max(1);
+        let w = dst.width() as i32 - inset_x * 2;
+        let h = dst.height() as i32 - inset_y * 2;
+        if w > 0 && h > 0 {
+            canvas.set_draw_color(Color::RGBA(255, 245, 218, alpha));
+            canvas.fill_rect(Rect::new(
+                dst.x() + inset_x,
+                dst.y() + inset_y,
+                w as u32,
+                h as u32,
+            ))?;
+        }
+    }
+    Ok(())
+}
+
+fn draw_horizontal_beam_glow(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    dst: Rect,
+) -> Result<(), String> {
+    let cy = dst.y() + dst.height() as i32 / 2;
+    let bands = [
+        (dst.height() as i32 / 5, 6_u8),
+        (dst.height() as i32 / 10, 8),
+        (dst.height() as i32 / 18, 10),
+    ];
+    for (half_h, alpha) in bands {
+        let half_h = half_h.max(1);
+        let y = cy - half_h;
+        let h = (half_h * 2).max(1) as u32;
+        canvas.set_draw_color(Color::RGBA(255, 236, 210, alpha));
+        canvas.fill_rect(Rect::new(dst.x(), y, dst.width(), h))?;
+    }
+    Ok(())
+}
+
+fn draw_convergence_fringe(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    dst: Rect,
+    alpha: u8,
+) -> Result<(), String> {
+    if dst.width() < 12 || dst.height() < 12 {
+        return Ok(());
+    }
+    let x0 = dst.x();
+    let y0 = dst.y();
+    let x1 = dst.x() + dst.width() as i32;
+    let y1 = dst.y() + dst.height() as i32;
+    canvas.set_draw_color(Color::RGBA(255, 45, 35, alpha));
+    canvas.fill_rect(Rect::new(x0 + 1, y0, 1, dst.height()))?;
+    canvas.fill_rect(Rect::new(x0, y0 + 1, dst.width(), 1))?;
+    canvas.set_draw_color(Color::RGBA(40, 100, 255, alpha));
+    canvas.fill_rect(Rect::new(x1 - 2, y0, 1, dst.height()))?;
+    canvas.fill_rect(Rect::new(x0, y1 - 2, dst.width(), 1))?;
+    Ok(())
+}
+
+fn draw_glass_sheen(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    dst: Rect,
+) -> Result<(), String> {
+    if dst.width() < 64 || dst.height() < 48 {
+        return Ok(());
+    }
+    let x = dst.x() + (dst.width() as i32 / 8);
+    let y = dst.y() + (dst.height() as i32 / 12);
+    let w = (dst.width() as i32 - dst.width() as i32 / 4).max(1) as u32;
+    for i in 0..5 {
+        canvas.set_draw_color(Color::RGBA(255, 255, 255, 16_u8.saturating_sub(i * 3)));
+        canvas.fill_rect(Rect::new(x + i as i32 * 4, y + i as i32 * 2, w / 2, 1))?;
     }
     Ok(())
 }
@@ -662,7 +1055,7 @@ pub fn draw_net_stats_overlay(
     for row in &rows {
         content_w = content_w.max(font.text_width_exact(row, scale));
     }
-    let box_w = (content_w + pad * 2).clamp(150, 230);
+    let box_w = (content_w + pad * 2).clamp(150, 280);
     let box_h = pad * 2 + 24 + line_h * rows.len() as i32;
     let x = window_w - box_w - 18;
     let y = window_h - box_h - 24;
@@ -693,6 +1086,67 @@ pub fn draw_net_stats_overlay(
         row_y += line_h;
     }
 
+    Ok(())
+}
+
+pub fn draw_render_debug_overlay(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    font: &mut Font,
+    fps: Option<f32>,
+    renderer: &str,
+    filter: crate::config::VideoFilter,
+    netplay_active: bool,
+) -> Result<(), String> {
+    let scale = 1;
+    let pad = 8;
+    let line_h = 17;
+    let fps_text = fps
+        .map(|v| format!("{v:.1} FPS"))
+        .unwrap_or_else(|| "-- FPS".to_string());
+    let rows = [
+        fps_text,
+        format!("{} / {}", renderer.to_ascii_uppercase(), filter.label()),
+        if netplay_active {
+            "ONLINE SDL OVERLAYS".to_string()
+        } else {
+            "LOCAL".to_string()
+        },
+    ];
+
+    let mut content_w = font.text_width_overlay("RENDER", scale);
+    for row in &rows {
+        content_w = content_w.max(font.text_width_exact(row, scale));
+    }
+    let box_w = (content_w + pad * 2).clamp(180, 390);
+    let box_h = pad * 2 + 22 + line_h * rows.len() as i32;
+    let x = 18;
+    let y = 42;
+
+    canvas.set_draw_color(Color::RGBA(8, 10, 18, 190));
+    canvas.fill_rect(Rect::new(x, y, box_w as u32, box_h as u32))?;
+    canvas.set_draw_color(Color::RGBA(95, 130, 210, 165));
+    canvas.draw_rect(Rect::new(x, y, box_w as u32, box_h as u32))?;
+    font.draw_overlay(
+        canvas,
+        "RENDER",
+        x + pad,
+        y + pad,
+        scale,
+        Color::RGBA(255, 210, 90, 235),
+    )?;
+
+    let mut row_y = y + pad + 24;
+    for row in rows {
+        font.draw(
+            canvas,
+            &row,
+            x + pad,
+            row_y,
+            scale,
+            Color::RGBA(220, 232, 255, 225),
+        )?;
+        row_y += line_h;
+    }
     Ok(())
 }
 
