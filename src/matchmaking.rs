@@ -1157,15 +1157,37 @@ impl<S: std::io::Read + std::io::Write + Send> ReadWrite for native_tls::TlsStre
 
 fn tls_connect(host: &str) -> Result<Box<dyn ReadWrite>, String> {
     use std::net::TcpStream;
+
     let addr = format!("{host}:443");
-    let tcp = TcpStream::connect(&addr).map_err(|e| format!("TCP connect to {addr}: {e}"))?;
-    tcp.set_read_timeout(Some(Duration::from_secs(15))).ok();
-    tcp.set_write_timeout(Some(Duration::from_secs(10))).ok();
     let connector = native_tls::TlsConnector::new().map_err(|e| format!("TLS connector: {e}"))?;
-    let tls = connector
-        .connect(host, tcp)
-        .map_err(|e| format!("TLS handshake with {host}: {e}"))?;
-    Ok(Box::new(tls))
+    let addrs: Vec<SocketAddr> = addr
+        .to_socket_addrs()
+        .map_err(|e| format!("DNS lookup for {addr}: {e}"))?
+        .collect();
+    if addrs.is_empty() {
+        return Err(format!("DNS lookup for {addr}: no addresses"));
+    }
+
+    let mut last_err = String::new();
+    for socket_addr in addrs {
+        match TcpStream::connect_timeout(&socket_addr, Duration::from_secs(8)) {
+            Ok(tcp) => {
+                tcp.set_read_timeout(Some(Duration::from_secs(15))).ok();
+                tcp.set_write_timeout(Some(Duration::from_secs(10))).ok();
+                match connector.connect(host, tcp) {
+                    Ok(tls) => return Ok(Box::new(tls)),
+                    Err(e) => {
+                        last_err = format!("TLS handshake with {host} via {socket_addr}: {e}");
+                    }
+                }
+            }
+            Err(e) => {
+                last_err = format!("TCP connect to {socket_addr}: {e}");
+            }
+        }
+    }
+
+    Err(last_err)
 }
 
 // ── LFG + status polling ──────────────────────────────────────────────────────

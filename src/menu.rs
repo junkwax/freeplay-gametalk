@@ -2159,7 +2159,12 @@ fn draw_matchmaking(
     )?;
     y += 36 * scale as i32;
 
-    let hint = "Using your confirmed player name for online play";
+    let status_lower = status.to_ascii_lowercase();
+    let hint = if status_lower.starts_with("checking name") {
+        "Verifying your player name before entering the queue"
+    } else {
+        "Using your confirmed player name for online play"
+    };
     let hw = font.text_width_exact(hint, small);
     font.draw(
         canvas,
@@ -2270,6 +2275,8 @@ fn draw_match_username(
         if status.to_ascii_lowercase().contains("taken")
             || status.to_ascii_lowercase().contains("invalid")
             || status.to_ascii_lowercase().contains("verify")
+            || status.to_ascii_lowercase().contains("timed out")
+            || status.to_ascii_lowercase().contains("failed")
         {
             Color::RGB(235, 120, 105)
         } else {
@@ -2278,7 +2285,7 @@ fn draw_match_username(
     )?;
 
     let footer = if checking {
-        "Checking..."
+        "Checking...   ESC Back"
     } else {
         "ENTER Find Match   ESC Back"
     };
