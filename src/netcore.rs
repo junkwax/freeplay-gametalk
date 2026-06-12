@@ -23,6 +23,7 @@ pub struct NetStepStats {
     pub advance_count: usize,
     pub load_count: usize,
     pub peer_disconnected: bool,
+    pub desync_detected: bool,
 }
 
 #[derive(Default)]
@@ -128,6 +129,7 @@ pub fn step_netplay_frame(
     use std::io::Write;
 
     let mut peer_disconnected_this_frame = false;
+    let mut desync_detected_this_frame = false;
 
     sess.poll_remote_clients();
 
@@ -179,6 +181,7 @@ pub fn step_netplay_frame(
                 remote_checksum,
                 addr,
             } => {
+                desync_detected_this_frame = true;
                 let line = format!(
                     "[net/err] DESYNC frame={frame} local=0x{local_checksum:x} remote=0x{remote_checksum:x} peer={addr}"
                 );
@@ -374,5 +377,6 @@ pub fn step_netplay_frame(
         advance_count,
         load_count,
         peer_disconnected: peer_disconnected_this_frame,
+        desync_detected: desync_detected_this_frame,
     }
 }

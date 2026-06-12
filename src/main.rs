@@ -2325,6 +2325,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         } = &net_mode
                                         {
                                             local_handle = *player;
+                                            if let Some(c) = &core {
+                                                input::clear_all_inputs();
+                                                c.reset();
+                                                reset_for_netplay(
+                                                    c,
+                                                    &mut trainer,
+                                                    &mut lab_reset_slots,
+                                                    &mut ghost_playback,
+                                                    &mut ghost_recording,
+                                                );
+                                            }
+                                            net_runtime = NetRuntime::default();
+                                            net_match_count = 0;
+                                            ranked_match_index = 0;
+                                            net_in_fight = false;
+                                            net_frames_since_progress = 0;
                                             match netplay::start_session(
                                                 *local_port,
                                                 *player,
@@ -4400,6 +4416,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         if step_stats.peer_disconnected && net_teardown_reason.is_none() {
                             net_teardown_reason = Some("peer disconnected".into());
+                        } else if step_stats.desync_detected && net_teardown_reason.is_none() {
+                            net_teardown_reason = Some("desync detected".into());
                         } else if net_frames_since_progress > 120 && net_teardown_reason.is_none() {
                             net_teardown_reason = Some("peer timed out (no progress)".into());
                         }
@@ -5191,7 +5209,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     matchmaking::discord_id_from_cached_token().or(discord_id);
 
                                 ensure_core_loaded(&mut core, &mut audio_queue, &audio_subsystem)?;
+                                let mut log = open_net_log();
                                 if let Some(c) = &core {
+                                    input::clear_all_inputs();
+                                    c.reset();
                                     reset_for_netplay(
                                         c,
                                         &mut trainer,
@@ -5199,12 +5220,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         &mut ghost_playback,
                                         &mut ghost_recording,
                                     );
+                                    if let Some(f) = log.as_mut() {
+                                        use std::io::Write;
+                                        let _ = writeln!(
+                                            f,
+                                            "[net] core reset for canonical online start"
+                                        );
+                                    }
                                 }
                                 match_replay_playback = None;
                                 input_history.clear();
+                                net_runtime = NetRuntime::default();
+                                net_match_count = 0;
+                                ranked_match_index = 0;
+                                net_in_fight = false;
+                                net_frames_since_progress = 0;
+                                session_p1_wins = 0;
+                                session_p2_wins = 0;
+                                score_tracker.reset();
 
                                 local_handle = if is_host { 0 } else { 1 };
-                                let mut log = open_net_log();
                                 let mut lines: Vec<String> = Vec::new();
 
                                 // Branch: TURN relay vs direct UDP
