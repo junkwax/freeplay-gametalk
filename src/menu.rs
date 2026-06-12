@@ -1,5 +1,7 @@
 //! In-engine menu: list-based screens, pad/keyboard navigation, rebind flow.
-use crate::config::{AspectMode, AudioBuffer, RenderProfile, ScorebarStyle, VideoFilter};
+use crate::config::{
+    AspectMode, AudioBuffer, RenderProfile, ScorebarStyle, VideoFilter, MAX_USERNAME_LEN,
+};
 use crate::font::Font;
 use crate::input::{is_action_active, Action, Binding, Bindings, Player, PlayerBindings};
 use crate::matchmaking::{HistoryRow, LeaderboardRow, LiveMatch, ProfileData, RemoteGhostMeta};
@@ -167,9 +169,15 @@ pub enum GhostEntry {
 pub struct ReplayEntry {
     pub filename: String,
     pub path: String,
+    pub remote_url: Option<String>,
     pub p1_name: String,
     pub p2_name: String,
+    pub p1_score: Option<u16>,
+    pub p2_score: Option<u16>,
+    pub winner: String,
     pub frame_count: u32,
+    pub duration: String,
+    pub recorded_at: String,
     pub note: String,
     pub bookmark_count: usize,
 }
@@ -248,7 +256,7 @@ pub const MAIN_ITEMS: [&str; 9] = [
     "About",
     "Quit",
 ];
-const LAB_MENU_ITEMS: [&str; 2] = ["Start Lab", "Load Ghosts"];
+const LAB_MENU_ITEMS: [&str; 2] = ["Start Lab", "Load Drones"];
 
 const SETTINGS_ITEMS: [&str; 16] = [
     "Username",
@@ -342,6 +350,8 @@ pub enum NavResult {
     OpenReplaySelect,
     /// Load and play a full deterministic match replay.
     LoadReplay(String),
+    /// Download and play a public deterministic match replay.
+    LoadRemoteReplay(String),
     /// Toggle named training helper.
     ToggleTraining(&'static str),
     /// Launch the external setup diagnostics window.
@@ -575,7 +585,11 @@ impl AppState {
                 cursor, entries, ..
             }) => {
                 if let Some(entry) = entries.get(cursor) {
-                    NavResult::LoadReplay(entry.path.clone())
+                    if let Some(url) = &entry.remote_url {
+                        NavResult::LoadRemoteReplay(url.clone())
+                    } else {
+                        NavResult::LoadReplay(entry.path.clone())
+                    }
                 } else {
                     NavResult::Stay
                 }
@@ -712,16 +726,27 @@ impl AppState {
             return;
         }
 
-        if let AppState::Menu(MenuScreen::TextEdit { value, .. }) = self {
+        if let AppState::Menu(MenuScreen::TextEdit { field, value, .. }) = self {
             for c in s.chars() {
-                if !c.is_control() && value.len() < 96 {
-                    value.push(c);
+                match field {
+                    EditField::Username => {
+                        if (c.is_ascii_alphanumeric() || c == '_' || c == '-' || c.is_whitespace())
+                            && value.len() < MAX_USERNAME_LEN
+                        {
+                            value.push(c);
+                        }
+                    }
+                    EditField::StatsEmail | EditField::ReplayNote { .. } => {
+                        if !c.is_control() && value.len() < 96 {
+                            value.push(c);
+                        }
+                    }
                 }
             }
         } else if let AppState::Menu(MenuScreen::MatchUsername { value, .. }) = self {
             for c in s.chars() {
                 if (c.is_ascii_alphanumeric() || c == '_' || c == '-' || c.is_whitespace())
-                    && value.len() < 24
+                    && value.len() < MAX_USERNAME_LEN
                 {
                     value.push(c);
                 }
@@ -1419,7 +1444,7 @@ fn draw_lab_menu(
         font.draw(canvas, label, x, y, scale, colour)?;
     }
 
-    let note = "Lab tools, ghosts, and replay review";
+    let note = "Lab tools, drones, and replay review";
     let note_w = font.text_width_exact(note, small);
     font.draw(
         canvas,
@@ -1649,10 +1674,10 @@ fn draw_about(canvas: &mut Canvas<Window>, font: &mut Font, w: i32, h: i32) -> R
         "F4  Timer",
         "F5  Dummy mode",
         "F6/F7 Reset load/save",
-        "F8/F9 Ghost load/save",
+        "F8/F9 Drone load/save",
         "F10 Punish trainer",
         "F11 Hide help",
-        "F12 Play vs ghost",
+        "F12 Play vs drone",
     ];
     let right = [
         "Find Match saves replays",
@@ -2969,7 +2994,7 @@ fn draw_ghost_select(
     w: i32,
     h: i32,
 ) -> Result<(), String> {
-    draw_title(canvas, font, "LOAD GHOST", w, h)?;
+    draw_title(canvas, font, "LOAD DRONE", w, h)?;
     let small = small_scale(h);
     let cx = w / 2;
     let content_x = (w / 12).max(42);
@@ -2986,7 +3011,7 @@ fn draw_ghost_select(
             92,
             Color::RGBA(15, 16, 24, 225),
         )?;
-        let msg = "No ghost recordings found";
+        let msg = "No drone recordings found";
         let tw = font.text_width_exact(msg, small);
         font.draw(
             canvas,
@@ -3008,7 +3033,7 @@ fn draw_ghost_select(
             Color::RGB(140, 140, 160),
         )?;
     } else {
-        let header = format!("{} ghosts available", entries.len());
+        let header = format!("{} drones available", entries.len());
         font.draw(
             canvas,
             &header,
@@ -3154,7 +3179,7 @@ fn draw_replay_select(
             92,
             Color::RGBA(15, 16, 24, 225),
         )?;
-        let msg = status.unwrap_or("No online replays found");
+        let msg = status.unwrap_or("No local or public replays found");
         let msg = fit_line(font, msg, small, content_w - 24);
         let tw = font.text_width_exact(&msg, small);
         font.draw(
@@ -3166,7 +3191,7 @@ fn draw_replay_select(
             Color::RGB(180, 180, 200),
         )?;
         y += 24 * small as i32;
-        let hint = "Completed online sets save here automatically";
+        let hint = "Completed sets save here; public replays load from GitHub";
         let hw = font.text_width_exact(hint, small);
         font.draw(
             canvas,
@@ -3199,17 +3224,22 @@ fn draw_replay_select(
             let selected = i == cursor;
             let entry = &entries[i];
             let subtitle = {
-                let duration = format_replay_duration(entry.frame_count);
-                let time = parse_replay_time(&entry.filename);
+                let duration = if entry.duration.is_empty() {
+                    format_replay_duration(entry.frame_count)
+                } else {
+                    entry.duration.clone()
+                };
+                let time = replay_recorded_time(entry);
+                let score = replay_score_line(entry);
                 let marks = match entry.bookmark_count {
                     0 => String::new(),
                     1 => " - 1 mark".to_string(),
                     n => format!(" - {n} marks"),
                 };
                 if time.is_empty() {
-                    format!("{duration} - {}f{marks}", entry.frame_count)
+                    format!("{duration} - {}f{score}{marks}", entry.frame_count)
                 } else {
-                    format!("{duration} - {time}{marks}")
+                    format!("{duration} - {time}{score}{marks}")
                 }
             };
             let subtitle = fit_line(font, &subtitle, small, (content_w / 2).max(120));
@@ -3238,9 +3268,14 @@ fn draw_replay_select(
                 Color::RGBA(70, 72, 88, 220)
             });
             canvas.fill_rect(Rect::new(content_x, y - 4, 3, (row_h - 4) as u32))?;
+            let kind = if entry.remote_url.is_some() {
+                "PUBLIC"
+            } else {
+                "LOCAL"
+            };
             font.draw(
                 canvas,
-                "LOCAL",
+                kind,
                 content_x + 12,
                 y,
                 small,
@@ -3306,6 +3341,32 @@ fn draw_replay_select(
         Color::RGB(100, 100, 100),
     )?;
     Ok(())
+}
+
+fn replay_score_line(entry: &ReplayEntry) -> String {
+    match (entry.p1_score, entry.p2_score) {
+        (Some(p1), Some(p2)) => {
+            let winner = entry.winner.trim();
+            if winner.is_empty() {
+                format!(" - {p1}-{p2}")
+            } else {
+                format!(" - {p1}-{p2} {winner}")
+            }
+        }
+        _ => String::new(),
+    }
+}
+
+fn replay_recorded_time(entry: &ReplayEntry) -> String {
+    let recorded = entry.recorded_at.trim();
+    if recorded.is_empty() {
+        return parse_replay_time(&entry.filename);
+    }
+    if let Ok(secs) = recorded.parse::<i64>() {
+        format!("Recorded {}", chrono_prelude(secs))
+    } else {
+        format!("Recorded {recorded}")
+    }
 }
 
 fn strip_ncgh(s: &str) -> String {

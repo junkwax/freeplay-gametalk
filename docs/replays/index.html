@@ -1,0 +1,446 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Freeplay Replays</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #08090d;
+      --panel: #12151d;
+      --panel-2: #171b24;
+      --line: #2a3040;
+      --text: #f3f5f8;
+      --muted: #9da7b8;
+      --gold: #f0c75e;
+      --cyan: #5bd6ff;
+      --red: #ef5b57;
+      --green: #69d889;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    a {
+      color: inherit;
+    }
+
+    .shell {
+      width: min(1180px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 24px 0 40px;
+    }
+
+    header {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 220px;
+      gap: 24px;
+      align-items: end;
+      padding: 10px 0 22px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(2rem, 6vw, 4.5rem);
+      line-height: 0.92;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 18px;
+      margin-top: 18px;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    .preview {
+      width: 100%;
+      aspect-ratio: 16 / 10;
+      object-fit: cover;
+      border: 1px solid var(--line);
+      background: #000;
+    }
+
+    .toolbar {
+      display: grid;
+      grid-template-columns: minmax(180px, 1fr) auto auto;
+      gap: 12px;
+      align-items: center;
+      padding: 18px 0;
+    }
+
+    input,
+    select {
+      width: 100%;
+      min-height: 42px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--text);
+      padding: 0 12px;
+      font: inherit;
+      outline: none;
+    }
+
+    input:focus,
+    select:focus {
+      border-color: var(--cyan);
+    }
+
+    .count {
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      background: var(--panel);
+    }
+
+    table {
+      width: 100%;
+      min-width: 820px;
+      border-collapse: collapse;
+    }
+
+    th,
+    td {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: middle;
+    }
+
+    th {
+      color: var(--muted);
+      font-size: 0.76rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      background: #0d1017;
+    }
+
+    tbody tr {
+      background: var(--panel);
+    }
+
+    tbody tr:nth-child(even) {
+      background: var(--panel-2);
+    }
+
+    tbody tr:hover {
+      background: #1d2330;
+    }
+
+    .players {
+      display: grid;
+      gap: 4px;
+      font-weight: 700;
+    }
+
+    .winner {
+      color: var(--gold);
+    }
+
+    .sub {
+      color: var(--muted);
+      font-size: 0.88rem;
+      font-weight: 500;
+    }
+
+    .score {
+      font-size: 1.2rem;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .result-win {
+      color: var(--green);
+    }
+
+    .result-loss {
+      color: var(--red);
+    }
+
+    .actions {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 36px;
+      padding: 0 12px;
+      border: 1px solid var(--line);
+      background: #202632;
+      color: var(--text);
+      font-weight: 800;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+
+    .btn.primary {
+      border-color: #b88d28;
+      background: #2a2414;
+      color: var(--gold);
+    }
+
+    .empty {
+      padding: 48px 20px;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    footer {
+      padding-top: 18px;
+      color: var(--muted);
+      font-size: 0.86rem;
+    }
+
+    @media (max-width: 720px) {
+      .shell {
+        width: min(100% - 20px, 1180px);
+        padding-top: 12px;
+      }
+
+      header {
+        grid-template-columns: 1fr;
+        gap: 14px;
+      }
+
+      .preview {
+        max-height: 150px;
+      }
+
+      .toolbar {
+        grid-template-columns: 1fr;
+      }
+
+      .count {
+        white-space: normal;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div>
+        <h1>Freeplay Replays</h1>
+        <div class="meta">
+          <span id="updated">Updated --</span>
+          <span id="total">0 matches</span>
+        </div>
+      </div>
+      <img class="preview" src="https://raw.githubusercontent.com/junkwax/freeplay-gametalk/main/screenshot.png" alt="Freeplay gameplay screenshot">
+    </header>
+
+    <section class="toolbar" aria-label="Replay filters">
+      <input id="search" type="search" placeholder="Search players" autocomplete="off">
+      <select id="result">
+        <option value="all">All results</option>
+        <option value="decided">Decided</option>
+        <option value="pending">Pending</option>
+      </select>
+      <div class="count" id="visible-count">0 shown</div>
+    </section>
+
+    <section class="table-wrap" aria-live="polite">
+      <table>
+        <thead>
+          <tr>
+            <th>Match</th>
+            <th>Outcome</th>
+            <th>Recorded</th>
+            <th>Duration</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <div id="empty" class="empty" hidden>No public replays yet.</div>
+    </section>
+
+    <footer>
+      Watch opens the installed Freeplay app through the xband protocol.
+    </footer>
+  </main>
+
+  <script>
+    const state = {
+      replays: [],
+      query: "",
+      result: "all"
+    };
+
+    const rows = document.getElementById("rows");
+    const empty = document.getElementById("empty");
+    const search = document.getElementById("search");
+    const result = document.getElementById("result");
+    const updated = document.getElementById("updated");
+    const total = document.getElementById("total");
+    const visibleCount = document.getElementById("visible-count");
+
+    function text(value, fallback = "--") {
+      if (value === null || value === undefined || value === "") return fallback;
+      return String(value);
+    }
+
+    function escapeHtml(value) {
+      return text(value, "").replace(/[&<>"']/g, char => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        "\"": "&quot;",
+        "'": "&#39;"
+      }[char]));
+    }
+
+    function numberOrNull(value) {
+      const number = Number(value);
+      return Number.isFinite(number) ? number : null;
+    }
+
+    function scoreLine(replay) {
+      const p1 = numberOrNull(replay.p1_score);
+      const p2 = numberOrNull(replay.p2_score);
+      if (p1 === null || p2 === null) return "Pending";
+      return `${p1}-${p2}`;
+    }
+
+    function winnerName(replay) {
+      if (replay.winner) return replay.winner;
+      const p1 = numberOrNull(replay.p1_score);
+      const p2 = numberOrNull(replay.p2_score);
+      if (p1 !== null && p2 !== null) {
+        if (p1 > p2) return replay.p1;
+        if (p2 > p1) return replay.p2;
+      }
+      return "";
+    }
+
+    function replayUrl(replay) {
+      const url = replay.url ? String(replay.url) : replay.file ? new URL(replay.file, location.href).href : "";
+      return url.startsWith("https://") ? url : "";
+    }
+
+    function watchUrl(replay) {
+      const url = replayUrl(replay);
+      return url ? `xband://replay?url=${encodeURIComponent(url)}` : "";
+    }
+
+    function formatDate(value) {
+      if (!value) return "--";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return value;
+      return new Intl.DateTimeFormat(undefined, {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit"
+      }).format(date);
+    }
+
+    function replayDate(replay) {
+      if (replay.recorded_at) return formatDate(replay.recorded_at);
+      const unix = numberOrNull(replay.recorded_unix);
+      return unix === null ? "--" : formatDate(unix * 1000);
+    }
+
+    function replayMatchesFilters(replay) {
+      const q = state.query.trim().toLowerCase();
+      if (q) {
+        const haystack = `${replay.p1 || ""} ${replay.p2 || ""} ${replay.winner || ""}`.toLowerCase();
+        if (!haystack.includes(q)) return false;
+      }
+      const decided = Boolean(winnerName(replay));
+      if (state.result === "decided" && !decided) return false;
+      if (state.result === "pending" && decided) return false;
+      return true;
+    }
+
+    function render() {
+      const filtered = state.replays.filter(replayMatchesFilters);
+      rows.innerHTML = "";
+      empty.hidden = filtered.length !== 0;
+      visibleCount.textContent = `${filtered.length} shown`;
+
+      for (const replay of filtered) {
+        const winner = winnerName(replay);
+        const watch = watchUrl(replay);
+        const download = replayUrl(replay);
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>
+            <div class="players">
+              <span class="${winner === replay.p1 ? "winner" : ""}">${escapeHtml(text(replay.p1, "P1"))}</span>
+              <span class="${winner === replay.p2 ? "winner" : ""}">${escapeHtml(text(replay.p2, "P2"))}</span>
+            </div>
+          </td>
+          <td>
+            <div class="score ${winner ? "result-win" : "result-loss"}">${escapeHtml(scoreLine(replay))}</div>
+            <div class="sub">${winner ? `${escapeHtml(winner)} wins` : "Awaiting result"}</div>
+          </td>
+          <td>${escapeHtml(replayDate(replay))}</td>
+          <td>
+            <div>${escapeHtml(text(replay.duration))}</div>
+            <div class="sub">${replay.frames ? `${escapeHtml(replay.frames)} frames` : ""}</div>
+          </td>
+          <td>
+            <div class="actions">
+              ${watch ? `<a class="btn primary" href="${escapeHtml(watch)}">Watch</a>` : ""}
+              ${download ? `<a class="btn" href="${escapeHtml(download)}" download>Download</a>` : ""}
+            </div>
+          </td>
+        `;
+        rows.appendChild(tr);
+      }
+    }
+
+    async function load() {
+      try {
+        const response = await fetch("replays.json", { cache: "no-store" });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        state.replays = Array.isArray(data.replays) ? data.replays : [];
+        updated.textContent = data.updated_at ? `Updated ${formatDate(data.updated_at)}` : "Updated --";
+        total.textContent = `${state.replays.length} matches`;
+      } catch (error) {
+        empty.textContent = `Replay index failed to load: ${error.message}`;
+        empty.hidden = false;
+      }
+      render();
+    }
+
+    search.addEventListener("input", () => {
+      state.query = search.value;
+      render();
+    });
+
+    result.addEventListener("change", () => {
+      state.result = result.value;
+      render();
+    });
+
+    load();
+  </script>
+</body>
+</html>

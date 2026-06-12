@@ -106,16 +106,22 @@ impl GlCrtRenderer {
             self.gl.disable(GL_DEPTH_TEST);
             self.gl.disable(GL_CULL_FACE);
             self.gl.disable(GL_BLEND);
-            self.gl.viewport(0, 0, output_size.0 as GLsizei, output_size.1 as GLsizei);
+            self.gl
+                .viewport(0, 0, output_size.0 as GLsizei, output_size.1 as GLsizei);
             self.gl.use_program(self.program);
             self.gl.active_texture(GL_TEXTURE0);
             self.gl.uniform_1i(self.u_frame, 0);
             self.gl.uniform_1i(self.u_mode, mode);
             self.gl.uniform_2f(self.u_tex_scale, tex_w, tex_h);
+            self.gl.uniform_2f(
+                self.u_frame_size,
+                frame_size.0 as GLfloat,
+                frame_size.1 as GLfloat,
+            );
             self.gl
-                .uniform_2f(self.u_frame_size, frame_size.0 as GLfloat, frame_size.1 as GLfloat);
-            self.gl.tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-            self.gl.tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                .tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            self.gl
+                .tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
             self.gl
                 .tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
             self.gl
@@ -433,7 +439,11 @@ unsafe fn load_gl<T>(video: &VideoSubsystem, name: &str) -> Result<T, String> {
     Ok(std::mem::transmute_copy(&ptr))
 }
 
-unsafe fn compile_program(gl: &GlFns, vertex_src: &str, fragment_src: &str) -> Result<GLuint, String> {
+unsafe fn compile_program(
+    gl: &GlFns,
+    vertex_src: &str,
+    fragment_src: &str,
+) -> Result<GLuint, String> {
     let vertex = compile_shader(gl, GL_VERTEX_SHADER, vertex_src)?;
     let fragment = compile_shader(gl, GL_FRAGMENT_SHADER, fragment_src)?;
     let program = gl.create_program();
@@ -484,7 +494,10 @@ fn uniform_location(gl: &GlFns, program: GLuint, name: &str) -> Result<GLint, St
     let name = CString::new(name).map_err(|e| e.to_string())?;
     let location = unsafe { gl.get_uniform_location(program, name.as_ptr()) };
     if location < 0 {
-        Err(format!("CRT shader missing uniform {}", name.to_string_lossy()))
+        Err(format!(
+            "CRT shader missing uniform {}",
+            name.to_string_lossy()
+        ))
     } else {
         Ok(location)
     }

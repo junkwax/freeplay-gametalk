@@ -149,43 +149,6 @@ pub fn check_username_available(
     });
 }
 
-/// Generate Wu-style names and return the first one the stats service reports
-/// as free, so a fresh player is offered an available name to confirm rather
-/// than one that's already taken. Sends exactly one `Available(name)`.
-///
-/// Fails open: if the stats service can't be reached, or every candidate is
-/// taken within the attempt budget, the last generated name is returned anyway
-/// so name generation never hard-blocks Find Match. (`Taken`/`Error` are never
-/// sent — the caller treats the result purely as "here's the name to confirm".)
-pub fn generate_available_username(stats_url: String, tx: Sender<UsernameCheckUpdate>) {
-    std::thread::spawn(move || {
-        const MAX_ATTEMPTS: u64 = 8;
-        let sanitize = |raw: &str| crate::config::sanitize_username(raw);
-        let mut last = sanitize(&crate::wuname::random_username_variant(0))
-            .unwrap_or_else(crate::config::default_username);
-        for attempt in 0..MAX_ATTEMPTS {
-            let candidate = match sanitize(&crate::wuname::random_username_variant(attempt)) {
-                Some(name) => name,
-                None => continue,
-            };
-            last = candidate.clone();
-            match check_username_available_inner(&stats_url, &candidate) {
-                Ok(true) => {
-                    let _ = tx.send(UsernameCheckUpdate::Available(candidate));
-                    return;
-                }
-                Ok(false) => continue, // taken — try another
-                Err(_) => {
-                    // Stats unreachable: don't strand the user, offer this name.
-                    let _ = tx.send(UsernameCheckUpdate::Available(candidate));
-                    return;
-                }
-            }
-        }
-        let _ = tx.send(UsernameCheckUpdate::Available(last));
-    });
-}
-
 /// Start a join-to-spar session. Called when Discord delivers an
 /// ACTIVITY_JOIN event containing the xband://join/<room_id> secret.
 pub fn start_join_room(tx: Sender<Update>, room_id: String) {
@@ -602,8 +565,12 @@ fn guest_login() -> Result<String, String> {
                 String::new(),
             )
         });
-    let username = crate::config::sanitize_username(&username)
-        .ok_or_else(|| "Username must be 2-24 letters/numbers".to_string())?;
+    let username = crate::config::sanitize_username(&username).ok_or_else(|| {
+        format!(
+            "Username must be 2-{} letters/numbers",
+            crate::config::MAX_USERNAME_LEN
+        )
+    })?;
     let email = crate::config::normalize_email(&email).unwrap_or_default();
     let body = if !email.is_empty() {
         format!(
@@ -626,8 +593,12 @@ fn guest_login() -> Result<String, String> {
 }
 
 fn check_username_available_inner(stats_url: &str, username: &str) -> Result<bool, String> {
-    let username = crate::config::sanitize_username(username)
-        .ok_or_else(|| "Username must be 2-24 letters/numbers".to_string())?;
+    let username = crate::config::sanitize_username(username).ok_or_else(|| {
+        format!(
+            "Username must be 2-{} letters/numbers",
+            crate::config::MAX_USERNAME_LEN
+        )
+    })?;
     let stats_url = stats_url.trim_end_matches('/');
     if stats_url.is_empty() {
         return Err("Stats service is not configured; cannot verify username".into());
@@ -674,6 +645,20 @@ pub fn username_from_cached_token() -> Option<String> {
 pub fn discord_id_from_cached_token() -> Option<String> {
     let token = current_or_cached_token()?;
     player_id_from_token(&token)
+}
+
+pub fn guest_player_id(username: &str, email: &str, device_id: &str) -> Option<String> {
+    let username = crate::config::sanitize_username(username)?;
+    if let Some(email) = crate::config::normalize_email(email) {
+        Some(format!("guest-email:{}", sha256_hex(email.as_bytes())))
+    } else if !device_id.trim().is_empty() {
+        Some(format!(
+            "guest-device:{}",
+            sha256_hex(device_id.trim().as_bytes())
+        ))
+    } else {
+        Some(format!("guest-name:{}", sha256_hex(username.as_bytes())))
+    }
 }
 
 pub fn connected_discord_user_from_cached_token() -> Option<String> {
@@ -1355,6 +1340,26 @@ pub enum LeaderboardUpdate {
     Error(String),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteReplayMeta {
+    pub filename: String,
+    pub url: String,
+    pub p1_name: String,
+    pub p2_name: String,
+    pub p1_score: Option<u16>,
+    pub p2_score: Option<u16>,
+    pub winner: String,
+    pub frame_count: u32,
+    pub duration: String,
+    pub recorded_at: String,
+}
+
+#[derive(Debug)]
+pub enum PublicReplayUpdate {
+    Loaded(Vec<RemoteReplayMeta>),
+    Error(String),
+}
+
 /// Fire-and-forget profile fetcher. Spawns a thread, GETs both
 /// `/player/:id` and `/player/:id/history`, and pushes a `ProfileUpdate`
 /// down `tx`. The main loop polls `tx` like it does for matchmaking.
@@ -1541,6 +1546,53 @@ fn parse_leaderboard_row(chunk: &str) -> Option<LeaderboardRow> {
     })
 }
 
+fn parse_public_replay_index(json: &str, index_url: &str) -> Option<Vec<RemoteReplayMeta>> {
+    let body = json_array_body(json, "replays")?;
+    let mut out = Vec::new();
+    for chunk in json_object_chunks(body) {
+        if let Some(replay) = parse_public_replay_meta(chunk, index_url) {
+            out.push(replay);
+        }
+    }
+    Some(out)
+}
+
+fn parse_public_replay_meta(chunk: &str, index_url: &str) -> Option<RemoteReplayMeta> {
+    let file = json_str(chunk, "file").unwrap_or_default();
+    let url = json_str(chunk, "url").unwrap_or_else(|| join_url(index_url, &file));
+    if !url.starts_with("https://") {
+        return None;
+    }
+    Some(RemoteReplayMeta {
+        filename: if file.is_empty() {
+            url.rsplit('/').next().unwrap_or("replay.ncrp").to_string()
+        } else {
+            file.rsplit('/').next().unwrap_or(&file).to_string()
+        },
+        url,
+        p1_name: json_str(chunk, "p1").unwrap_or_else(|| "P1".into()),
+        p2_name: json_str(chunk, "p2").unwrap_or_else(|| "P2".into()),
+        p1_score: json_u64(chunk, "p1_score").map(|v| v.min(u16::MAX as u64) as u16),
+        p2_score: json_u64(chunk, "p2_score").map(|v| v.min(u16::MAX as u64) as u16),
+        winner: json_str(chunk, "winner").unwrap_or_default(),
+        frame_count: json_u64(chunk, "frames").unwrap_or(0).min(u32::MAX as u64) as u32,
+        duration: json_str(chunk, "duration").unwrap_or_default(),
+        recorded_at: json_str(chunk, "recorded_at")
+            .or_else(|| json_u64(chunk, "recorded_unix").map(|v| v.to_string()))
+            .unwrap_or_default(),
+    })
+}
+
+fn join_url(index_url: &str, file: &str) -> String {
+    if file.starts_with("https://") {
+        return file.to_string();
+    }
+    let Some(slash) = index_url.rfind('/') else {
+        return file.to_string();
+    };
+    format!("{}/{}", &index_url[..slash], file.trim_start_matches('/'))
+}
+
 // ── freeplay-stats: ghost browse + download ───────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1666,6 +1718,40 @@ pub fn fetch_leaderboard(stats_url: String, tx: Sender<LeaderboardUpdate>) {
                 )));
             }
         }
+    });
+}
+
+pub fn fetch_public_replays(stats_url: String, tx: Sender<PublicReplayUpdate>) {
+    std::thread::spawn(move || {
+        let mut index_urls = Vec::new();
+        let stats_url = stats_url.trim_end_matches('/').to_string();
+        if !stats_url.is_empty() {
+            index_urls.push(format!("{stats_url}/replays/list?limit=50"));
+        }
+        index_urls.push("https://junkwax.github.io/freeplay-gametalk/replays/replays.json".into());
+        index_urls.push(
+            "https://raw.githubusercontent.com/junkwax/freeplay-gametalk/main/docs/replays/replays.json"
+                .into(),
+        );
+
+        let mut last_error = String::new();
+        for index_url in index_urls {
+            match http_get_no_auth(&index_url) {
+                Ok(body) => match parse_public_replay_index(&body, &index_url) {
+                    Some(replays) => {
+                        let _ = tx.send(PublicReplayUpdate::Loaded(replays));
+                        return;
+                    }
+                    None => {
+                        last_error = format!("couldn't parse replay index from {index_url}");
+                    }
+                },
+                Err(e) => {
+                    last_error = format!("{index_url}: {e}");
+                }
+            }
+        }
+        let _ = tx.send(PublicReplayUpdate::Error(last_error));
     });
 }
 

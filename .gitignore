@@ -100,7 +100,10 @@ ghosts/
 ghost_library.json
 *.ncgh
 replays/
+!docs/replays/
+!docs/replays/**
 *.ncrp
+!docs/replays/files/*.ncrp
 *.state
 clips/
 

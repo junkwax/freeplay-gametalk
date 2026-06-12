@@ -4,7 +4,7 @@
 ![freeplay-image](https://raw.githubusercontent.com/junkwax/freeplay-gametalk/main/screenshot.png)
 
 freeplay-gametalk is the Freeplay client package: a Rust/SDL2 arcade rollback
-client with username-based matchmaking, ghost recording, profile stats, and a
+client with username-based matchmaking, drone recording, profile stats, and a
 compact in-game overlay. It wraps an FBNeo libretro core, drives the emulator
 frame by frame, and synchronizes two players with GGRS rollback netcode over
 the public `freeplay-relay` UDP path.
@@ -35,7 +35,7 @@ URLs, OAuth client IDs, tokens, or webhooks.
   `appicon.png` runtime icon support.
 - Profile page with rating, wins, losses, win rate, match history, and Discord
   avatar support when available.
-- Ghost recording, upload/download support, local ghost playback, online match
+- Drone recording, upload/download support, local drone playback, online match
   replay review, and lab play drone mode.
 - Package script that creates a distributable zip without ROMs or secrets.
 
@@ -54,8 +54,8 @@ URLs, OAuth client IDs, tokens, or webhooks.
 - `Arcade` starts a normal local arcade run. Insert coin/start through your
   bindings; Lab dummy controls, Lab assist, training pokes, and the extra
   scorebar overlay stay off.
-- `Lab` opens a compact submenu for Start Lab and Load Ghosts.
-- `Replays` opens saved online match replays from completed Find Match sets.
+- `Lab` opens a compact submenu for Start Lab and Load Drones.
+- `Replays` opens saved online match replays and public replay archive entries.
 - `Shift+D`: open Doctor from menu screens.
 
 ### Lab And Local Play
@@ -78,16 +78,16 @@ URLs, OAuth client IDs, tokens, or webhooks.
 - `F7`: save the active Lab reset slot.
 - `Ctrl+F7`: cycle Lab reset slots `S1`/`S2`/`S3`; an asterisk in the Lab
   assist panel means that slot has a saved reset.
-- `F8`: load/play full ghost playback from `ghost.bin`.
-- `F9`: start/stop local ghost recording.
-- `F10`: toggle Punish Trainer when no ghost playback is active. It arms when
+- `F8`: load/play full drone playback from `ghost.bin`.
+- `F9`: start/stop local drone recording.
+- `F10`: toggle Punish Trainer when no drone playback is active. It arms when
   the recorded dummy loop ends, then scores `PUNISH`, `LATE`, `BLOCKED`, or
   `MISSED` from P2 health and P1 attacks.
 - Lab assist also tracks P2 damage, hit count, attempts, and best damage while
   fighting.
 - `Shift+F10`: reset Punish Trainer and damage stats.
-- `F10`: toggle reactive drone behavior while a ghost playback is active.
-- `F12`: play against a logic-driven P2 ghost opponent.
+- `F10`: toggle reactive drone behavior while drone playback is active.
+- `F12`: play against a logic-driven P2 drone opponent.
 - `F11`: show/hide the Lab assist panel, including P1 input history.
 - `Ctrl+R`: start/stop MP4 clip recording.
 - `Ctrl+F`: cycle video filter.
@@ -107,6 +107,8 @@ URLs, OAuth client IDs, tokens, or webhooks.
   the SDL netplay/chat overlays and shows FPS, renderer, and active filter.
 - On the online match-ended screen, press `R` or controller `Y` to review the
   replay saved from that set.
+- The Replays menu can also load public archive replays from GitHub. Selecting
+  one downloads it locally and opens the same in-app review screen.
 - `Space`, `Enter`, or controller `Start`: pause/resume replay review.
 - `.`, or controller `A`: step one replay frame while paused.
 - `Left`/`Right`, or controller D-pad left/right: jump replay review by 5 seconds.
@@ -320,10 +322,11 @@ Under the hood:
 3. Relay credentials are minted for the shared room.
 4. Both clients send netplay packets to `freeplay-relay`, which forwards
    traffic between the two registered peers.
-5. Match results, ghost uploads, and spectator state are posted through the
-   configured backend.
+5. Match results and spectator state are posted through the HTTPS matchmaking
+   service; replay and drone storage lives on the stats service.
 
-Stats and ghost uploads are disabled when `FREEPLAY_STATS_URL` is missing.
+Stats, replay uploads, and drone uploads are disabled when `FREEPLAY_STATS_URL`
+is missing.
 Without a Stats Email, ratings are tied to the confirmed player-name identity.
 Add the same email on another machine to keep using the same stats identity there.
 Discord presence is disabled when `FREEPLAY_DISCORD_CLIENT_ID` is missing.
@@ -363,12 +366,27 @@ enabled for both users.
 Spectate requests are routed separately from join requests so Discord profile
 actions do not accidentally queue the viewer into the match.
 
-## Ghosts
+## Drones
 
-Ghost recordings are written under `ghosts\` next to the executable. When stats
+Drone recordings are written under `ghosts\` next to the executable for
+compatibility with earlier builds. When stats
 upload is configured and the client has a username identity, completed netplay
-recordings can be uploaded for community ghost playback. Local ghost files and
+recordings can be uploaded for community drone playback. Local drone files and
 upload queues are ignored by git.
+
+## Public Replay Page
+
+`docs/replays/index.html` is a GitHub Pages-ready replay index. Add public
+`.ncrp` files under `docs/replays/files/`, then add matching entries to
+`docs/replays/replays.json` with player names, scores, outcome, and file path.
+The page's Watch link opens Freeplay through `xband://replay?url=...`; Freeplay
+downloads the replay locally and opens the in-app review screen. The in-app
+Replays menu reads the same public index and can load anyone's listed replay.
+
+For live community uploads, the app posts completed online `.ncrp` files to
+`FREEPLAY_STATS_URL/replays/upload` and loads `FREEPLAY_STATS_URL/replays/list`
+before falling back to the GitHub Pages JSON. The relay server is only for UDP
+netplay packets; persistent replay storage belongs to `freeplay-stats`.
 
 ## Repo Hygiene
 
@@ -376,7 +394,7 @@ The repository intentionally ignores:
 
 - ROM zips and generated release zips
 - SDL/FBNeo runtime binaries in `src\`
-- local logs, save states, ghosts, and tokens
+- local logs, save states, drones, and tokens
 - saved replay files
 - `.env` and local `config.toml`
 - local agent notes and scratch scripts
@@ -401,7 +419,7 @@ backend values, ROM zip, FBNeo core, and the mk2 scoreboard font.
 ## Notes For Contributors
 
 Keep public commits free of ROMs, third-party runtime DLLs, private URLs,
-Discord application secrets, webhook URLs, OAuth tokens, logs, ghost recordings,
+Discord application secrets, webhook URLs, OAuth tokens, logs, drone recordings,
 and generated packages. Prefer configuration through `.env` or local ignored
 files.
 

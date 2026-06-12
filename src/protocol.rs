@@ -4,6 +4,7 @@
 //!
 //!   xband://join/<room_id>          Deep link from Discord "click to join" webhook
 //!   xband://watch/<session_id>      Deep link from Discord "spectate" webhook
+//!   xband://replay?url=<https-url>  Download and open a hosted .ncrp replay
 //!   xband://auth/callback#token=… OAuth redirect target (caught by local HTTP
 //!                                   server in matchmaking.rs, not the exe directly)
 //!
@@ -38,6 +39,16 @@ pub fn parse_uri(arg: &str) -> Option<XbandUri> {
             });
         }
     }
+    if let Some(query) = rest.strip_prefix("replay?") {
+        for pair in query.split('&') {
+            if let Some(value) = pair.strip_prefix("url=") {
+                let url = percent_decode(value)?;
+                if url.starts_with("https://") {
+                    return Some(XbandUri::Replay { url });
+                }
+            }
+        }
+    }
     None
 }
 
@@ -47,6 +58,59 @@ pub enum XbandUri {
     Join { room_id: String },
     /// xband://watch/<session_id> — request spectating an active match
     Watch { session_id: String },
+    /// xband://replay?url=<https-url> — download and open a hosted replay
+    Replay { url: String },
+}
+
+fn percent_decode(input: &str) -> Option<String> {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'%' => {
+                let hi = *bytes.get(i + 1)?;
+                let lo = *bytes.get(i + 2)?;
+                out.push((hex_value(hi)? << 4) | hex_value(lo)?);
+                i += 3;
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+fn hex_value(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_replay_url_deep_link() {
+        let uri = parse_uri(
+            "xband://replay?url=https%3A%2F%2Fjunkwax.github.io%2Ffreeplay-gametalk%2Freplays%2Fmatch.ncrp",
+        );
+        assert!(matches!(
+            uri,
+            Some(XbandUri::Replay { url }) if url == "https://junkwax.github.io/freeplay-gametalk/replays/match.ncrp"
+        ));
+    }
+
+    #[test]
+    fn rejects_non_https_replay_url() {
+        assert!(parse_uri("xband://replay?url=http%3A%2F%2Fexample.com%2Fmatch.ncrp").is_none());
+    }
 }
 
 // ── Windows registry registration ─────────────────────────────────────────────

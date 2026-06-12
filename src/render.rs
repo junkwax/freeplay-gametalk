@@ -1044,6 +1044,9 @@ pub fn draw_net_stats_overlay(
     let scale = 1;
     let pad = 9;
     let line_h = 18;
+    const ONLINE_BOX_W: i32 = 300;
+    const ONLINE_ROWS: usize = 12;
+
     let fps_text = fps
         .map(|v| format!("{v:.1} FPS"))
         .unwrap_or_else(|| "-- FPS".to_string());
@@ -1051,12 +1054,22 @@ pub fn draw_net_stats_overlay(
     let mut rows = vec![mode.to_string(), fps_text, ping_text];
     rows.extend(detail_rows.iter().cloned());
 
-    let mut content_w = font.text_width_overlay("NET STATS", scale);
-    for row in &rows {
-        content_w = content_w.max(font.text_width_exact(row, scale));
-    }
-    let box_w = (content_w + pad * 2).clamp(150, 280);
-    let box_h = pad * 2 + 24 + line_h * rows.len() as i32;
+    let stable_online = mode == "ONLINE";
+    let row_slots = if stable_online {
+        ONLINE_ROWS
+    } else {
+        rows.len().max(3)
+    };
+    let box_w = if stable_online {
+        ONLINE_BOX_W
+    } else {
+        let mut content_w = font.text_width_overlay("NET STATS", scale);
+        for row in &rows {
+            content_w = content_w.max(font.text_width_exact(row, scale));
+        }
+        (content_w + pad * 2).clamp(150, ONLINE_BOX_W)
+    };
+    let box_h = pad * 2 + 24 + line_h * row_slots as i32;
     let x = window_w - box_w - 18;
     let y = window_h - box_h - 24;
 
@@ -1074,7 +1087,8 @@ pub fn draw_net_stats_overlay(
     )?;
 
     let mut row_y = y + pad + 26;
-    for row in rows {
+    for row in rows.iter().take(row_slots) {
+        let row = fit_text_exact(font, row, scale, box_w - pad * 2);
         font.draw(
             canvas,
             &row,

@@ -4,6 +4,14 @@
 #![allow(dead_code)]
 
 pub const ACTIVE_PROCESS_LIST_ADDR: usize = 0x1B8DA; // active
+pub const BACKGROUND_LIST_1_ADDR: usize = 0x24E08; // baklst1
+pub const BACKGROUND_LIST_2_ADDR: usize = 0x24E04; // baklst2
+pub const BACKGROUND_LIST_3_ADDR: usize = 0x24E00; // baklst3
+pub const BACKGROUND_LIST_4_ADDR: usize = 0x24DFC; // baklst4
+pub const BACKGROUND_LIST_5_ADDR: usize = 0x24DF8; // baklst5
+pub const BACKGROUND_LIST_6_ADDR: usize = 0x24DF4; // baklst6
+pub const BACKGROUND_LIST_7_ADDR: usize = 0x24DF0; // baklst7
+pub const BACKGROUND_LIST_8_ADDR: usize = 0x24DEC; // baklst8
 pub const FREEZE_TIMER_ADDR: usize = 0x250F4; // f_freeze_timer
 pub const FREE_OBJECT_LIST_ADDR: usize = 0x253A4; // ofree
 pub const FREE_PROCESS_LIST_ADDR: usize = 0x1B8DE; // free

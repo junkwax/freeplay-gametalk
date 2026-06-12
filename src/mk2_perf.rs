@@ -14,31 +14,82 @@ const MAX_LINKS: usize = 512;
 pub struct Mk2PerfSample {
     pub active_processes: usize,
     pub free_processes: usize,
-    pub object_list_1: usize,
-    pub object_list_2: usize,
-    pub object_list_3: usize,
+    pub foreground_objects: [usize; 3],
+    pub background_objects: [usize; 8],
     pub free_objects: usize,
     pub overload: u16,
-    pub truncated: bool,
+    pub list_warnings: ListWarnings,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ListWarnings {
+    pub active: bool,
+    pub free_processes: bool,
+    pub foreground: [bool; 3],
+    pub background: [bool; 8],
+    pub free_objects: bool,
+}
+
+impl ListWarnings {
+    fn any(self) -> bool {
+        self.active
+            || self.free_processes
+            || self.free_objects
+            || self.foreground.iter().any(|v| *v)
+            || self.background.iter().any(|v| *v)
+    }
+
+    fn labels(self) -> Vec<&'static str> {
+        let mut labels = Vec::new();
+        if self.active {
+            labels.push("ACTIVE");
+        }
+        if self.free_processes {
+            labels.push("PFREE");
+        }
+        for (i, warn) in self.foreground.iter().enumerate() {
+            if *warn {
+                labels.push(["OBJ1", "OBJ2", "OBJ3"][i]);
+            }
+        }
+        for (i, warn) in self.background.iter().enumerate() {
+            if *warn {
+                labels.push(
+                    [
+                        "BAK1", "BAK2", "BAK3", "BAK4", "BAK5", "BAK6", "BAK7", "BAK8",
+                    ][i],
+                );
+            }
+        }
+        if self.free_objects {
+            labels.push("OFREE");
+        }
+        labels
+    }
 }
 
 impl Mk2PerfSample {
     pub fn detail_rows(self) -> Vec<String> {
+        let foreground_total: usize = self.foreground_objects.iter().sum();
+        let background_total: usize = self.background_objects.iter().sum();
         let mut rows = vec![
             format!(
                 "MK2 PROC A{} F{}",
                 self.active_processes, self.free_processes
             ),
             format!(
-                "MK2 OBJ {}+{}+{} F{}",
-                self.object_list_1, self.object_list_2, self.object_list_3, self.free_objects
+                "MK2 OBJ FG{} BG{} F{}",
+                foreground_total, background_total, self.free_objects
             ),
         ];
         if self.overload != 0 {
             rows.push(format!("MK2 OVER {}", self.overload));
         }
-        if self.truncated {
-            rows.push("MK2 LIST CHECK".to_string());
+        if self.list_warnings.any() {
+            rows.push(format!(
+                "MK2 LIST {}",
+                self.list_warnings.labels().join(",")
+            ));
         }
         rows
     }
@@ -46,27 +97,38 @@ impl Mk2PerfSample {
 
 pub fn sample(core: &Core) -> Option<Mk2PerfSample> {
     let ram = core.memory(RETRO_MEMORY_SYSTEM_RAM)?;
-    let (active_processes, active_truncated) = count_list(ram, mk2_addrs::ACTIVE_PROCESS_LIST_ADDR);
-    let (free_processes, free_proc_truncated) = count_list(ram, mk2_addrs::FREE_PROCESS_LIST_ADDR);
-    let (object_list_1, obj1_truncated) = count_list(ram, mk2_addrs::OBJECT_LIST_1_ADDR);
-    let (object_list_2, obj2_truncated) = count_list(ram, mk2_addrs::OBJECT_LIST_2_ADDR);
-    let (object_list_3, obj3_truncated) = count_list(ram, mk2_addrs::OBJECT_LIST_3_ADDR);
-    let (free_objects, free_obj_truncated) = count_list(ram, mk2_addrs::FREE_OBJECT_LIST_ADDR);
+    let (active_processes, active_warn) = count_list(ram, mk2_addrs::ACTIVE_PROCESS_LIST_ADDR);
+    let (free_processes, free_proc_warn) = count_list(ram, mk2_addrs::FREE_PROCESS_LIST_ADDR);
+    let (obj1, obj1_warn) = count_list(ram, mk2_addrs::OBJECT_LIST_1_ADDR);
+    let (obj2, obj2_warn) = count_list(ram, mk2_addrs::OBJECT_LIST_2_ADDR);
+    let (obj3, obj3_warn) = count_list(ram, mk2_addrs::OBJECT_LIST_3_ADDR);
+    let (bak1, bak1_warn) = count_list(ram, mk2_addrs::BACKGROUND_LIST_1_ADDR);
+    let (bak2, bak2_warn) = count_list(ram, mk2_addrs::BACKGROUND_LIST_2_ADDR);
+    let (bak3, bak3_warn) = count_list(ram, mk2_addrs::BACKGROUND_LIST_3_ADDR);
+    let (bak4, bak4_warn) = count_list(ram, mk2_addrs::BACKGROUND_LIST_4_ADDR);
+    let (bak5, bak5_warn) = count_list(ram, mk2_addrs::BACKGROUND_LIST_5_ADDR);
+    let (bak6, bak6_warn) = count_list(ram, mk2_addrs::BACKGROUND_LIST_6_ADDR);
+    let (bak7, bak7_warn) = count_list(ram, mk2_addrs::BACKGROUND_LIST_7_ADDR);
+    let (bak8, bak8_warn) = count_list(ram, mk2_addrs::BACKGROUND_LIST_8_ADDR);
+    let (free_objects, free_obj_warn) = count_list(ram, mk2_addrs::FREE_OBJECT_LIST_ADDR);
 
     Some(Mk2PerfSample {
         active_processes,
         free_processes,
-        object_list_1,
-        object_list_2,
-        object_list_3,
+        foreground_objects: [obj1, obj2, obj3],
+        background_objects: [bak1, bak2, bak3, bak4, bak5, bak6, bak7, bak8],
         free_objects,
         overload: peek_u16(ram, mk2_addrs::OVERLOAD_ADDR).unwrap_or(0),
-        truncated: active_truncated
-            || free_proc_truncated
-            || obj1_truncated
-            || obj2_truncated
-            || obj3_truncated
-            || free_obj_truncated,
+        list_warnings: ListWarnings {
+            active: active_warn,
+            free_processes: free_proc_warn,
+            foreground: [obj1_warn, obj2_warn, obj3_warn],
+            background: [
+                bak1_warn, bak2_warn, bak3_warn, bak4_warn, bak5_warn, bak6_warn, bak7_warn,
+                bak8_warn,
+            ],
+            free_objects: free_obj_warn,
+        },
     })
 }
 

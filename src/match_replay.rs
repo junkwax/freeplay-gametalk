@@ -23,7 +23,11 @@ pub struct ReplayMeta {
     pub path: String,
     pub p1_name: String,
     pub p2_name: String,
+    pub p1_score: Option<u16>,
+    pub p2_score: Option<u16>,
+    pub winner: String,
     pub frame_count: u32,
+    pub duration: String,
     pub note: String,
     pub bookmark_count: usize,
 }
@@ -579,6 +583,7 @@ fn read_meta(path: &Path) -> std::io::Result<ReplayMeta> {
     let mut f = std::fs::File::open(path)?;
     let header = read_header(&mut f)?;
     let notes = load_replay_notes(path);
+    let summary = load_replay_summary(path);
     Ok(ReplayMeta {
         filename: path
             .file_name()
@@ -588,10 +593,51 @@ fn read_meta(path: &Path) -> std::io::Result<ReplayMeta> {
         path: path.to_string_lossy().into_owned(),
         p1_name: header.p1_name,
         p2_name: header.p2_name,
+        p1_score: summary.p1_score,
+        p2_score: summary.p2_score,
+        winner: summary.winner,
         frame_count: header.frame_count,
+        duration: summary.duration,
         note: notes.note,
         bookmark_count: notes.bookmarks.len(),
     })
+}
+
+#[derive(Default)]
+struct ReplaySummary {
+    p1_score: Option<u16>,
+    p2_score: Option<u16>,
+    winner: String,
+    duration: String,
+}
+
+fn load_replay_summary(path: &Path) -> ReplaySummary {
+    let Ok(text) = std::fs::read_to_string(path.with_extension("ncrp.json")) else {
+        return ReplaySummary::default();
+    };
+    ReplaySummary {
+        p1_score: summary_json_u64(&text, "p1_score").map(|v| v.min(u16::MAX as u64) as u16),
+        p2_score: summary_json_u64(&text, "p2_score").map(|v| v.min(u16::MAX as u64) as u16),
+        winner: summary_json_str(&text, "winner").unwrap_or_default(),
+        duration: summary_json_str(&text, "duration").unwrap_or_default(),
+    }
+}
+
+fn summary_json_str(json: &str, key: &str) -> Option<String> {
+    let pat = format!("\"{key}\": \"");
+    let start = json.find(&pat)? + pat.len();
+    let end = json[start..].find('"')?;
+    Some(json[start..start + end].to_string())
+}
+
+fn summary_json_u64(json: &str, key: &str) -> Option<u64> {
+    let pat = format!("\"{key}\": ");
+    let start = json.find(&pat)? + pat.len();
+    let tail = &json[start..];
+    let end = tail
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(tail.len());
+    tail[..end].parse().ok()
 }
 
 fn load_replay_notes<P: AsRef<Path>>(path: P) -> ReplayNotes {
@@ -837,7 +883,11 @@ mod tests {
             path: "online.ncrp".into(),
             p1_name: "PlayerOne".into(),
             p2_name: "Opponent".into(),
+            p1_score: None,
+            p2_score: None,
+            winner: String::new(),
             frame_count: 10,
+            duration: String::new(),
             note: String::new(),
             bookmark_count: 0,
         };
