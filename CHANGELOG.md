@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.4 - 2026-06-12
+
+### Added
+
+- Added an Input Delay setting to the Options menu, backed by `config.toml`.
+  Netplay now reads the persisted delay value when starting direct or relay
+  matches, making rollback/input-latency tuning available without editing files.
+
 ## 0.7.2 - 2026-06-10
 
 ### Fixed
