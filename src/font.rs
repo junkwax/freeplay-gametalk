@@ -11,7 +11,7 @@ use sdl2::render::{Canvas, Texture, TextureCreator};
 use sdl2::ttf::Sdl2TtfContext;
 use sdl2::video::{Window, WindowContext};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub const GLYPH_W: u32 = 8;
 pub const GLYPH_H: u32 = 8;
@@ -387,10 +387,23 @@ fn fallback_text_width(text: &str, scale: u32) -> i32 {
 }
 
 fn resolve_font(candidates: &[&str]) -> Option<String> {
-    candidates
-        .iter()
-        .find(|path| Path::new(path).exists())
-        .map(|path| path.to_string())
+    font_search_paths(candidates)
+        .into_iter()
+        .find(|path| path.exists())
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
+fn font_search_paths(candidates: &[&str]) -> Vec<PathBuf> {
+    let mut paths: Vec<PathBuf> = candidates.iter().map(PathBuf::from).collect();
+    if let Some(exe_dir) = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf))
+    {
+        for candidate in candidates {
+            paths.push(exe_dir.join(candidate));
+        }
+    }
+    paths
 }
 
 fn overlay_font_candidates() -> Vec<String> {

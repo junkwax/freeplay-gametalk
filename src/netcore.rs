@@ -267,6 +267,10 @@ pub fn step_netplay_frame(
     );
 
     let mut advances_seen = 0usize;
+    let mut sim_frame = sess
+        .current_frame()
+        .saturating_sub(advance_count.min(i32::MAX as usize) as i32);
+    let confirmed_frame = sess.confirmed_frame();
 
     for req in requests {
         match req {
@@ -347,7 +351,8 @@ pub fn step_netplay_frame(
                 let p2_bits = inputs[1].0.bits;
                 dlog!(
                     "net",
-                    "AdvanceFrame #{}/{} p1=0x{:04x} p2=0x{:04x} silent={}",
+                    "AdvanceFrame frame={} #{}/{} p1=0x{:04x} p2=0x{:04x} silent={}",
+                    sim_frame,
                     advances_seen,
                     advance_count,
                     p1_bits,
@@ -356,19 +361,23 @@ pub fn step_netplay_frame(
                 );
                 apply_snapshot(Player::P1, p1_bits);
                 apply_snapshot(Player::P2, p2_bits);
+                if let Some(rec) = replay_recording.as_mut() {
+                    rec.record_frame(core, sim_frame, p1_bits, p2_bits);
+                }
                 if is_last {
                     if let Some(rec) = net_recording.as_mut() {
-                        rec.record_confirmed_frame(core, p1_bits, p2_bits);
-                    }
-                    if let Some(rec) = replay_recording.as_mut() {
                         rec.record_confirmed_frame(core, p1_bits, p2_bits);
                     }
                 }
                 unsafe {
                     (core.run)();
                 }
+                sim_frame = sim_frame.saturating_add(1);
             }
         }
+    }
+    if let Some(rec) = replay_recording.as_mut() {
+        rec.set_confirmed_frame(confirmed_frame);
     }
     unsafe {
         SILENT_MODE = false;

@@ -72,6 +72,42 @@ use std::time::{Duration, Instant};
 
 const CHAT_MAX_LINES: usize = 8;
 
+fn adopt_packaged_working_dir() {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let Some(exe_dir) = exe.parent() else {
+        return;
+    };
+    let package_markers = [
+        "config.toml",
+        ".env",
+        "media/mk2.ttf",
+        "fbneo_libretro.dll",
+        "fbneo_libretro.so",
+        "fbneo_libretro.dylib",
+    ];
+    if !package_markers
+        .iter()
+        .any(|marker| exe_dir.join(marker).exists())
+    {
+        return;
+    }
+    let Ok(cwd) = std::env::current_dir() else {
+        return;
+    };
+    if cwd == exe_dir {
+        return;
+    }
+    match std::env::set_current_dir(exe_dir) {
+        Ok(()) => println!("[main] working directory set to {}", exe_dir.display()),
+        Err(e) => println!(
+            "[main] could not set working directory to {}: {e}",
+            exe_dir.display()
+        ),
+    }
+}
+
 #[cfg(target_os = "windows")]
 fn launch_debugger() -> std::io::Result<()> {
     let exe = std::env::current_exe()?;
@@ -1124,6 +1160,8 @@ fn run_render_probe() -> Result<(), Box<dyn std::error::Error>> {
 
 #[allow(static_mut_refs)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    adopt_packaged_working_dir();
+
     if cli::render_probe_requested() {
         return run_render_probe();
     }

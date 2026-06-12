@@ -47,6 +47,8 @@ pub struct ReplayBookmark {
 pub struct Recording {
     initial_state: Option<Vec<u8>>,
     inputs: Vec<[u16; 2]>,
+    base_frame: Option<i32>,
+    confirmed_frame: Option<i32>,
     p1_name: String,
     p2_name: String,
     started_unix: u64,
@@ -57,26 +59,53 @@ impl Recording {
         Self {
             initial_state: None,
             inputs: Vec::new(),
+            base_frame: None,
+            confirmed_frame: None,
             p1_name: clean_name(&p1_name.into()),
             p2_name: clean_name(&p2_name.into()),
             started_unix: unix_now(),
         }
     }
 
-    pub fn record_confirmed_frame(&mut self, core: &Core, p1_bits: u16, p2_bits: u16) {
+    pub fn record_frame(&mut self, core: &Core, frame: i32, p1_bits: u16, p2_bits: u16) {
+        if frame < 0 {
+            return;
+        }
         if self.initial_state.is_none() {
             self.initial_state = core.save_state();
+            self.base_frame = Some(frame);
             if let Some(state) = &self.initial_state {
-                println!("[replay] Anchor state captured ({} bytes)", state.len());
+                println!(
+                    "[replay] Anchor state captured at frame {frame} ({} bytes)",
+                    state.len()
+                );
             }
         }
+        let Some(base_frame) = self.base_frame else {
+            return;
+        };
+        if frame < base_frame {
+            println!("[replay] Ignoring rollback frame {frame} before replay anchor {base_frame}");
+            return;
+        }
         if self.initial_state.is_some() {
-            self.inputs.push([p1_bits, p2_bits]);
+            let index = (frame - base_frame) as usize;
+            if self.inputs.len() <= index {
+                self.inputs.resize(index + 1, [0, 0]);
+            }
+            self.inputs[index] = [p1_bits, p2_bits];
         }
     }
 
+    pub fn set_confirmed_frame(&mut self, frame: i32) {
+        if frame < 0 {
+            return;
+        }
+        self.confirmed_frame = Some(self.confirmed_frame.map_or(frame, |prev| prev.max(frame)));
+    }
+
     pub fn frame_count(&self) -> usize {
-        self.inputs.len()
+        self.savable_frame_count()
     }
 
     pub fn save_default(&self) -> std::io::Result<PathBuf> {
@@ -100,19 +129,37 @@ impl Recording {
             ));
         };
         let mut f = std::fs::File::create(path)?;
+        let input_count = self.savable_frame_count();
         write_header(
             &mut f,
-            self.inputs.len() as u32,
+            input_count as u32,
             state.len() as u32,
             &self.p1_name,
             &self.p2_name,
         )?;
         f.write_all(state)?;
-        for frame in &self.inputs {
+        for frame in self.inputs.iter().take(input_count) {
             f.write_all(&frame[0].to_le_bytes())?;
             f.write_all(&frame[1].to_le_bytes())?;
         }
         Ok(())
+    }
+
+    fn savable_frame_count(&self) -> usize {
+        let Some(base_frame) = self.base_frame else {
+            return 0;
+        };
+        let confirmed_count = self
+            .confirmed_frame
+            .map(|frame| {
+                if frame < base_frame {
+                    0
+                } else {
+                    (frame - base_frame + 1) as usize
+                }
+            })
+            .unwrap_or(self.inputs.len());
+        confirmed_count.min(self.inputs.len())
     }
 }
 
@@ -862,6 +909,20 @@ mod tests {
         assert_eq!(header.state_size, 456);
         assert_eq!(header.p1_name, "P1");
         assert_eq!(header.p2_name, "Opponent");
+    }
+
+    #[test]
+    fn recording_frame_count_tracks_confirmed_frames() {
+        let mut rec = Recording::new("P1", "P2");
+        rec.initial_state = Some(vec![1, 2, 3]);
+        rec.base_frame = Some(10);
+        rec.inputs = vec![[0x0001, 0x0002], [0x0003, 0x0004], [0x0005, 0x0006]];
+
+        assert_eq!(rec.frame_count(), 3);
+        rec.set_confirmed_frame(11);
+        assert_eq!(rec.frame_count(), 2);
+        rec.set_confirmed_frame(12);
+        assert_eq!(rec.frame_count(), 3);
     }
 
     #[test]
