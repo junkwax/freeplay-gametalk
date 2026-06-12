@@ -225,6 +225,12 @@ fn platform_core_name() -> &'static str {
     }
 }
 
+/// Cache key for the pre-rendered filter overlay: the overlay's pixels only
+/// depend on these, so it is rebuilt on filter switch or window resize and
+/// costs a single texture copy per frame otherwise.
+pub type OverlayKey = (crate::config::VideoFilter, u32, u32, bool);
+pub type OverlayCache<'a> = Option<(OverlayKey, sdl2::render::Texture<'a>)>;
+
 /// Blit the current emulator frame into the canvas. Does NOT call `present()` —
 /// callers that want to overlay a HUD on top should draw, then present themselves.
 #[allow(static_mut_refs)]
@@ -232,6 +238,7 @@ pub fn draw_emu_frame<'a>(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     texture: &mut sdl2::render::Texture<'a>,
     tc: &'a sdl2::render::TextureCreator<sdl2::video::WindowContext>,
+    overlay_cache: &mut OverlayCache<'a>,
     filter: crate::config::VideoFilter,
     aspect: crate::config::AspectMode,
     crt_corner_bend: bool,
@@ -256,7 +263,7 @@ pub fn draw_emu_frame<'a>(
             let (out_w, out_h) = canvas.output_size()?;
             let dst = frame_destination(out_w, out_h, FRAME_WIDTH, FRAME_HEIGHT, aspect);
             canvas.copy(texture, None, dst)?;
-            draw_video_filter_overlay(canvas, filter, dst, crt_corner_bend)?;
+            draw_video_filter_overlay(canvas, tc, overlay_cache, filter, dst, crt_corner_bend)?;
         }
     }
     Ok(())
@@ -298,8 +305,10 @@ fn apply_scale_quality(filter: crate::config::VideoFilter) {
     let _ = sdl2::hint::set("SDL_RENDER_SCALE_QUALITY", quality);
 }
 
-fn draw_video_filter_overlay(
+fn draw_video_filter_overlay<'a>(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    tc: &'a sdl2::render::TextureCreator<sdl2::video::WindowContext>,
+    cache: &mut OverlayCache<'a>,
     filter: crate::config::VideoFilter,
     dst: Option<Rect>,
     crt_corner_bend: bool,
@@ -307,6 +316,58 @@ fn draw_video_filter_overlay(
     let Some(dst) = dst else {
         return Ok(());
     };
+    if matches!(
+        filter,
+        crate::config::VideoFilter::Sharp | crate::config::VideoFilter::Smooth
+    ) {
+        return Ok(());
+    }
+
+    let key: OverlayKey = (filter, dst.width(), dst.height(), crt_corner_bend);
+    let cached = matches!(cache, Some((k, _)) if *k == key);
+    if !cached {
+        *cache = build_overlay_texture(canvas, tc, key);
+    }
+    match cache {
+        Some((_, tex)) => canvas.copy(tex, None, dst),
+        // Render targets unsupported on this driver — draw procedurally.
+        None => draw_overlay_layers(canvas, filter, dst, crt_corner_bend),
+    }
+}
+
+/// Render the overlay once into a transparent target texture. Returns None
+/// when the renderer can't do render targets; callers fall back to drawing
+/// the layers directly every frame.
+fn build_overlay_texture<'a>(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    tc: &'a sdl2::render::TextureCreator<sdl2::video::WindowContext>,
+    key: OverlayKey,
+) -> OverlayCache<'a> {
+    let (filter, w, h, bend) = key;
+    let mut tex = tc
+        .create_texture_target(PixelFormatEnum::ARGB8888, w, h)
+        .ok()?;
+    tex.set_blend_mode(sdl2::render::BlendMode::Blend);
+    let mut draw_err: Option<String> = None;
+    let target = canvas.with_texture_canvas(&mut tex, |c| {
+        c.set_draw_color(Color::RGBA(0, 0, 0, 0));
+        c.clear();
+        if let Err(e) = draw_overlay_layers(c, filter, Rect::new(0, 0, w, h), bend) {
+            draw_err = Some(e);
+        }
+    });
+    if target.is_err() || draw_err.is_some() {
+        return None;
+    }
+    Some((key, tex))
+}
+
+fn draw_overlay_layers(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    filter: crate::config::VideoFilter,
+    dst: Rect,
+    crt_corner_bend: bool,
+) -> Result<(), String> {
     match filter {
         crate::config::VideoFilter::Sharp | crate::config::VideoFilter::Smooth => {}
         crate::config::VideoFilter::Scanlines => {
@@ -397,13 +458,18 @@ fn draw_shadow_mask(
 ) -> Result<(), String> {
     let y = dst.y();
     let h = dst.height();
-    for x in (dst.x()..(dst.x() + dst.width() as i32)).step_by(3) {
-        canvas.set_draw_color(Color::RGBA(255, 0, 0, alpha));
-        canvas.fill_rect(Rect::new(x, y, 1, h))?;
-        canvas.set_draw_color(Color::RGBA(0, 255, 0, alpha));
-        canvas.fill_rect(Rect::new(x + 1, y, 1, h))?;
-        canvas.set_draw_color(Color::RGBA(0, 70, 255, alpha));
-        canvas.fill_rect(Rect::new(x + 2, y, 1, h))?;
+    // One pass per color: SDL's renderer flushes its batch on every draw-color
+    // change, so interleaving R/G/B columns costs ~3 draw calls per column.
+    let colors = [
+        Color::RGBA(255, 0, 0, alpha),
+        Color::RGBA(0, 255, 0, alpha),
+        Color::RGBA(0, 70, 255, alpha),
+    ];
+    for (offset, color) in colors.into_iter().enumerate() {
+        canvas.set_draw_color(color);
+        for x in (dst.x()..(dst.x() + dst.width() as i32)).step_by(3) {
+            canvas.fill_rect(Rect::new(x + offset as i32, y, 1, h))?;
+        }
     }
     Ok(())
 }

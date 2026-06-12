@@ -30,7 +30,7 @@ pub fn signaling_url() -> Option<String> {
     None
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
     pub bindings: Bindings,
@@ -97,6 +97,16 @@ pub struct Config {
     /// specials. Valid range: 0–8.
     #[serde(default = "default_input_delay")]
     pub input_delay: u32,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        // Derived Default would zero every field, ignoring the serde defaults
+        // (a fresh install used to start with volume_percent = 0, i.e. silent).
+        // Deserializing an empty TOML applies the serde defaults, so a missing
+        // config file behaves exactly like an empty one.
+        toml::from_str("").expect("empty config deserializes via serde defaults")
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -264,6 +274,11 @@ pub fn load() -> Config {
     };
     apply_env_overrides(&mut cfg);
     cfg.volume_percent = cfg.volume_percent.min(100);
+    if cfg.volume_percent == 0 {
+        // Configs written while Config::default() zeroed volume_percent have
+        // 0 persisted; nobody chose a silent install, so rescue them to 80.
+        cfg.volume_percent = 80;
+    }
     if cfg.guest_device_id.is_empty() {
         cfg.guest_device_id = generate_device_id();
         save(&cfg);
@@ -468,6 +483,17 @@ fn parse_env_line(line: &str) -> Option<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_config_matches_serde_defaults() {
+        // Config::default() must agree with the serde field defaults; the
+        // derived impl used to zero volume_percent, shipping silent installs.
+        let cfg = Config::default();
+        assert_eq!(cfg.volume_percent, 100);
+        assert!(cfg.discord_rpc_enabled);
+        assert!(cfg.crt_corner_bend);
+        assert_eq!(cfg.input_delay, 3);
+    }
 
     #[test]
     fn migrates_saved_username_as_confirmed() {

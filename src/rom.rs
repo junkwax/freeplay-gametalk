@@ -12,6 +12,33 @@ pub fn find_rom_zip() -> Option<PathBuf> {
         .or_else(|| exe_dir().and_then(|dir| first_zip_in_path(&dir)))
 }
 
+/// Cached ROM presence with a periodic recheck. `find_rom_zip` stats several
+/// paths and scans up to four directories; the menu asks every frame, so an
+/// uncached check is filesystem I/O at ~55 Hz. A 1-second recheck keeps the
+/// "drop mk2.zip in while the app is running" detection.
+pub struct PresenceCache {
+    present: bool,
+    next_check: std::time::Instant,
+}
+
+impl PresenceCache {
+    pub fn new() -> Self {
+        Self {
+            present: find_rom_zip().is_some(),
+            next_check: std::time::Instant::now() + std::time::Duration::from_secs(1),
+        }
+    }
+
+    pub fn check(&mut self) -> bool {
+        let now = std::time::Instant::now();
+        if now >= self.next_check {
+            self.present = find_rom_zip().is_some();
+            self.next_check = now + std::time::Duration::from_secs(1);
+        }
+        self.present
+    }
+}
+
 pub fn find_rom_zip_string() -> Option<String> {
     find_rom_zip().map(|p| p.to_string_lossy().into_owned())
 }

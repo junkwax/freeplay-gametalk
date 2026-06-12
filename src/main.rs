@@ -48,7 +48,7 @@ use crate::netcore::{reset_for_netplay, step_netplay_frame, NetRuntime};
 use crate::render::{
     draw_chat_overlay, draw_emu_frame, draw_fight_overlay, draw_lab_assist_overlay,
     draw_net_stats_overlay, draw_replay_review_overlay, ensure_core_loaded, format_probe_result,
-    route_player,
+    route_player, OverlayCache,
 };
 use crate::retro::*;
 use crate::session::{
@@ -549,20 +549,16 @@ fn handle_replay_select_shortcut(event: &Event, state: &mut AppState) -> bool {
     }
 }
 
-fn apply_volume(samples: &[i16], volume_percent: u8) -> Vec<i16> {
-    if volume_percent >= 100 {
-        return samples.to_vec();
-    }
+fn apply_volume(samples: &mut [i16], volume_percent: u8) {
     let volume = volume_percent as i32;
-    samples
-        .iter()
-        .map(|s| ((*s as i32 * volume) / 100).clamp(i16::MIN as i32, i16::MAX as i32) as i16)
-        .collect()
+    for s in samples.iter_mut() {
+        *s = ((*s as i32 * volume) / 100).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+    }
 }
 
 fn queue_game_audio(
     q: &AudioQueue<i16>,
-    samples: &[i16],
+    samples: &mut [i16],
     volume_percent: u8,
     buffer: config::AudioBuffer,
 ) {
@@ -586,12 +582,12 @@ fn queue_game_audio(
         );
     }
 
-    if volume_percent >= 100 {
-        let _ = q.queue_audio(samples);
-    } else {
-        let scaled = apply_volume(samples, volume_percent);
-        let _ = q.queue_audio(&scaled);
+    // Scale in place: the caller clears the buffer right after queueing, so
+    // mutating it avoids a per-frame allocation at sub-100% volume.
+    if volume_percent < 100 {
+        apply_volume(samples, volume_percent);
     }
+    let _ = q.queue_audio(samples);
 }
 
 fn finish_clip_recording(recorder: clip::ClipRecorder) -> String {
@@ -648,6 +644,35 @@ fn export_replay_clip(
     }
 }
 
+/// Always persist a crash report locally. The incident upload to the
+/// signaling server is skipped when the player isn't signed in, which is
+/// exactly when first-launch crashes happen — this file is what we ask
+/// users to attach to a GitHub issue.
+fn write_local_crash_log(summary: &str, location: &str) {
+    use std::io::Write;
+    let unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let path = format!("crash_{unix}.log");
+    let Ok(mut f) = std::fs::File::create(&path) else {
+        return;
+    };
+    let _ = writeln!(f, "Freeplay crash report");
+    let _ = writeln!(f, "version: {}", version::footer_string());
+    let _ = writeln!(f, "os: {}", std::env::consts::OS);
+    let _ = writeln!(f, "panic: {summary}{location}");
+    let _ = writeln!(
+        f,
+        "\nPlease attach this file (and freeplay-net.log if present) to an issue at"
+    );
+    let _ = writeln!(
+        f,
+        "https://github.com/junkwax/freeplay-gametalk/issues"
+    );
+    println!("[crash] wrote {path}");
+}
+
 fn install_panic_incident_hook() {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -667,6 +692,7 @@ fn install_panic_incident_hook() {
         inc.net_log_path = Some(std::path::PathBuf::from("freeplay-net.log"));
         let (_rom_size, rom_hash) = rom_fingerprint();
         inc.rom_hash = Some(format!("{rom_hash:016x}"));
+        write_local_crash_log(&summary, &location);
         incident::submit_now(&inc);
     }));
 }
@@ -722,13 +748,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         window.set_icon(icon);
     }
-    let mut canvas = window.into_canvas().build()?;
+    let mut canvas = window.into_canvas().target_texture().build()?;
     canvas.set_blend_mode(BlendMode::Blend);
     canvas.set_logical_size(LOGICAL_W as u32, LOGICAL_H as u32)?;
     let texture_creator = canvas.texture_creator();
 
     let mut emu_texture =
         texture_creator.create_texture_streaming(PixelFormatEnum::ARGB8888, 400, 254)?;
+    let mut overlay_cache: OverlayCache = None;
 
     let ttf_ctx = match sdl2::ttf::init() {
         Ok(c) => Some(c),
@@ -749,7 +776,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     crate::rpc::set_discord_client_id(cfg.discord_client_id.clone());
     install_panic_incident_hook();
     let mut state = AppState::default();
-    let rom_present = || rom::find_rom_zip().is_some();
+    let mut rom_present = rom::PresenceCache::new();
 
     let mut discord_user: Option<String> = matchmaking::username_from_cached_token();
     let mut discord_id: Option<String> = matchmaking::discord_id_from_cached_token();
@@ -912,9 +939,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut live_matches_next_refresh = Instant::now();
     let mut toast: Option<(String, Instant)> = None;
     let frame_duration = Duration::from_micros(18281);
+    let mut next_frame_deadline = Instant::now() + frame_duration;
     let mut fps_sample_started = Instant::now();
     let mut fps_sample_frames: u32 = 0;
     let mut current_fps: Option<f32> = None;
+    let mut rpc_pulse: u32 = 0;
 
     ghost::drain_upload_queue(&cfg.stats_url);
     ghost::queue_all_local_ghosts(
@@ -925,7 +954,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     'running: loop {
-        let frame_start = Instant::now();
 
         if chat_open
             || matches!(
@@ -1588,7 +1616,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         match nav {
                             MenuNav::Up => state.nav_up(),
                             MenuNav::Down => state.nav_down(),
-                            MenuNav::Accept => match state.nav_accept(rom_present()) {
+                            MenuNav::Accept => match state.nav_accept(rom_present.check()) {
                                 NavResult::StartLocal { lab } => {
                                     let previous_local_mode = local_play_mode;
                                     local_play_mode = if lab {
@@ -3813,7 +3841,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                                 queue_game_audio(
                                     q,
-                                    &AUDIO_BUFFER,
+                                    &mut AUDIO_BUFFER,
                                     cfg.volume_percent,
                                     cfg.audio_buffer,
                                 );
@@ -4006,6 +4034,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &mut canvas,
                     &mut emu_texture,
                     &texture_creator,
+                    &mut overlay_cache,
                     cfg.video_filter,
                     cfg.aspect_mode,
                     cfg.crt_corner_bend,
@@ -4519,7 +4548,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &mut font,
                     win_w as i32,
                     win_h as i32,
-                    rom_present(),
+                    rom_present.check(),
                     discord_user.as_deref(),
                     &main_leaderboard,
                     toast_payload(&toast),
@@ -5032,7 +5061,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &mut font,
                     win_w as i32,
                     win_h as i32,
-                    rom_present(),
+                    rom_present.check(),
                     discord_user.as_deref(),
                     &main_leaderboard,
                     toast_payload(&toast),
@@ -5043,8 +5072,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        let elapsed = frame_start.elapsed();
-        if let Some(ref mut rc) = rpc_client {
+        // Discord rate-limits presence updates to a tiny fraction of frame
+        // rate; building the snapshot (string formats + RAM reads) 55×/s is
+        // wasted work. ~2 Hz keeps presence fresh.
+        rpc_pulse = rpc_pulse.wrapping_add(1);
+        let rpc_due = rpc_pulse % 28 == 0;
+        if let Some(rc) = rpc_client.as_mut().filter(|_| rpc_due) {
             let is_training = ghost_recording.is_some() || ghost_playback.is_some();
             let rpc_state = if let Some(ref _sess) = net_session {
                 if let Some(ref name) = peer_name {
@@ -5100,8 +5133,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             rc.update(update);
         }
-        if elapsed < frame_duration {
-            std::thread::sleep(frame_duration - elapsed);
+        // Absolute-deadline pacing: sleep until a fixed deadline and advance it
+        // by exactly one frame, so sleep overshoot is reclaimed on the next
+        // frame instead of accumulating (relative sleeps ran the game ~2% slow).
+        let now = Instant::now();
+        if now < next_frame_deadline {
+            std::thread::sleep(next_frame_deadline - now);
+            next_frame_deadline += frame_duration;
+        } else if now - next_frame_deadline > frame_duration * 4 {
+            // Fell far behind (window drag, stall) — resync instead of
+            // fast-forwarding through the backlog.
+            next_frame_deadline = now + frame_duration;
+        } else {
+            next_frame_deadline += frame_duration;
         }
         fps_sample_frames = fps_sample_frames.saturating_add(1);
         let fps_elapsed = fps_sample_started.elapsed();

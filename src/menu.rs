@@ -1309,7 +1309,7 @@ fn draw_main(
     }
 
     if !rom_present {
-        let ready_line = "Setup needs ROM zip - Shift+D opens Doctor";
+        let ready_line = "Place mk2.zip in the roms folder (detected automatically) - Shift+D runs Doctor";
         let s = small_scale(h);
         let ready_w = font.text_width_exact(ready_line, s);
         let panel_w = (ready_w + 18).min(w - 56).max(ready_w + 8);

@@ -77,11 +77,15 @@ fn embed_windows_icon() {
     };
     let rc_path = out_dir.join("freeplay_icon.rc");
     let res_path = out_dir.join("freeplay_icon.res");
-    if std::fs::write(&rc_path, r#"1 ICON "src/app.ico""#).is_err() {
+    if std::fs::write(&rc_path, build_rc_contents()).is_err() {
         return;
     }
 
-    let rc = std::process::Command::new("rc.exe")
+    let Some(rc_exe) = find_rc_exe() else {
+        println!("cargo:warning=rc.exe not found (PATH or Windows SDK); exe icon/version info not embedded");
+        return;
+    };
+    let rc = std::process::Command::new(&rc_exe)
         .args([
             "/nologo",
             "/fo",
@@ -92,7 +96,69 @@ fn embed_windows_icon() {
 
     if matches!(rc, Ok(status) if status.success()) {
         println!("cargo:rustc-link-arg-bins={}", res_path.display());
+    } else {
+        println!("cargo:warning=rc.exe failed; exe icon/version info not embedded");
     }
+}
+
+/// rc.exe is only on PATH inside a VS developer prompt; plain `cargo build`
+/// from a normal shell needs the Windows SDK location resolved by hand.
+fn find_rc_exe() -> Option<std::path::PathBuf> {
+    let on_path = std::process::Command::new("rc.exe")
+        .arg("/?")
+        .output()
+        .is_ok();
+    if on_path {
+        return Some(std::path::PathBuf::from("rc.exe"));
+    }
+    let kits = std::path::Path::new(r"C:\Program Files (x86)\Windows Kits\10\bin");
+    let mut versions: Vec<std::path::PathBuf> = std::fs::read_dir(kits)
+        .ok()?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.join("x64").join("rc.exe").is_file())
+        .collect();
+    versions.sort(); // lexicographic works for 10.0.NNNNN.0 names
+    versions.pop().map(|p| p.join("x64").join("rc.exe"))
+}
+
+/// Icon plus a VERSIONINFO block so the exe's Properties → Details shows
+/// product name, version, and the project URL instead of blank fields.
+/// (The Explorer/SmartScreen "Publisher" line comes from an Authenticode
+/// signature, not from this resource — unsigned builds still say Unknown.)
+fn build_rc_contents() -> String {
+    let semver = std::env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.0.0".into());
+    let mut parts = semver.split('.').map(|p| p.parse::<u16>().unwrap_or(0));
+    let (maj, min, pat) = (
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+    );
+    format!(
+        r#"1 ICON "src/app.ico"
+1 VERSIONINFO
+FILEVERSION {maj},{min},{pat},0
+PRODUCTVERSION {maj},{min},{pat},0
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName", "Freeplay (github.com/junkwax/freeplay-gametalk)"
+      VALUE "FileDescription", "Freeplay - MK2 netplay client"
+      VALUE "FileVersion", "{semver}"
+      VALUE "ProductName", "Freeplay"
+      VALUE "ProductVersion", "{semver}"
+      VALUE "OriginalFilename", "freeplay.exe"
+      VALUE "LegalCopyright", "Open source - https://github.com/junkwax/freeplay-gametalk"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x0409, 0x04B0
+  END
+END
+"#
+    )
 }
 
 /// Convert a unix timestamp (UTC) to (year, month, day). Avoids a chrono dep.
