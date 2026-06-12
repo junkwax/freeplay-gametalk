@@ -222,7 +222,8 @@ IDs, and webhook values out of commits.
 ## Public Replay Page
 
 The web replay page lives in `docs/replays/index.html` and is served by GitHub
-Pages from the `main` branch's `/docs` folder:
+Pages from the `docs` folder. The Pages workflow deploys it whenever `docs`
+changes:
 
 ```text
 https://junkwax.github.io/freeplay-gametalk/replays/
