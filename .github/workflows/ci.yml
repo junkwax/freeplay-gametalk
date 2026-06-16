@@ -7,12 +7,16 @@ on:
 permissions:
   contents: read
 
+env:
+  # Run JavaScript actions on Node 24 (Node 20 is deprecated on runners).
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   cargo-check:
     name: cargo check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - name: Install SDL2 dependencies
         run: sudo apt-get update && sudo apt-get install -y libsdl2-dev libsdl2-ttf-dev pkg-config
@@ -28,7 +32,7 @@ jobs:
     env:
       VCPKG_DEFAULT_TRIPLET: x64-windows
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -64,7 +68,7 @@ jobs:
         run: .\package.ps1
 
       - name: Upload package artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: freeplay-gametalk-windows-${{ github.sha }}
           path: dist/freeplay-gametalk-v*.zip

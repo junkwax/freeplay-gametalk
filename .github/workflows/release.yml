@@ -24,13 +24,17 @@ permissions:
 # this when you've validated a newer FBNeo locally.
 env:
   FBNEO_REF: master
+  # Force JavaScript actions onto Node 24. actions/cache has no major past v4,
+  # so this opt-in (rather than a version bump) is what silences the Node 20
+  # deprecation for it; checkout/upload-artifact are also bumped below.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   validate-version:
     name: Validate release version
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Ensure tag matches Cargo.toml
         env:
@@ -54,7 +58,7 @@ jobs:
     env:
       VCPKG_DEFAULT_TRIPLET: x64-windows
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -104,7 +108,7 @@ jobs:
         run: .\package.ps1
 
       - name: Upload package artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: freeplay-gametalk-windows
           path: dist/freeplay-gametalk-v*.zip
@@ -170,7 +174,7 @@ jobs:
     needs: validate-version
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -201,7 +205,7 @@ jobs:
         run: ./package-linux.sh
 
       - name: Upload package artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: freeplay-gametalk-linux
           path: dist/freeplay-gametalk-v*-linux.tar.gz
@@ -267,7 +271,7 @@ jobs:
             arch: x86_64
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -309,7 +313,7 @@ jobs:
         run: ./package-macos.sh
 
       - name: Upload package artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: freeplay-gametalk-macos-${{ matrix.arch }}
           path: |
