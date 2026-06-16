@@ -21,6 +21,7 @@ netcab/ghost_library.json
 netcab/debug_local.log
 netcab/netcab_net.log
 netcab/ram_*.bin
+tmp-signaling-target/*
 
 # Side-project files that happen to live in this tree
 netcab/usenet_import.py

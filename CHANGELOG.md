@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.7.11 - 2026-06-16
+
+### Added
+
+- Added an Online Hub menu with General, Lobbies, Ranked, and Watch tabs,
+  including ranked challenge formats (Unranked VS, Ranked FT3/FT5/FT10) and a
+  Spectate/Watch flow.
+- Added an in-match network stats overlay (rollback depth, save/load counts,
+  and MK2 performance sampling).
+- Added persistent net-match settings and completed-match tracking.
+- Added audio-recovery ramping to smooth the audio tail after a stall or
+  rollback gap.
+- Added a dedicated high-resolution frame timer (Windows `winmm` backed) for
+  steadier pacing.
+- Added native title-bar dragging for the client window on Windows.
+
+### Changed
+
+- Expanded launch CLI, doctor diagnostics, and incident reporting.
+
 ## 0.7.6 - 2026-06-12
 
 ### Added

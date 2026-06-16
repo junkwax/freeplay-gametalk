@@ -24,8 +24,8 @@ the installed Freeplay app through the `xband://` protocol.
 3. Put your compatible ROM zip in the `roms` folder.
 4. Run `freeplay.exe`.
 5. Open **Controls** if you want to bind a keyboard or controller.
-6. Pick **Arcade** for local play, **Lab** for practice, or **Find Match** for
-   online play.
+6. Pick **Arcade** for local play, **Lab** for practice, or **Online** for
+   netplay.
 
 On first launch, Freeplay creates a public player name for you. You can keep it
 or change it in **Settings**. Discord login is optional; you can play ranked
@@ -48,11 +48,13 @@ without it.
 
 ## Playing Online
 
-1. Choose **Find Match**.
-2. Confirm your public name.
-3. Wait for an opponent.
-4. Play the set.
-5. When the game ends, Freeplay saves the replay and posts the result to the
+1. Choose **Online**.
+2. Use **Ranked** -> **Find Ranked Match** for the public queue, or idle in
+   the General lobby as lobby support rolls out.
+3. Confirm your public name if prompted.
+4. Wait for an opponent.
+5. Play the set.
+6. When the game ends, Freeplay saves the replay and posts the result to the
    stats service.
 
 Useful online buttons:
@@ -121,7 +123,7 @@ older builds, but the app labels them as drones.
 Run Doctor from the menu with `Shift+D`, or from a terminal:
 
 ```powershell
-freeplay.exe --doctor
+freeplay.exe --doctor-report doctor.txt
 ```
 
 Common fixes:
@@ -151,7 +153,7 @@ Basic commands:
 ```powershell
 cargo check
 cargo build --release
-cargo run -- --doctor
+cargo run -- --doctor-report doctor.txt
 ```
 
 The release executable is written to:

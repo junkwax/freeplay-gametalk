@@ -37,6 +37,17 @@ pub enum MenuScreen {
     Main {
         cursor: usize,
     },
+    /// Online hub for ranked queue, general chat, lobby browser, and live watch.
+    OnlineHub {
+        tab: OnlineTab,
+        cursor: usize,
+        challenge_format: ChallengeFormat,
+        chat_draft: String,
+        chat_lines: Vec<String>,
+        lobbies: Vec<LobbyPreview>,
+        live_matches: Vec<LiveMatch>,
+        status: String,
+    },
     LabMenu {
         cursor: usize,
     },
@@ -182,6 +193,94 @@ pub struct ReplayEntry {
     pub bookmark_count: usize,
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum OnlineTab {
+    General,
+    Lobbies,
+    Ranked,
+    Watch,
+}
+
+impl OnlineTab {
+    const ALL: [OnlineTab; 4] = [
+        OnlineTab::General,
+        OnlineTab::Lobbies,
+        OnlineTab::Ranked,
+        OnlineTab::Watch,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            OnlineTab::General => "General",
+            OnlineTab::Lobbies => "Lobbies",
+            OnlineTab::Ranked => "Ranked",
+            OnlineTab::Watch => "Watch",
+        }
+    }
+
+    fn next(self) -> Self {
+        let idx = Self::ALL.iter().position(|tab| *tab == self).unwrap_or(0);
+        Self::ALL[(idx + 1) % Self::ALL.len()]
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum ChallengeFormat {
+    UnrankedVs,
+    RankedFt3,
+    RankedFt5,
+    RankedFt10,
+}
+
+impl ChallengeFormat {
+    const ALL: [ChallengeFormat; 4] = [
+        ChallengeFormat::UnrankedVs,
+        ChallengeFormat::RankedFt3,
+        ChallengeFormat::RankedFt5,
+        ChallengeFormat::RankedFt10,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            ChallengeFormat::UnrankedVs => "Unranked VS",
+            ChallengeFormat::RankedFt3 => "Ranked FT3",
+            ChallengeFormat::RankedFt5 => "Ranked FT5",
+            ChallengeFormat::RankedFt10 => "Ranked FT10",
+        }
+    }
+
+    fn next(self) -> Self {
+        let idx = Self::ALL
+            .iter()
+            .position(|format| *format == self)
+            .unwrap_or(0);
+        Self::ALL[(idx + 1) % Self::ALL.len()]
+    }
+
+    pub fn ranked(self) -> bool {
+        !matches!(self, ChallengeFormat::UnrankedVs)
+    }
+
+    pub fn match_limit(self) -> u32 {
+        match self {
+            ChallengeFormat::UnrankedVs => 1,
+            ChallengeFormat::RankedFt3 => 3,
+            ChallengeFormat::RankedFt5 => 5,
+            ChallengeFormat::RankedFt10 => 10,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LobbyPreview {
+    pub name: String,
+    pub host: String,
+    pub format: ChallengeFormat,
+    pub players: u8,
+    pub private: bool,
+    pub status: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProfileScreenState {
     /// No active player identity is available yet.
@@ -246,15 +345,7 @@ impl Default for AppState {
 /// Watch Live, Leaderboard, and Training are still implemented, but are hidden
 /// from the public menu for now to keep the first-run footprint focused.
 pub const MAIN_ITEMS: [&str; 9] = [
-    "Find Match",
-    "Arcade",
-    "Lab",
-    "Replays",
-    "Profile",
-    "Controls",
-    "Settings",
-    "About",
-    "Quit",
+    "Online", "Arcade", "Lab", "Replays", "Profile", "Controls", "Settings", "About", "Quit",
 ];
 const LAB_MENU_ITEMS: [&str; 2] = ["Start Lab", "Load Drones"];
 
@@ -277,6 +368,15 @@ const SETTINGS_ITEMS: [&str; 16] = [
     "Render Profile",
 ];
 const TRAINING_ITEMS: [&str; 3] = ["Hitbox View", "Infinite Health", "Freeze Timer"];
+
+fn online_row_count(tab: OnlineTab, lobbies: &[LobbyPreview], live_matches: &[LiveMatch]) -> usize {
+    match tab {
+        OnlineTab::General => 2,
+        OnlineTab::Lobbies => lobbies.len().max(1),
+        OnlineTab::Ranked => 1,
+        OnlineTab::Watch => live_matches.len().max(1),
+    }
+}
 
 pub enum NavResult {
     Stay,
@@ -325,6 +425,8 @@ pub enum NavResult {
     WatchSession(String),
     /// Toggle Discord Rich Presence at runtime and persist config.
     ToggleDiscordRpc,
+    /// Send a server-backed General lobby chat message.
+    SendLobbyChat(String),
     /// Toggle desktop fullscreen and persist config.
     ToggleFullscreen,
     /// Adjust audio volume by signed percentage points.
@@ -368,6 +470,9 @@ impl AppState {
             AppState::Menu(MenuScreen::Main { cursor }) => {
                 *cursor = cursor.saturating_sub(1);
             }
+            AppState::Menu(MenuScreen::OnlineHub { cursor, .. }) => {
+                *cursor = cursor.saturating_sub(1);
+            }
             AppState::Menu(MenuScreen::LabMenu { cursor }) => {
                 *cursor = cursor.saturating_sub(1);
             }
@@ -397,6 +502,17 @@ impl AppState {
         match self {
             AppState::Menu(MenuScreen::Main { cursor }) => {
                 if *cursor + 1 < MAIN_ITEMS.len() {
+                    *cursor += 1;
+                }
+            }
+            AppState::Menu(MenuScreen::OnlineHub {
+                tab,
+                cursor,
+                lobbies,
+                live_matches,
+                ..
+            }) => {
+                if *cursor + 1 < online_row_count(*tab, lobbies, live_matches) {
                     *cursor += 1;
                 }
             }
@@ -446,8 +562,15 @@ impl AppState {
     }
 
     pub fn nav_switch_player(&mut self) {
-        if let AppState::Menu(MenuScreen::Controls { player, .. }) = self {
-            *player = player.other();
+        match self {
+            AppState::Menu(MenuScreen::Controls { player, .. }) => {
+                *player = player.other();
+            }
+            AppState::Menu(MenuScreen::OnlineHub { tab, cursor, .. }) => {
+                *tab = tab.next();
+                *cursor = 0;
+            }
+            _ => {}
         }
     }
 
@@ -455,11 +578,21 @@ impl AppState {
         match self.clone() {
             AppState::Menu(MenuScreen::Main { cursor }) => match cursor {
                 0 => {
-                    // Find Match
+                    // Online
                     if !rom_present {
                         return NavResult::Stay;
                     }
-                    NavResult::OpenUsernameEntry
+                    *self = AppState::Menu(MenuScreen::OnlineHub {
+                        tab: OnlineTab::General,
+                        cursor: 0,
+                        challenge_format: ChallengeFormat::UnrankedVs,
+                        chat_draft: String::new(),
+                        chat_lines: vec!["SYSTEM General lobby chat coming online".into()],
+                        lobbies: Vec::new(),
+                        live_matches: Vec::new(),
+                        status: "General lobby".into(),
+                    });
+                    NavResult::Stay
                 }
                 1 => {
                     // Arcade
@@ -531,6 +664,62 @@ impl AppState {
                 }
                 8 => NavResult::Quit,
                 _ => NavResult::Stay,
+            },
+            AppState::Menu(MenuScreen::OnlineHub {
+                tab,
+                cursor,
+                mut challenge_format,
+                live_matches,
+                ..
+            }) => match tab {
+                OnlineTab::General => {
+                    if cursor == 0 {
+                        challenge_format = challenge_format.next();
+                        if let AppState::Menu(MenuScreen::OnlineHub {
+                            challenge_format: format,
+                            ..
+                        }) = self
+                        {
+                            *format = challenge_format;
+                        }
+                    } else if cursor == 1 {
+                        if let AppState::Menu(MenuScreen::OnlineHub { chat_draft, .. }) = self {
+                            let message = chat_draft.trim().to_string();
+                            if !message.is_empty() {
+                                chat_draft.clear();
+                                return NavResult::SendLobbyChat(message);
+                            }
+                        }
+                    }
+                    NavResult::Stay
+                }
+                OnlineTab::Lobbies => NavResult::Stay,
+                OnlineTab::Ranked => {
+                    if cursor == 0 {
+                        NavResult::OpenUsernameEntry
+                    } else {
+                        NavResult::Stay
+                    }
+                }
+                OnlineTab::Watch => {
+                    if let Some(m) = live_matches.get(cursor) {
+                        *self = AppState::Menu(MenuScreen::Spectate {
+                            session_id: m.session_id.clone(),
+                            status: SpectateStatus {
+                                message: "Opening spectator relay...".into(),
+                                p1_name: m.p1_name.clone(),
+                                p2_name: m.p2_name.clone(),
+                                frame: None,
+                                p1_score: m.p1_score,
+                                p2_score: m.p2_score,
+                                updated_at: None,
+                            },
+                        });
+                        NavResult::WatchSession(m.session_id.clone())
+                    } else {
+                        NavResult::OpenLiveMatches
+                    }
+                }
             },
             AppState::Menu(MenuScreen::LabMenu { cursor }) => match cursor {
                 0 => {
@@ -681,6 +870,7 @@ impl AppState {
     pub fn nav_back(&mut self) {
         match self {
             AppState::Menu(MenuScreen::Controls { .. })
+            | AppState::Menu(MenuScreen::OnlineHub { .. })
             | AppState::Menu(MenuScreen::LabMenu { .. })
             | AppState::Menu(MenuScreen::About)
             | AppState::Menu(MenuScreen::TestIp { .. })
@@ -713,7 +903,19 @@ impl AppState {
 
     /// Append typed text to the active menu editor. No-op if nothing is editing.
     pub fn text_input(&mut self, s: &str) {
-        if let AppState::Menu(MenuScreen::TestIp {
+        if let AppState::Menu(MenuScreen::OnlineHub {
+            tab: OnlineTab::General,
+            cursor: 1,
+            chat_draft,
+            ..
+        }) = self
+        {
+            for c in s.chars() {
+                if !c.is_control() && chat_draft.chars().count() < 180 {
+                    chat_draft.push(c);
+                }
+            }
+        } else if let AppState::Menu(MenuScreen::TestIp {
             ip_text,
             editing: true,
         }) = self
@@ -755,7 +957,15 @@ impl AppState {
     }
 
     pub fn text_backspace(&mut self) {
-        if let AppState::Menu(MenuScreen::TestIp {
+        if let AppState::Menu(MenuScreen::OnlineHub {
+            tab: OnlineTab::General,
+            cursor: 1,
+            chat_draft,
+            ..
+        }) = self
+        {
+            chat_draft.pop();
+        } else if let AppState::Menu(MenuScreen::TestIp {
             ip_text,
             editing: true,
         }) = self
@@ -809,6 +1019,29 @@ pub fn draw(
             rom_present,
             discord_user,
             main_leaderboard,
+        )?,
+        AppState::Menu(MenuScreen::OnlineHub {
+            tab,
+            cursor,
+            challenge_format,
+            chat_draft,
+            chat_lines,
+            lobbies,
+            live_matches,
+            status,
+        }) => draw_online_hub(
+            canvas,
+            font,
+            *tab,
+            *cursor,
+            *challenge_format,
+            chat_draft,
+            chat_lines,
+            lobbies,
+            live_matches,
+            status,
+            w,
+            h,
         )?,
         AppState::Menu(MenuScreen::LabMenu { cursor }) => {
             draw_lab_menu(canvas, font, *cursor, rom_present, w, h)?
@@ -1406,6 +1639,338 @@ fn draw_main(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+fn draw_online_hub(
+    canvas: &mut Canvas<Window>,
+    font: &mut Font,
+    tab: OnlineTab,
+    cursor: usize,
+    challenge_format: ChallengeFormat,
+    chat_draft: &str,
+    chat_lines: &[String],
+    lobbies: &[LobbyPreview],
+    live_matches: &[LiveMatch],
+    status: &str,
+    w: i32,
+    h: i32,
+) -> Result<(), String> {
+    draw_title(canvas, font, "ONLINE", w, h)?;
+    let scale = body_scale(h).saturating_sub(1).max(1);
+    let small = small_scale(h);
+    let x = (w / 10).max(34);
+    let content_w = w - x * 2;
+    let tab_y = 84;
+    let mut tab_x = x;
+
+    for item in OnlineTab::ALL {
+        let label = item.label();
+        let label_w = font.text_width_exact(label, small);
+        let box_w = label_w + 24;
+        let selected = item == tab;
+        draw_panel(
+            canvas,
+            tab_x,
+            tab_y,
+            box_w,
+            24,
+            if selected {
+                Color::RGBA(36, 44, 70, 235)
+            } else {
+                Color::RGBA(14, 16, 24, 210)
+            },
+        )?;
+        font.draw(
+            canvas,
+            label,
+            tab_x + 12,
+            tab_y + 7,
+            small,
+            if selected {
+                Color::RGB(255, 235, 180)
+            } else {
+                Color::RGB(130, 145, 170)
+            },
+        )?;
+        tab_x += box_w + 8;
+    }
+
+    let status_line = fit_line(font, status, small, content_w);
+    font.draw(
+        canvas,
+        &status_line,
+        x,
+        tab_y + 34,
+        small,
+        Color::RGB(120, 145, 180),
+    )?;
+
+    let y = tab_y + 62;
+    match tab {
+        OnlineTab::General => {
+            let format_line = format!(
+                "Challenge Format: {}  ({} game{})",
+                challenge_format.label(),
+                challenge_format.match_limit(),
+                if challenge_format.match_limit() == 1 {
+                    ""
+                } else {
+                    "s"
+                }
+            );
+            draw_online_row(
+                canvas,
+                font,
+                &format_line,
+                cursor == 0,
+                x,
+                y,
+                content_w,
+                scale,
+            )?;
+            let ranked_line = if challenge_format.ranked() {
+                "Ranked challenge"
+            } else {
+                "Unranked challenge"
+            };
+            font.draw(
+                canvas,
+                ranked_line,
+                x + 20,
+                y + 30,
+                small,
+                Color::RGB(120, 145, 180),
+            )?;
+
+            let chat_y = y + 68;
+            let chat_h = (h - chat_y - 86).max(130);
+            draw_panel(
+                canvas,
+                x,
+                chat_y,
+                content_w,
+                chat_h,
+                Color::RGBA(12, 15, 26, 230),
+            )?;
+            font.draw(
+                canvas,
+                "General Chat",
+                x + 14,
+                chat_y + 12,
+                scale,
+                Color::RGB(255, 205, 90),
+            )?;
+
+            let mut line_y = chat_y + 42;
+            let visible = ((chat_h - 78) / (18 * small as i32).max(16)).max(1) as usize;
+            if chat_lines.is_empty() {
+                font.draw(
+                    canvas,
+                    "No messages yet",
+                    x + 14,
+                    line_y,
+                    small,
+                    Color::RGB(115, 125, 150),
+                )?;
+            } else {
+                for line in chat_lines
+                    .iter()
+                    .rev()
+                    .take(visible)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                {
+                    let clipped = fit_line(font, line, small, content_w - 28);
+                    font.draw(
+                        canvas,
+                        &clipped,
+                        x + 14,
+                        line_y,
+                        small,
+                        Color::RGB(185, 195, 215),
+                    )?;
+                    line_y += 18 * small as i32;
+                }
+            }
+
+            let draft = if chat_draft.is_empty() {
+                "Type message"
+            } else {
+                chat_draft
+            };
+            let draft = fit_line(font, draft, small, content_w - 28);
+            let input_y = chat_y + chat_h - 34;
+            if cursor == 1 {
+                canvas.set_draw_color(Color::RGBA(32, 38, 62, 220));
+                canvas.fill_rect(Rect::new(x + 8, input_y - 5, (content_w - 16) as u32, 26))?;
+            }
+            font.draw(
+                canvas,
+                &draft,
+                x + 14,
+                input_y,
+                small,
+                if cursor == 1 {
+                    Color::RGB(235, 240, 255)
+                } else {
+                    Color::RGB(110, 130, 165)
+                },
+            )?;
+        }
+        OnlineTab::Lobbies => {
+            if lobbies.is_empty() {
+                draw_online_row(
+                    canvas,
+                    font,
+                    "No public lobbies loaded",
+                    cursor == 0,
+                    x,
+                    y,
+                    content_w,
+                    scale,
+                )?;
+                font.draw(
+                    canvas,
+                    "Create/join endpoints are the next signaling step",
+                    x + 20,
+                    y + 34,
+                    small,
+                    Color::RGB(120, 145, 180),
+                )?;
+            } else {
+                for (i, lobby) in lobbies.iter().enumerate() {
+                    let row_y = y + i as i32 * 34;
+                    let privacy = if lobby.private { "Private" } else { "Public" };
+                    let label = format!(
+                        "{}  {}  {}P  {}",
+                        lobby.name,
+                        lobby.format.label(),
+                        lobby.players,
+                        privacy
+                    );
+                    draw_online_row(
+                        canvas,
+                        font,
+                        &label,
+                        i == cursor,
+                        x,
+                        row_y,
+                        content_w,
+                        scale,
+                    )?;
+                }
+            }
+        }
+        OnlineTab::Ranked => {
+            draw_online_row(
+                canvas,
+                font,
+                "Find Ranked Match",
+                cursor == 0,
+                x,
+                y,
+                content_w,
+                scale,
+            )?;
+            font.draw(
+                canvas,
+                "Direct ranked challenges live in General: FT3, FT5, FT10",
+                x + 20,
+                y + 34,
+                small,
+                Color::RGB(120, 145, 180),
+            )?;
+        }
+        OnlineTab::Watch => {
+            if live_matches.is_empty() {
+                draw_online_row(canvas, font, status, cursor == 0, x, y, content_w, scale)?;
+                font.draw(
+                    canvas,
+                    "Press Enter to refresh live matches",
+                    x + 20,
+                    y + 34,
+                    small,
+                    Color::RGB(120, 145, 180),
+                )?;
+            } else {
+                let max_rows = ((h - y - 54) / 34).max(1) as usize;
+                for (i, m) in live_matches.iter().take(max_rows).enumerate() {
+                    let row_y = y + i as i32 * 34;
+                    let score = format!("{}-{}", m.p1_score, m.p2_score);
+                    let score_w = font.text_width_exact(&score, scale);
+                    let names = fit_line(
+                        font,
+                        &format!("{} vs {}", m.p1_name, m.p2_name),
+                        scale,
+                        content_w - score_w - 42,
+                    );
+                    draw_online_row(
+                        canvas,
+                        font,
+                        &names,
+                        i == cursor,
+                        x,
+                        row_y,
+                        content_w,
+                        scale,
+                    )?;
+                    font.draw(
+                        canvas,
+                        &score,
+                        x + content_w - score_w - 12,
+                        row_y,
+                        scale,
+                        Color::RGB(255, 210, 90),
+                    )?;
+                }
+            }
+        }
+    }
+
+    let footer = "LEFT/RIGHT Tabs   ENTER Select   ESC Back";
+    let fw = font.text_width_exact(footer, small);
+    font.draw(
+        canvas,
+        footer,
+        (w - fw) / 2,
+        h - 28,
+        small,
+        Color::RGB(100, 100, 100),
+    )?;
+    Ok(())
+}
+
+fn draw_online_row(
+    canvas: &mut Canvas<Window>,
+    font: &mut Font,
+    label: &str,
+    selected: bool,
+    x: i32,
+    y: i32,
+    w: i32,
+    scale: u32,
+) -> Result<(), String> {
+    if selected {
+        canvas.set_draw_color(Color::RGBA(32, 38, 62, 220));
+        canvas.fill_rect(Rect::new(x - 12, y - 5, (w + 24) as u32, 28))?;
+        font.draw(canvas, ">", x - 28, y, scale, Color::RGB(255, 235, 180))?;
+    }
+    let label = fit_line(font, label, scale, w - 16);
+    font.draw(
+        canvas,
+        &label,
+        x,
+        y,
+        scale,
+        if selected {
+            Color::RGB(245, 245, 250)
+        } else {
+            Color::RGB(175, 180, 198)
+        },
+    )?;
+    Ok(())
+}
+
 fn draw_lab_menu(
     canvas: &mut Canvas<Window>,
     font: &mut Font,
@@ -1680,7 +2245,7 @@ fn draw_about(canvas: &mut Canvas<Window>, font: &mut Font, w: i32, h: i32) -> R
         "F12 Play vs drone",
     ];
     let right = [
-        "Find Match saves replays",
+        "Online saves replays",
         "Replays opens online sets",
         "F1 leaves online",
         "F11 toggles ping/FPS",
@@ -2287,7 +2852,7 @@ fn draw_match_username(
     let footer = if checking {
         "Checking...   ESC Back"
     } else {
-        "ENTER Find Match   ESC Back"
+        "ENTER Queue   ESC Back"
     };
     let fw = font.text_width_exact(footer, small);
     font.draw(
@@ -2515,8 +3080,22 @@ fn draw_settings(
     }
 
     y += SETTINGS_ITEMS.len() as i32 * row_h + 18;
-    let hint = fit_line(font, settings_hint(cursor), small, w - x * 2);
-    font.draw(canvas, &hint, x, y, small, Color::RGB(130, 140, 165))?;
+    let (hint_line, extra_hint_line) = settings_hint_lines(cursor);
+    for (line_idx, line) in [Some(hint_line), extra_hint_line]
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        let hint = fit_line(font, line, small, w - x * 2);
+        font.draw(
+            canvas,
+            &hint,
+            x,
+            y + line_idx as i32 * ((small as i32 * 8) + 4),
+            small,
+            Color::RGB(130, 140, 165),
+        )?;
+    }
 
     let footer = "ENTER Select   LEFT/RIGHT Adjust   ESC Back";
     let fw = font.text_width_exact(footer, small);
@@ -2533,7 +3112,7 @@ fn draw_settings(
 
 fn settings_hint(cursor: usize) -> &'static str {
     match cursor {
-        0 => "Public name used for Find Match and replays.",
+        0 => "Public name used for Online and replays.",
         1 => "Optional email keeps stats portable across machines.",
         2 => "Connect Discord for account display and profile lookup.",
         3 => "Discord Rich Presence shows menu, queue, and match state.",
@@ -2550,6 +3129,18 @@ fn settings_hint(cursor: usize) -> &'static str {
         14 => "Open runtime logs next to the app.",
         15 => "Renderer backend for local hardware output tests. Restart applies.",
         _ => "",
+    }
+}
+
+fn settings_hint_lines(cursor: usize) -> (&'static str, Option<&'static str>) {
+    match cursor {
+        11 => (
+            "Input delay 3 is the default; try 4-5 for Wi-Fi, moderate ping, or weaker PCs.",
+            Some(
+                "Use 6 as a fallback. Avoid 0-1 online; delay helps rollback, not CPU starvation.",
+            ),
+        ),
+        _ => (settings_hint(cursor), None),
     }
 }
 
@@ -2689,7 +3280,7 @@ fn draw_profile(
 
     match state {
         ProfileScreenState::NotLoggedIn => {
-            let msg = "Sign in via Find Match first.";
+            let msg = "Sign in via Online first.";
             let tw = font.text_width_exact(msg, body);
             font.draw(canvas, msg, cx - tw / 2, y, body, Color::RGB(220, 220, 230))?;
         }

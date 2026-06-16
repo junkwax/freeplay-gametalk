@@ -206,7 +206,7 @@ freeplay-gametalk v$VERSION
 INSTALL:
   1. Extract this zip anywhere (e.g. C:\Games\Freeplay)
   2. Put your legally-obtained ROM zip in the roms\ folder
-  3. Run freeplay.exe --doctor to verify setup
+  3. Run freeplay.exe --doctor-report doctor.txt to verify setup
   4. Double-click freeplay.exe
 
 MATCHMAKING:
@@ -215,8 +215,9 @@ MATCHMAKING:
   Login is cached for 24 hours.
   Matchmaking works out of the box with the bundled public .env.
 
-MANUAL NETPLAY:
-  "Host Match" and "Join Match" still work for direct IP connections.
+MANUAL / LAN NETPLAY:
+  Public matches use Find Match. Direct-IP launch is still available for
+  testers from the command line with --player/--local/--peer.
 
 CONTROLS:
   Configure in the Controls menu. Xbox controllers auto-detect.

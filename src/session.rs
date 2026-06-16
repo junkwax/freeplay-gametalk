@@ -184,6 +184,36 @@ pub fn finalize_net_recording(
     }
 }
 
+fn post_match_result_async(
+    token: String,
+    session_id: String,
+    match_index: u32,
+    p1_wins: u16,
+    p2_wins: u16,
+) {
+    std::thread::spawn(move || {
+        if let Err(e) =
+            matchmaking::post_match_result(&token, &session_id, match_index, p1_wins, p2_wins)
+        {
+            println!("[score] failed to post match result to server: {e}");
+            // Score-mismatch: server rejected because our scores disagree with
+            // the partner's report. Capture an incident with our local RAM
+            // scores so triage can compare against the server-side record.
+            if e.contains("Score mismatch") {
+                let mut inc =
+                    crate::incident::Incident::new(crate::incident::KIND_SCORE_REJECTED, e);
+                inc.session_id = Some(session_id);
+                inc.p1_score = Some(p1_wins);
+                inc.p2_score = Some(p2_wins);
+                inc.net_log_path = Some(std::path::PathBuf::from("freeplay-net.log"));
+                crate::incident::submit(inc);
+            }
+        } else {
+            println!("[score] posted match result #{match_index} to server");
+        }
+    });
+}
+
 /// React to a score-tracker event: log it, post to Discord, print to console.
 /// Also forwards `MatchOver` to the signaling server's `/match/result`
 /// endpoint for Glicko rating updates (server dedups by room_id, so calling
@@ -234,30 +264,7 @@ pub fn handle_score_event(
             if let (Some(sid), Some(token), Some(match_index)) =
                 (session_id, matchmaking::current_token(), match_index)
             {
-                if let Err(e) =
-                    matchmaking::post_match_result(&token, sid, match_index, p1_wins, p2_wins)
-                {
-                    println!("[score] failed to post match result to server: {e}");
-                    // Score-mismatch: server rejected because our scores
-                    // disagree with the partner's report. That's the
-                    // canonical "two clients disagree on what happened"
-                    // signal — capture an incident with our view of the
-                    // RAM scores so we can compare against the server's
-                    // record (which has the partner's view).
-                    if e.contains("Score mismatch") {
-                        let mut inc = crate::incident::Incident::new(
-                            crate::incident::KIND_SCORE_REJECTED,
-                            e.clone(),
-                        );
-                        inc.session_id = Some(sid.to_string());
-                        inc.p1_score = Some(p1_wins);
-                        inc.p2_score = Some(p2_wins);
-                        inc.net_log_path = Some(std::path::PathBuf::from("freeplay-net.log"));
-                        crate::incident::submit(inc);
-                    }
-                } else {
-                    println!("[score] posted match result #{match_index} to server");
-                }
+                post_match_result_async(token, sid.to_string(), match_index, p1_wins, p2_wins);
             }
 
             (

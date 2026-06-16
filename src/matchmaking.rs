@@ -15,7 +15,7 @@ pub enum Update {
     Connected {
         peer_endpoint: String,
         is_host: bool,
-        turn: Option<TurnConnectInfo>,
+        transport: MatchTransport,
         session_id: String,
         room_id: Option<String>,
         peer_username: Option<String>,
@@ -52,6 +52,64 @@ pub enum LiveMatchesUpdate {
     Error(String),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LobbyUser {
+    pub player_id: String,
+    pub username: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LobbyChatMessage {
+    pub username: String,
+    pub message: String,
+    pub timestamp: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LobbySnapshot {
+    pub users: Vec<LobbyUser>,
+    pub chat: Vec<LobbyChatMessage>,
+    pub status: String,
+}
+
+#[derive(Debug)]
+pub enum LobbyUpdate {
+    Loaded(LobbySnapshot),
+    Error(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LobbyMatchFormat {
+    UnrankedVs,
+    RankedFt3,
+    RankedFt5,
+    RankedFt10,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LobbyRoom {
+    pub id: String,
+    pub name: String,
+    pub host_username: String,
+    pub format: LobbyMatchFormat,
+    pub players: u8,
+    pub private: bool,
+    pub status: String,
+}
+
+#[derive(Debug)]
+pub enum LobbyListUpdate {
+    Loaded(Vec<LobbyRoom>),
+    Error(String),
+}
+
+#[derive(Debug)]
+pub enum LobbyChatPostUpdate {
+    Sent,
+    Error(String),
+}
+
 #[derive(Debug)]
 pub enum UsernameCheckUpdate {
     Available(String),
@@ -64,6 +122,16 @@ pub struct TurnConnectInfo {
     pub uri: String,
     pub username: String,
     pub password: String,
+}
+
+#[derive(Debug)]
+pub enum MatchTransport {
+    Direct {
+        peer_addr: SocketAddr,
+    },
+    Relay {
+        socket: crate::relay_socket::RelaySocket,
+    },
 }
 
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -220,12 +288,13 @@ fn run(tx: &Sender<Update>) -> Result<(), String> {
                 "[mm] using relay at {} (skipping direct P2P probe)",
                 turn.uri
             );
+            let transport = connect_relay(&turn)?;
             return send(
                 tx,
                 Update::Connected {
                     peer_endpoint: match_info.peer_endpoint.clone(),
                     is_host: match_info.role == "host",
-                    turn: Some(turn),
+                    transport,
                     session_id: session_id_for_update,
                     room_id: match_info.room_id.clone(),
                     peer_username: match_info.peer_username.clone(),
@@ -242,7 +311,7 @@ fn run(tx: &Sender<Update>) -> Result<(), String> {
                     Update::Connected {
                         peer_endpoint: peer_addr.to_string(),
                         is_host: match_info.role == "host",
-                        turn: None,
+                        transport: MatchTransport::Direct { peer_addr },
                         session_id: session_id_for_update,
                         room_id: match_info.room_id.clone(),
                         peer_username: match_info.peer_username.clone(),
@@ -331,12 +400,13 @@ fn run_with_token(tx: &Sender<Update>, token: String) -> Result<(), String> {
                 "[mm] using relay at {} (skipping direct P2P probe)",
                 turn.uri
             );
+            let transport = connect_relay(&turn)?;
             return send(
                 tx,
                 Update::Connected {
                     peer_endpoint: match_info.peer_endpoint.clone(),
                     is_host: match_info.role == "host",
-                    turn: Some(turn),
+                    transport,
                     session_id: session_id_for_update,
                     room_id: match_info.room_id.clone(),
                     peer_username: match_info.peer_username.clone(),
@@ -353,7 +423,7 @@ fn run_with_token(tx: &Sender<Update>, token: String) -> Result<(), String> {
                     Update::Connected {
                         peer_endpoint: peer_addr.to_string(),
                         is_host: match_info.role == "host",
-                        turn: None,
+                        transport: MatchTransport::Direct { peer_addr },
                         session_id: session_id_for_update,
                         room_id: match_info.room_id.clone(),
                         peer_username: match_info.peer_username.clone(),
@@ -389,6 +459,12 @@ fn cancel_match(token: &str, _session_id: &str) -> Result<(), String> {
     http_post_json(&url, token, "{}").map(|_| ())
 }
 
+fn connect_relay(turn: &TurnConnectInfo) -> Result<MatchTransport, String> {
+    crate::relay_socket::RelaySocket::connect(&turn.uri, &turn.username, &turn.password, GAME_PORT)
+        .map(|socket| MatchTransport::Relay { socket })
+        .map_err(|e| format!("relay connect failed: {e}"))
+}
+
 fn run_join_room(tx: &Sender<Update>, room_id: &str) -> Result<(), String> {
     let token = auth_token(tx)?;
     set_current_token(&token);
@@ -410,12 +486,13 @@ fn run_join_room(tx: &Sender<Update>, room_id: &str) -> Result<(), String> {
             "[mm] using relay at {} (skipping direct P2P probe)",
             turn.uri
         );
+        let transport = connect_relay(&turn)?;
         return send(
             tx,
             Update::Connected {
                 peer_endpoint: match_info.peer_endpoint.clone(),
                 is_host: match_info.role == "host",
-                turn: Some(turn),
+                transport,
                 session_id: match_info.session_id,
                 room_id: match_info.room_id.clone(),
                 peer_username: match_info.peer_username.clone(),
@@ -432,7 +509,7 @@ fn run_join_room(tx: &Sender<Update>, room_id: &str) -> Result<(), String> {
                 Update::Connected {
                     peer_endpoint: peer_addr.to_string(),
                     is_host: match_info.role == "host",
-                    turn: None,
+                    transport: MatchTransport::Direct { peer_addr },
                     session_id: match_info.session_id,
                     room_id: match_info.room_id.clone(),
                     peer_username: match_info.peer_username.clone(),
@@ -1068,6 +1145,14 @@ fn http_get(url: &str, token: &str) -> Result<String, String> {
         "GET {path} HTTP/1.1\r\nHost: {host}\r\nAuthorization: Bearer {token}\r\nConnection: close\r\n\r\n"
     );
     send_recv_https(stream, &req)
+}
+
+fn http_get_optional_auth(url: &str) -> Result<String, String> {
+    if let Some(token) = current_or_cached_token() {
+        http_get(url, &token)
+    } else {
+        http_get_no_auth(url)
+    }
 }
 
 /// HTTP GET without an Authorization header. Used for the freeplay-stats
@@ -1805,6 +1890,108 @@ pub fn fetch_live_matches(tx: Sender<LiveMatchesUpdate>) {
     });
 }
 
+pub fn fetch_general_lobby(tx: Sender<LobbyUpdate>) {
+    std::thread::spawn(move || {
+        let base_url = match signaling_url() {
+            Ok(url) => url,
+            Err(e) => {
+                let _ = tx.send(LobbyUpdate::Error(e));
+                return;
+            }
+        };
+        let url = format!("{base_url}/lobby/general");
+        match http_get_optional_auth(&url) {
+            Ok(body) => match parse_lobby_snapshot(&body) {
+                Some(snapshot) => {
+                    let _ = tx.send(LobbyUpdate::Loaded(snapshot));
+                }
+                None => {
+                    let _ = tx.send(LobbyUpdate::Error(format!(
+                        "Couldn't parse lobby snapshot: {body}"
+                    )));
+                }
+            },
+            Err(e) => {
+                let _ = tx.send(LobbyUpdate::Error(e));
+            }
+        }
+    });
+}
+
+pub fn fetch_lobbies(tx: Sender<LobbyListUpdate>) {
+    std::thread::spawn(move || {
+        let base_url = match signaling_url() {
+            Ok(url) => url,
+            Err(e) => {
+                let _ = tx.send(LobbyListUpdate::Error(e));
+                return;
+            }
+        };
+        let url = format!("{base_url}/lobbies");
+        match http_get_optional_auth(&url) {
+            Ok(body) => match parse_lobbies(&body) {
+                Some(lobbies) => {
+                    let _ = tx.send(LobbyListUpdate::Loaded(lobbies));
+                }
+                None => {
+                    let _ = tx.send(LobbyListUpdate::Error(format!(
+                        "Couldn't parse lobby list: {body}"
+                    )));
+                }
+            },
+            Err(e) => {
+                let _ = tx.send(LobbyListUpdate::Error(e));
+            }
+        }
+    });
+}
+
+pub fn send_lobby_chat(message: String, tx: Sender<LobbyChatPostUpdate>) {
+    std::thread::spawn(move || {
+        let message = message.trim().to_string();
+        if message.is_empty() {
+            let _ = tx.send(LobbyChatPostUpdate::Error("Message is empty".into()));
+            return;
+        }
+        if message.chars().count() > 180 {
+            let _ = tx.send(LobbyChatPostUpdate::Error("Message is too long".into()));
+            return;
+        }
+        let token = match current_or_cached_token().or_else(|| match guest_login() {
+            Ok(token) => {
+                set_current_token(&token);
+                Some(token)
+            }
+            Err(_) => None,
+        }) {
+            Some(token) => token,
+            None => {
+                let _ = tx.send(LobbyChatPostUpdate::Error(
+                    "Couldn't create a lobby session".into(),
+                ));
+                return;
+            }
+        };
+        let base_url = match signaling_url() {
+            Ok(url) => url,
+            Err(e) => {
+                let _ = tx.send(LobbyChatPostUpdate::Error(e));
+                return;
+            }
+        };
+        let body = format!(r#"{{"message":"{}"}}"#, json_escape(&message));
+        let url = format!("{base_url}/lobby/chat");
+        match http_post_json(&url, &token, &body) {
+            Ok(_) => {
+                let _ = tx.send(LobbyChatPostUpdate::Sent);
+            }
+            Err(e) => {
+                let _ = tx.send(LobbyChatPostUpdate::Error(e));
+            }
+        }
+    });
+}
+
 fn parse_spectate_state(json: &str) -> Option<SpectateState> {
     let frame = json_last_u64(json, "frame").map(|v| v as u32);
     let p1_score = json_last_u64(json, "score_p1")
@@ -1868,6 +2055,129 @@ fn parse_live_match(chunk: &str) -> Option<LiveMatch> {
     })
 }
 
+fn parse_lobby_snapshot(json: &str) -> Option<LobbySnapshot> {
+    let users = parse_lobby_users(json);
+    let chat = parse_lobby_chat(json);
+    let status = json_str(json, "message")
+        .or_else(|| json_str(json, "status"))
+        .unwrap_or_else(|| "General lobby".into());
+
+    if users.is_empty() && chat.is_empty() && !json.contains("status") && !json.contains("message")
+    {
+        return None;
+    }
+
+    Some(LobbySnapshot {
+        users,
+        chat,
+        status,
+    })
+}
+
+fn parse_lobby_users(json: &str) -> Vec<LobbyUser> {
+    let Some(body) = json_array_body(json, "users")
+        .or_else(|| json_array_body(json, "players"))
+        .or_else(|| json_array_body(json, "online"))
+    else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for chunk in json_object_chunks(body) {
+        let username = json_str(chunk, "username")
+            .or_else(|| json_str(chunk, "name"))
+            .or_else(|| json_str(chunk, "display_name"));
+        if let Some(username) = username {
+            out.push(LobbyUser {
+                player_id: json_str(chunk, "player_id")
+                    .or_else(|| json_str(chunk, "id"))
+                    .or_else(|| json_str(chunk, "discord_id"))
+                    .unwrap_or_default(),
+                username,
+                status: json_str(chunk, "status").unwrap_or_else(|| "online".into()),
+            });
+        }
+    }
+    out
+}
+
+fn parse_lobby_chat(json: &str) -> Vec<LobbyChatMessage> {
+    let Some(body) = json_array_body(json, "chat").or_else(|| json_array_body(json, "messages"))
+    else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for chunk in json_object_chunks(body) {
+        let message = json_str(chunk, "message")
+            .or_else(|| json_str(chunk, "text"))
+            .or_else(|| json_str(chunk, "body"));
+        if let Some(message) = message {
+            out.push(LobbyChatMessage {
+                username: json_str(chunk, "username")
+                    .or_else(|| json_str(chunk, "name"))
+                    .unwrap_or_else(|| "System".into()),
+                message,
+                timestamp: json_str(chunk, "timestamp")
+                    .or_else(|| json_str(chunk, "created_at"))
+                    .or_else(|| json_str(chunk, "updated_at")),
+            });
+        }
+    }
+    out
+}
+
+fn parse_lobbies(json: &str) -> Option<Vec<LobbyRoom>> {
+    let body = json_array_body(json, "lobbies").or_else(|| json_array_body(json, "rooms"))?;
+    let mut out = Vec::new();
+    for chunk in json_object_chunks(body) {
+        if let Some(room) = parse_lobby_room(chunk) {
+            out.push(room);
+        }
+    }
+    Some(out)
+}
+
+fn parse_lobby_room(chunk: &str) -> Option<LobbyRoom> {
+    let id = json_str(chunk, "id")
+        .or_else(|| json_str(chunk, "lobby_id"))
+        .or_else(|| json_str(chunk, "room_id"))?;
+    let format = json_str(chunk, "format")
+        .or_else(|| json_str(chunk, "match_format"))
+        .and_then(|raw| parse_lobby_match_format(&raw))
+        .unwrap_or(LobbyMatchFormat::UnrankedVs);
+    Some(LobbyRoom {
+        id,
+        name: json_str(chunk, "name")
+            .or_else(|| json_str(chunk, "title"))
+            .unwrap_or_else(|| "Lobby".into()),
+        host_username: json_str(chunk, "host_username")
+            .or_else(|| json_str(chunk, "host"))
+            .or_else(|| json_str(chunk, "owner_username"))
+            .unwrap_or_else(|| "Host".into()),
+        format,
+        players: json_u64(chunk, "players")
+            .or_else(|| json_u64(chunk, "player_count"))
+            .or_else(|| json_u64(chunk, "count"))
+            .unwrap_or(1)
+            .min(u8::MAX as u64) as u8,
+        private: json_bool(chunk, "private").unwrap_or(false),
+        status: json_str(chunk, "status").unwrap_or_else(|| "open".into()),
+    })
+}
+
+fn parse_lobby_match_format(raw: &str) -> Option<LobbyMatchFormat> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "vs" | "unranked_vs" | "unranked-vs" | "unranked vs" | "casual" => {
+            Some(LobbyMatchFormat::UnrankedVs)
+        }
+        "ft3" | "ranked_ft3" | "ranked-ft3" | "ranked ft3" => Some(LobbyMatchFormat::RankedFt3),
+        "ft5" | "ranked_ft5" | "ranked-ft5" | "ranked ft5" => Some(LobbyMatchFormat::RankedFt5),
+        "ft10" | "ranked_ft10" | "ranked-ft10" | "ranked ft10" => {
+            Some(LobbyMatchFormat::RankedFt10)
+        }
+        _ => None,
+    }
+}
+
 fn parse_ghost_list(json: &str) -> Option<Vec<RemoteGhostMeta>> {
     let body = json_array_body(json, "ghosts")?;
     let mut out = Vec::new();
@@ -1882,8 +2192,33 @@ fn parse_ghost_list(json: &str) -> Option<Vec<RemoteGhostMeta>> {
 fn json_array_body<'a>(json: &'a str, key: &str) -> Option<&'a str> {
     let arr_start = json.find(&format!("\"{key}\""))? + key.len() + 2;
     let after_colon = json[arr_start..].find('[')? + arr_start + 1;
-    let arr_end = json[after_colon..].rfind(']')? + after_colon;
-    Some(&json[after_colon..arr_end])
+    let mut depth = 1i32;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (offset, c) in json[after_colon..].char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match c {
+            '"' => in_string = true,
+            '[' => depth += 1,
+            ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&json[after_colon..after_colon + offset]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn json_object_chunks(body: &str) -> Vec<&str> {
@@ -2040,12 +2375,20 @@ pub fn post_match_result(
     p1_score: u16,
     p2_score: u16,
 ) -> Result<(), String> {
-    let body = format!(
-        r#"{{"session_id":"{session_id}","match_index":{match_index},"p1_score":{p1_score},"p2_score":{p2_score}}}"#
-    );
+    let body = match_result_body(session_id, match_index, p1_score, p2_score);
     let url = format!("{}/match/result", signaling_url()?);
     http_post_json(&url, token, &body)?;
     Ok(())
+}
+
+fn match_result_body(session_id: &str, match_index: u32, p1_score: u16, p2_score: u16) -> String {
+    format!(
+        r#"{{"session_id":"{}","match_index":{},"p1_score":{},"p2_score":{}}}"#,
+        json_escape(session_id),
+        match_index,
+        p1_score,
+        p2_score
+    )
 }
 
 // ── UDP hole punch ────────────────────────────────────────────────────────────
@@ -2179,6 +2522,19 @@ fn json_u64(json: &str, key: &str) -> Option<u64> {
     rest[..end].parse().ok()
 }
 
+fn json_bool(json: &str, key: &str) -> Option<bool> {
+    let pat = format!("\"{key}\":");
+    let start = json.find(&pat)? + pat.len();
+    let rest = json[start..].trim_start();
+    if rest.starts_with("true") {
+        Some(true)
+    } else if rest.starts_with("false") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 fn json_last_u64(json: &str, key: &str) -> Option<u64> {
     let pat = format!("\"{key}\":");
     let start = json.rfind(&pat)? + pat.len();
@@ -2203,7 +2559,10 @@ fn json_f64(json: &str, key: &str) -> Option<f64> {
 
 #[cfg(test)]
 mod tests {
-    use super::sha256_hex;
+    use super::{
+        match_result_body, parse_live_matches, parse_lobbies, parse_lobby_snapshot,
+        parse_spectate_state, sha256_hex, LobbyMatchFormat,
+    };
 
     #[test]
     fn sha256_hex_matches_known_vector() {
@@ -2211,5 +2570,149 @@ mod tests {
             sha256_hex(b"abc"),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
+    }
+
+    #[test]
+    fn match_result_body_includes_match_index_and_escapes_session_id() {
+        let body = match_result_body("room\"\\\nend", 12, 2, 1);
+
+        assert_eq!(
+            body,
+            r#"{"session_id":"room\"\\\nend","match_index":12,"p1_score":2,"p2_score":1}"#
+        );
+    }
+
+    #[test]
+    fn parse_spectate_state_accepts_current_and_legacy_score_keys() {
+        let state = parse_spectate_state(
+            r#"{"frame":120,"score_p1":1,"score_p2":0,"updated_at":"2026-06-13T12:00:00Z"}"#,
+        )
+        .expect("current spectate payload should parse");
+
+        assert_eq!(state.frame, Some(120));
+        assert_eq!(state.p1_score, 1);
+        assert_eq!(state.p2_score, 0);
+        assert_eq!(state.updated_at.as_deref(), Some("2026-06-13T12:00:00Z"));
+
+        let legacy =
+            parse_spectate_state(r#"{"frame":121,"p1_score":2,"p2_score":1,"timestamp":"later"}"#)
+                .expect("legacy spectate payload should parse");
+
+        assert_eq!(legacy.frame, Some(121));
+        assert_eq!(legacy.p1_score, 2);
+        assert_eq!(legacy.p2_score, 1);
+        assert_eq!(legacy.updated_at.as_deref(), Some("later"));
+    }
+
+    #[test]
+    fn parse_spectate_state_uses_last_frame_and_update_values() {
+        let state = parse_spectate_state(
+            r#"{"frame":10,"score_p1":0,"score_p2":0,"state":{"frame":44,"score_p1":2,"score_p2":1,"updatedAt":"fresh"}}"#,
+        )
+        .expect("nested latest state should parse");
+
+        assert_eq!(state.frame, Some(44));
+        assert_eq!(state.p1_score, 2);
+        assert_eq!(state.p2_score, 1);
+        assert_eq!(state.updated_at.as_deref(), Some("fresh"));
+    }
+
+    #[test]
+    fn parse_spectate_state_rejects_payload_without_frame_or_score() {
+        assert!(parse_spectate_state(r#"{"updated_at":"soon"}"#).is_none());
+    }
+
+    #[test]
+    fn parse_live_matches_accepts_field_aliases_and_skips_bad_rows() {
+        let matches = parse_live_matches(
+            r#"{"matches":[
+                {"session_id":"s1","p1_name":"Kitana","p2_name":"Mileena","p1_score":1,"p2_score":0},
+                {"room_id":"s2","player1":"Liu","player2":"Kung","score_p1":2,"score_p2":1},
+                {"host_username":"NoSession","join_username":"Skipped"}
+            ]}"#,
+        )
+        .expect("live matches payload should parse");
+
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0].session_id, "s1");
+        assert_eq!(matches[0].p1_name, "Kitana");
+        assert_eq!(matches[0].p2_name, "Mileena");
+        assert_eq!(matches[0].p1_score, 1);
+        assert_eq!(matches[0].p2_score, 0);
+        assert_eq!(matches[1].session_id, "s2");
+        assert_eq!(matches[1].p1_name, "Liu");
+        assert_eq!(matches[1].p2_name, "Kung");
+        assert_eq!(matches[1].p1_score, 2);
+        assert_eq!(matches[1].p2_score, 1);
+    }
+
+    #[test]
+    fn parse_live_matches_accepts_live_array_alias_and_default_names() {
+        let matches =
+            parse_live_matches(r#"{"live":[{"id":"s3"}]}"#).expect("live array alias should parse");
+
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].session_id, "s3");
+        assert_eq!(matches[0].p1_name, "P1");
+        assert_eq!(matches[0].p2_name, "P2");
+        assert_eq!(matches[0].p1_score, 0);
+        assert_eq!(matches[0].p2_score, 0);
+    }
+
+    #[test]
+    fn parse_lobby_snapshot_accepts_user_and_chat_aliases() {
+        let snapshot = parse_lobby_snapshot(
+            r#"{
+                "message":"General lobby ready",
+                "players":[
+                    {"id":"p1","username":"Kitana","status":"idle"},
+                    {"discord_id":"p2","display_name":"Mileena"}
+                ],
+                "messages":[
+                    {"username":"Kitana","text":"ft5?","created_at":"now"},
+                    {"name":"System","body":"Mileena joined"}
+                ]
+            }"#,
+        )
+        .expect("lobby snapshot should parse");
+
+        assert_eq!(snapshot.status, "General lobby ready");
+        assert_eq!(snapshot.users.len(), 2);
+        assert_eq!(snapshot.users[0].player_id, "p1");
+        assert_eq!(snapshot.users[0].username, "Kitana");
+        assert_eq!(snapshot.users[0].status, "idle");
+        assert_eq!(snapshot.users[1].player_id, "p2");
+        assert_eq!(snapshot.users[1].username, "Mileena");
+        assert_eq!(snapshot.users[1].status, "online");
+        assert_eq!(snapshot.chat.len(), 2);
+        assert_eq!(snapshot.chat[0].message, "ft5?");
+        assert_eq!(snapshot.chat[0].timestamp.as_deref(), Some("now"));
+        assert_eq!(snapshot.chat[1].username, "System");
+    }
+
+    #[test]
+    fn parse_lobbies_accepts_room_aliases_and_formats() {
+        let lobbies = parse_lobbies(
+            r#"{"rooms":[
+                {"room_id":"r1","title":"Long sets","host":"Jax","format":"ranked_ft10","player_count":2,"private":false,"status":"open"},
+                {"lobby_id":"r2","name":"Casuals","owner_username":"Sonya","match_format":"vs","players":1,"private":true}
+            ]}"#,
+        )
+        .expect("lobby list should parse");
+
+        assert_eq!(lobbies.len(), 2);
+        assert_eq!(lobbies[0].id, "r1");
+        assert_eq!(lobbies[0].name, "Long sets");
+        assert_eq!(lobbies[0].host_username, "Jax");
+        assert_eq!(lobbies[0].format, LobbyMatchFormat::RankedFt10);
+        assert_eq!(lobbies[0].players, 2);
+        assert!(!lobbies[0].private);
+        assert_eq!(lobbies[0].status, "open");
+
+        assert_eq!(lobbies[1].id, "r2");
+        assert_eq!(lobbies[1].host_username, "Sonya");
+        assert_eq!(lobbies[1].format, LobbyMatchFormat::UnrankedVs);
+        assert_eq!(lobbies[1].players, 1);
+        assert!(lobbies[1].private);
     }
 }

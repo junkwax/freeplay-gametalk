@@ -50,15 +50,15 @@ pub fn read_rom_zip() -> Option<Vec<u8>> {
 
 fn rom_candidates() -> Vec<PathBuf> {
     let mut candidates = vec![
-        Path::new(ROM_NAME).to_path_buf(),
         Path::new("roms").join(ROM_NAME),
+        Path::new(ROM_NAME).to_path_buf(),
     ];
     if let Some(exe_dir) = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(Path::to_path_buf))
     {
-        candidates.push(exe_dir.join(ROM_NAME));
         candidates.push(exe_dir.join("roms").join(ROM_NAME));
+        candidates.push(exe_dir.join(ROM_NAME));
     }
     candidates
 }

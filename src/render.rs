@@ -174,6 +174,8 @@ pub fn ensure_core_loaded(
         let core_path = fbneo_core_path().ok_or_else(|| {
             "FBNeo core not found next to the executable or in cores\\".to_string()
         })?;
+        crate::dlog!("retro", "resolved rom zip={rom_path}");
+        crate::dlog!("retro", "resolved fbneo core={core_path}");
         let c = retro::load(&core_path, &rom_path)?;
         let rate = c.av_info.timing.sample_rate.round() as i32;
         let desired = AudioSpecDesired {
@@ -193,7 +195,7 @@ pub fn ensure_core_loaded(
     Ok(())
 }
 
-fn fbneo_core_path() -> Option<String> {
+pub(crate) fn fbneo_core_path() -> Option<String> {
     let name = platform_core_name();
     let mut candidates = vec![name.to_string(), format!("cores/{name}")];
     if let Some(exe_dir) = std::env::current_exe()

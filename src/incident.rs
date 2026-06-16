@@ -41,7 +41,12 @@ pub struct Incident {
     pub session_id: Option<String>,
     pub room_id: Option<String>,
     pub peer_endpoint: Option<String>,
-    pub role: Option<&'static str>, // "host" or "join"
+    pub role: Option<&'static str>,           // "host" or "join"
+    pub transport_path: Option<&'static str>, // "direct" or "relay"
+    pub relay_registered: Option<bool>,
+    pub relay_peer_ready: Option<bool>,
+    pub relay_data_received: Option<bool>,
+    pub ggrs_state: Option<String>,
     pub rom_hash: Option<String>,
     pub p1_score: Option<u16>,
     pub p2_score: Option<u16>,
@@ -127,6 +132,11 @@ fn build_body(i: &Incident) -> String {
     push_opt_str(&mut s, "room_id", i.room_id.as_deref());
     push_opt_str(&mut s, "peer_endpoint", i.peer_endpoint.as_deref());
     push_opt_str(&mut s, "role", i.role);
+    push_opt_str(&mut s, "transport_path", i.transport_path);
+    push_opt_bool(&mut s, "relay_registered", i.relay_registered);
+    push_opt_bool(&mut s, "relay_peer_ready", i.relay_peer_ready);
+    push_opt_bool(&mut s, "relay_data_received", i.relay_data_received);
+    push_opt_str(&mut s, "ggrs_state", i.ggrs_state.as_deref());
     push_str_field(&mut s, "app_version", version::VERSION, false);
     push_str_field(&mut s, "build_date", version::BUILD_DATE, false);
     push_str_field(&mut s, "git_hash", version::GIT_HASH, false);
@@ -189,6 +199,12 @@ fn push_opt_str(out: &mut String, key: &str, value: Option<&str>) {
     }
 }
 
+fn push_opt_bool(out: &mut String, key: &str, value: Option<bool>) {
+    if let Some(v) = value {
+        out.push_str(&format!(",\"{key}\":{v}"));
+    }
+}
+
 /// Minimal JSON string escape. Backslash, double-quote, and control
 /// characters get the standard \\uXXXX or short-form treatment. All
 /// other bytes pass through — we accept that legitimately weird
@@ -206,6 +222,52 @@ fn json_escape_into(s: &str, out: &mut String) {
             }
             c => out.push(c),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_body_includes_transport_and_relay_diagnostics() {
+        let mut inc = Incident::new(KIND_GGRS_NEVER_SYNCED, "relay \"startup\"\nfailed");
+        inc.session_id = Some("session-123".into());
+        inc.room_id = Some("room-456".into());
+        inc.role = Some("join");
+        inc.transport_path = Some("relay");
+        inc.relay_registered = Some(true);
+        inc.relay_peer_ready = Some(false);
+        inc.relay_data_received = Some(true);
+        inc.ggrs_state = Some("Synchronizing".into());
+        inc.frames_advanced = 42;
+
+        let body = build_body(&inc);
+
+        assert!(body.contains("\"kind\":\"ggrs_never_synced\""));
+        assert!(body.contains("\"summary\":\"relay \\\"startup\\\"\\nfailed\""));
+        assert!(body.contains("\"session_id\":\"session-123\""));
+        assert!(body.contains("\"room_id\":\"room-456\""));
+        assert!(body.contains("\"role\":\"join\""));
+        assert!(body.contains("\"transport_path\":\"relay\""));
+        assert!(body.contains("\"relay_registered\":true"));
+        assert!(body.contains("\"relay_peer_ready\":false"));
+        assert!(body.contains("\"relay_data_received\":true"));
+        assert!(body.contains("\"ggrs_state\":\"Synchronizing\""));
+        assert!(body.contains("\"frames_advanced\":42"));
+    }
+
+    #[test]
+    fn build_body_omits_unset_optional_relay_fields() {
+        let inc = Incident::new(KIND_MATCH_ENDED_EARLY, "direct failure");
+        let body = build_body(&inc);
+
+        assert!(!body.contains("transport_path"));
+        assert!(!body.contains("relay_registered"));
+        assert!(!body.contains("relay_peer_ready"));
+        assert!(!body.contains("relay_data_received"));
+        assert!(!body.contains("ggrs_state"));
+        assert!(body.contains("\"net_log_tail\":\"\""));
     }
 }
 

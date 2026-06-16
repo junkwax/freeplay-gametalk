@@ -3,6 +3,7 @@
     windows_subsystem = "windows"
 )]
 
+mod audio_recovery;
 mod cli;
 mod clip;
 mod config;
@@ -12,6 +13,7 @@ mod discord_webhook;
 mod doctor;
 mod drone;
 mod font;
+mod frame_timer;
 mod ghost;
 mod gl_crt;
 mod incident;
@@ -26,6 +28,9 @@ mod menu;
 mod menu_input;
 mod mk2_addrs;
 mod mk2_perf;
+mod native_titlebar_drag;
+mod net_set;
+mod net_stats_ui;
 mod netcore;
 mod netplay;
 mod png;
@@ -42,12 +47,18 @@ mod session;
 mod version;
 mod wuname;
 
+use crate::audio_recovery::prepare_game_audio;
 use crate::cli::{parse_args, NetMode};
 use crate::controllers::{assign_pad, open_initial_controllers, pad_owner, Pads};
 use crate::font::Font;
 use crate::input::{set_action_source, Bindings, InputSource, Player};
 use crate::menu::{AppState, MenuScreen, NavResult, LOGICAL_H, LOGICAL_W};
 use crate::menu_input::{capture_rebind, event_to_menu_nav, is_cancel, is_clear, MenuNav};
+use crate::net_set::{
+    log_completed_net_match, mark_net_set_complete_pending, pending_net_set_expired,
+    sync_completed_net_matches,
+};
+use crate::net_stats_ui::NetStatsUi;
 use crate::netcore::{reset_for_netplay, step_netplay_frame, NetRuntime};
 use crate::render::{
     build_window_canvas, draw_chat_overlay, draw_emu_frame, draw_fight_overlay,
@@ -65,7 +76,7 @@ use sdl2::audio::AudioQueue;
 use sdl2::event::Event;
 use sdl2::keyboard::{Keycode, Mod, Scancode};
 use sdl2::pixels::{Color, PixelFormatEnum};
-use sdl2::render::BlendMode;
+use sdl2::render::{BlendMode, Canvas};
 use sdl2::surface::Surface;
 use sdl2::video::{FullscreenType, Window};
 use std::time::{Duration, Instant};
@@ -751,6 +762,151 @@ fn inferred_match_over(now: score::Score, target: u16) -> Option<score::ScoreEve
     }
 }
 
+fn set_netplay_window_chrome(canvas: &mut Canvas<Window>, active: bool) {
+    if canvas.window().fullscreen_state() == FullscreenType::Off {
+        canvas.window_mut().set_bordered(true);
+    }
+    native_titlebar_drag::set_enabled(active);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn shutdown_local_runtime_for_netplay(
+    core: Option<&retro::Core>,
+    audio_queue: Option<&AudioQueue<i16>>,
+    trainer: &mut memory::PokeList,
+    lab_reset_slots: &mut lab::ResetSlots,
+    lab_dummy: &mut lab::DummyController,
+    punish_trainer: &mut lab::PunishTrainer,
+    damage_tracker: &mut lab::DamageTracker,
+    ghost_playback: &mut Option<ghost::Playback>,
+    ghost_recording: &mut Option<ghost::Recording>,
+    drone_runner: &mut Option<drone::DroneRunner>,
+    ghost_port_mask: &mut u8,
+    match_replay_playback: &mut Option<match_replay::Playback>,
+    match_replay_recording: &mut Option<match_replay::Recording>,
+    replay_review_paused: &mut bool,
+    replay_review_tick: &mut u64,
+    replay_clip_in: &mut Option<usize>,
+    replay_clip_out: &mut Option<usize>,
+    clip_recorder: &mut Option<clip::ClipRecorder>,
+    input_history: &mut input_history::InputHistory,
+    score_tracker: &mut score::ScoreTracker,
+    local_play_mode: &mut LocalPlayMode,
+    session_p1_wins: &mut u32,
+    session_p2_wins: &mut u32,
+    auto_start_done: &mut bool,
+    auto_start_frame: &mut u32,
+    audio_tail_sample: &mut Option<(i16, i16)>,
+    mut net_log: Option<&mut std::fs::File>,
+    reason: &str,
+) {
+    let line = format!(
+        "[net] shutting down local {:?} runtime before online start: {reason}",
+        *local_play_mode
+    );
+    println!("{line}");
+    if let Some(f) = net_log.as_mut() {
+        use std::io::Write;
+        let _ = writeln!(f, "{line}");
+    }
+
+    *local_play_mode = LocalPlayMode::Arcade;
+    *match_replay_playback = None;
+    *match_replay_recording = None;
+    *replay_review_paused = false;
+    *replay_review_tick = 0;
+    *replay_clip_in = None;
+    *replay_clip_out = None;
+    *ghost_playback = None;
+    *ghost_recording = None;
+    *drone_runner = None;
+    *ghost_port_mask = 0b11;
+    lab_reset_slots.clear();
+    lab_dummy.clear_loop();
+    punish_trainer.reset_stats();
+    damage_tracker.reset_stats();
+    score_tracker.reset();
+    *session_p1_wins = 0;
+    *session_p2_wins = 0;
+    *auto_start_done = true;
+    *auto_start_frame = 0;
+    input_history.clear();
+    input::clear_all_inputs();
+
+    if let Some(recorder) = clip_recorder.take() {
+        let message = finish_clip_recording(recorder);
+        println!("[clip] {message}");
+    }
+    if let Some(q) = audio_queue {
+        q.clear();
+    }
+    unsafe {
+        retro::clear_audio_buffer();
+    }
+    *audio_tail_sample = None;
+
+    if let Some(c) = core {
+        c.reset();
+        reset_for_netplay(c, trainer, lab_reset_slots, ghost_playback, ghost_recording);
+        if let Some(f) = net_log.as_mut() {
+            use std::io::Write;
+            let _ = writeln!(f, "[net] core reset for canonical online start");
+        }
+    }
+}
+
+fn attach_relay_diagnostics(
+    inc: &mut incident::Incident,
+    relay_chat: Option<&relay_socket::RelayChatHandle>,
+) {
+    if let Some(chat) = relay_chat {
+        let diag = chat.diagnostics();
+        inc.relay_registered = Some(diag.registered);
+        inc.relay_peer_ready = Some(diag.peer_ready);
+        inc.relay_data_received = Some(diag.data_received);
+    }
+}
+
+fn lobby_format_to_menu(format: matchmaking::LobbyMatchFormat) -> menu::ChallengeFormat {
+    match format {
+        matchmaking::LobbyMatchFormat::UnrankedVs => menu::ChallengeFormat::UnrankedVs,
+        matchmaking::LobbyMatchFormat::RankedFt3 => menu::ChallengeFormat::RankedFt3,
+        matchmaking::LobbyMatchFormat::RankedFt5 => menu::ChallengeFormat::RankedFt5,
+        matchmaking::LobbyMatchFormat::RankedFt10 => menu::ChallengeFormat::RankedFt10,
+    }
+}
+
+fn lobby_room_to_preview(room: matchmaking::LobbyRoom) -> menu::LobbyPreview {
+    menu::LobbyPreview {
+        name: room.name,
+        host: room.host_username,
+        format: lobby_format_to_menu(room.format),
+        players: room.players,
+        private: room.private,
+        status: room.status,
+    }
+}
+
+fn lobby_snapshot_lines(snapshot: &matchmaking::LobbySnapshot) -> Vec<String> {
+    let mut lines = Vec::new();
+    if !snapshot.users.is_empty() {
+        let names = snapshot
+            .users
+            .iter()
+            .map(|user| user.username.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        lines.push(format!("ONLINE {names}"));
+    }
+    for msg in &snapshot.chat {
+        lines.push(format!("{}: {}", msg.username, msg.message));
+    }
+    if lines.is_empty() {
+        lines.push("SYSTEM No lobby messages yet".into());
+    }
+    lines
+}
+
 fn enter_replay_review(
     pb: match_replay::Playback,
     match_replay_playback: &mut Option<match_replay::Playback>,
@@ -786,42 +942,6 @@ fn enter_replay_review(
         *toast = Some((message, Instant::now() + Duration::from_millis(3200)));
     }
     *state = AppState::Playing;
-}
-
-fn net_stats_detail_rows(
-    rollback_frames: u32,
-    load_count: u32,
-    kbps_sent: Option<&str>,
-    local_frames_behind: Option<&str>,
-    remote_frames_behind: Option<&str>,
-    ping_ms: Option<i32>,
-    mk2_perf: Option<mk2_perf::Mk2PerfSample>,
-) -> Vec<String> {
-    let mut rows = Vec::new();
-    if let Some(ms) = ping_ms {
-        let quality = if ms <= 80 {
-            "GOOD"
-        } else if ms <= 140 {
-            "OK"
-        } else {
-            "HIGH"
-        };
-        rows.push(format!("QUALITY {quality}"));
-    }
-    rows.push(format!("ROLL {}F", rollback_frames));
-    if load_count > 0 {
-        rows.push(format!("LOADS {load_count}"));
-    }
-    if let (Some(local), Some(remote)) = (local_frames_behind, remote_frames_behind) {
-        rows.push(format!("BEHIND L{local} R{remote}"));
-    }
-    if let Some(kbps) = kbps_sent {
-        rows.push(format!("SEND {kbps} KB/S"));
-    }
-    if let Some(perf) = mk2_perf {
-        rows.extend(perf.detail_rows());
-    }
-    rows
 }
 
 fn refresh_replay_select(state: &mut AppState, status: Option<String>) {
@@ -1158,6 +1278,38 @@ fn run_render_probe() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn run_core_probe() -> Result<(), Box<dyn std::error::Error>> {
+    log::init("core_probe");
+    dlog!("boot", "core_probe");
+
+    let rom_path = rom::find_rom_zip_string()
+        .ok_or_else(|| "ROM zip not found next to the executable or in roms\\".to_string())?;
+    let core_path = render::fbneo_core_path()
+        .ok_or_else(|| "FBNeo core not found next to the executable or in cores\\".to_string())?;
+
+    println!("[core-probe] rom={rom_path}");
+    println!("[core-probe] core={core_path}");
+    dlog!("retro", "core_probe resolved rom zip={rom_path}");
+    dlog!("retro", "core_probe resolved fbneo core={core_path}");
+
+    unsafe {
+        SILENT_MODE = true;
+        let core = retro::load(&core_path, &rom_path)?;
+        if !core.load_ok {
+            SILENT_MODE = false;
+            return Err("retro_load_game returned false".into());
+        }
+        for _ in 0..12 {
+            (core.run)();
+        }
+        SILENT_MODE = false;
+    }
+
+    println!("[core-probe] ok");
+    dlog!("retro", "core_probe ok");
+    Ok(())
+}
+
 #[allow(static_mut_refs)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     adopt_packaged_working_dir();
@@ -1166,11 +1318,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return run_render_probe();
     }
 
+    if cli::core_probe_requested() {
+        return run_core_probe();
+    }
+
+    if let Some(report_path) = cli::doctor_report_path() {
+        let cfg = config::load();
+        config::set_signaling_url(cfg.signaling_url.clone());
+        std::process::exit(doctor::run_report(&report_path));
+    }
+
     if cli::doctor_requested() {
         let cfg = config::load();
         config::set_signaling_url(cfg.signaling_url.clone());
         std::process::exit(doctor::run());
     }
+
+    let _timer_resolution = frame_timer::TimerResolution::request_1ms();
 
     let net_mode = parse_args();
     let log_tag = match &net_mode {
@@ -1225,6 +1389,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         cfg.render_profile,
         cfg.video_filter.uses_opengl_shader(),
     )?;
+    let _native_titlebar_drag = match native_titlebar_drag::install(canvas.window()) {
+        Ok(guard) => Some(guard),
+        Err(e) => {
+            println!("[window] native titlebar drag shim unavailable: {e}");
+            None
+        }
+    };
     let mut render_startup_toast: Option<String> = None;
     if requested_render_profile == config::RenderProfile::Auto {
         let recommended = recommended_profile(&canvas);
@@ -1369,22 +1540,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut auto_start_done = false;
 
     const NETPLAY_MATCH_LIMIT: u32 = 3;
+    const NETPLAY_SET_COMPLETE_GRACE_FRAMES: u32 = 55 * 25;
     let mut net_match_count: u32 = 0;
     let mut ranked_match_index: u32 = 0;
     let mut net_in_fight: bool = false;
+    let mut net_set_complete_pending_frame: Option<u32> = None;
     let mut net_teardown_reason: Option<String> = None;
     let mut net_frames_since_progress: u32 = 0;
     let mut net_log: Option<std::fs::File> = None;
     let mut net_runtime = NetRuntime::default();
-    let mut net_stats_next_frame: u32 = 0;
     let mut net_stats_visible = false;
+    let mut net_stats = NetStatsUi::default();
+    let mut audio_tail_sample: Option<(i16, i16)> = None;
     let mut render_debug_visible = false;
-    let mut latest_net_ping_ms: Option<i32> = None;
-    let mut latest_net_kbps_sent: Option<String> = None;
-    let mut latest_net_local_frames_behind: Option<String> = None;
-    let mut latest_net_remote_frames_behind: Option<String> = None;
-    let mut latest_net_rollback_frames: u32 = 0;
-    let mut latest_net_load_count: u32 = 0;
     let mut net_spectate_next: u32 = 165; // ~3s
     let mut net_frame_counter: u32 = 0;
     const GS_FIGHTING: u16 = 0x02;
@@ -1399,6 +1567,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut net_session: Option<netplay::Session> = None;
     let mut local_handle: usize = 0;
     let mut relay_chat: Option<relay_socket::RelayChatHandle> = None;
+    let mut net_transport_path: Option<&'static str> = None;
     let mut chat_open = false;
     let mut chat_draft = String::new();
     let mut chat_lines: Vec<String> = Vec::new();
@@ -1438,6 +1607,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         None;
     let mut spectate_rx: Option<std::sync::mpsc::Receiver<matchmaking::SpectateUpdate>> = None;
     let mut spectate_last_update: Option<Instant> = None;
+    let mut lobby_rx: Option<std::sync::mpsc::Receiver<matchmaking::LobbyUpdate>> = None;
+    let mut lobby_next_refresh = Instant::now();
+    let mut lobby_list_rx: Option<std::sync::mpsc::Receiver<matchmaking::LobbyListUpdate>> = None;
+    let mut lobby_list_next_refresh = Instant::now();
+    let mut lobby_chat_post_rx: Option<
+        std::sync::mpsc::Receiver<matchmaking::LobbyChatPostUpdate>,
+    > = None;
     let mut live_matches_rx: Option<std::sync::mpsc::Receiver<matchmaking::LiveMatchesUpdate>> =
         None;
     let mut live_matches_next_refresh = Instant::now();
@@ -1508,6 +1684,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &cfg.stats_url,
     );
 
+    macro_rules! shutdown_for_online_start {
+        ($reason:expr) => {
+            shutdown_local_runtime_for_netplay(
+                core.as_ref(),
+                audio_queue.as_ref(),
+                &mut trainer,
+                &mut lab_reset_slots,
+                &mut lab_dummy,
+                &mut punish_trainer,
+                &mut damage_tracker,
+                &mut ghost_playback,
+                &mut ghost_recording,
+                &mut drone_runner,
+                &mut ghost_port_mask,
+                &mut match_replay_playback,
+                &mut match_replay_recording,
+                &mut replay_review_paused,
+                &mut replay_review_tick,
+                &mut replay_clip_in,
+                &mut replay_clip_out,
+                &mut clip_recorder,
+                &mut input_history,
+                &mut score_tracker,
+                &mut local_play_mode,
+                &mut session_p1_wins,
+                &mut session_p2_wins,
+                &mut auto_start_done,
+                &mut auto_start_frame,
+                &mut audio_tail_sample,
+                None,
+                $reason,
+            )
+        };
+    }
+
     'running: loop {
         if chat_open
             || matches!(
@@ -1529,6 +1740,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if mm_rx.is_none() {
             if let Some(room_id) = rpc::take_join_request() {
                 println!("[main] Join-to-spar request received");
+                shutdown_for_online_start!("Discord join request");
                 let (tx, rx) = std::sync::mpsc::channel();
                 mm_rx = Some(rx);
                 matchmaking::start_join_room(tx, room_id);
@@ -2164,6 +2376,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if matches!(
                         state,
                         AppState::Menu(menu::MenuScreen::TestIp { editing: true, .. })
+                            | AppState::Menu(menu::MenuScreen::OnlineHub {
+                                tab: menu::OnlineTab::General,
+                                cursor: 1,
+                                ..
+                            })
                             | AppState::Menu(menu::MenuScreen::TextEdit { .. })
                             | AppState::Menu(menu::MenuScreen::MatchUsername {
                                 checking: false,
@@ -2179,6 +2396,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } if matches!(
                     state,
                     AppState::Menu(menu::MenuScreen::TestIp { editing: true, .. })
+                        | AppState::Menu(menu::MenuScreen::OnlineHub {
+                            tab: menu::OnlineTab::General,
+                            cursor: 1,
+                            ..
+                        })
                         | AppState::Menu(menu::MenuScreen::TextEdit { .. })
                         | AppState::Menu(menu::MenuScreen::MatchUsername {
                             checking: false,
@@ -2195,6 +2417,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ..
                 } if matches!(state, AppState::Menu(MenuScreen::Matchmaking { .. })) => {
                     net_stats_visible = !net_stats_visible;
+                    net_stats.on_overlay_toggle(net_stats_visible);
                     toast = Some((
                         format!(
                             "Network stats {}",
@@ -2378,6 +2601,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             net_match_count = 0;
                                             ranked_match_index = 0;
                                             net_in_fight = false;
+                                            net_set_complete_pending_frame = None;
                                             net_frames_since_progress = 0;
                                             match netplay::start_session(
                                                 *local_port,
@@ -2387,13 +2611,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             ) {
                                                 Ok(s) => {
                                                     net_session = Some(s);
-                                                    latest_net_ping_ms = None;
-                                                    latest_net_kbps_sent = None;
-                                                    latest_net_local_frames_behind = None;
-                                                    latest_net_remote_frames_behind = None;
-                                                    latest_net_rollback_frames = 0;
-                                                    latest_net_load_count = 0;
-                                                    net_stats_next_frame = 0;
+                                                    set_netplay_window_chrome(&mut canvas, true);
+                                                    relay_chat = None;
+                                                    net_transport_path = Some("direct");
+                                                    net_stats.reset();
+                                                    audio_tail_sample = None;
                                                     net_frame_counter = 0;
                                                     net_recording = maybe_start_net_recording(
                                                         &ghost_library,
@@ -2410,6 +2632,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     net_log = open_net_log();
                                                 }
                                                 Err(e) => {
+                                                    net_transport_path = None;
                                                     println!("[net] session start failed: {e}")
                                                 }
                                             }
@@ -2422,6 +2645,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     if cfg.player_username_confirmed {
                                         cfg.player_username = value.clone();
                                         config::save(&cfg);
+                                        shutdown_for_online_start!("find-match queue");
                                         start_find_match_queue(
                                             &cfg,
                                             &mut mm_rx,
@@ -2488,6 +2712,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         config::sanitize_username(&cfg.player_username)
                                             .unwrap_or_else(config::default_username);
                                     config::save(&cfg);
+                                    shutdown_for_online_start!("find-match queue");
                                     start_find_match_queue(
                                         &cfg,
                                         &mut mm_rx,
@@ -2570,6 +2795,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     }
                                 }
                                 NavResult::OpenLiveMatches => {
+                                    if let AppState::Menu(menu::MenuScreen::OnlineHub {
+                                        ref mut tab,
+                                        ref mut status,
+                                        ..
+                                    }) = state
+                                    {
+                                        *tab = menu::OnlineTab::Watch;
+                                        *status = "Loading live matches...".into();
+                                    }
                                     let (tx, rx) = std::sync::mpsc::channel();
                                     live_matches_rx = Some(rx);
                                     matchmaking::fetch_live_matches(tx);
@@ -2811,6 +3045,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         ),
                                         Instant::now() + Duration::from_millis(2200),
                                     ));
+                                }
+                                NavResult::SendLobbyChat(message) => {
+                                    matchmaking::set_guest_profile(
+                                        cfg.player_username.clone(),
+                                        cfg.stats_email.clone(),
+                                        cfg.guest_device_id.clone(),
+                                    );
+                                    let (tx, rx) = std::sync::mpsc::channel();
+                                    lobby_chat_post_rx = Some(rx);
+                                    matchmaking::send_lobby_chat(message, tx);
+                                    if let AppState::Menu(menu::MenuScreen::OnlineHub {
+                                        ref mut status,
+                                        ..
+                                    }) = state
+                                    {
+                                        *status = "Sending chat...".into();
+                                    }
                                 }
                                 NavResult::ToggleFullscreen => {
                                     cfg.fullscreen = !cfg.fullscreen;
@@ -4147,6 +4398,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ..
                     } if net_session.is_some() && match_replay_playback.is_none() => {
                         net_stats_visible = !net_stats_visible;
+                        net_stats.on_overlay_toggle(net_stats_visible);
                         toast = Some((
                             format!(
                                 "Network stats {}",
@@ -4318,28 +4570,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Some(sess) = net_session.as_mut() {
                         let gstate =
                             memory::peek_u16(c, GSTATE_ADDR, memory::Endian::Little).unwrap_or(0);
-                        let mut completed_game_this_frame = false;
+                        let mut reached_gameover_this_frame = false;
                         if gstate == GS_FIGHTING {
                             net_in_fight = true;
                         } else if net_in_fight && gstate == GS_GAMEOVER {
                             net_in_fight = false;
-                            net_match_count += 1;
-                            completed_game_this_frame = true;
-                            let line = format!(
-                                "[net] Game {}/{} complete.",
-                                net_match_count, NETPLAY_MATCH_LIMIT
-                            );
-                            println!("{}", line);
-                            if let Some(f) = net_log.as_mut() {
-                                use std::io::Write;
-                                let _ = writeln!(f, "{}", line);
-                            }
-                            if net_match_count >= NETPLAY_MATCH_LIMIT {
-                                net_teardown_reason = Some(format!(
-                                    "game limit reached ({} games)",
-                                    NETPLAY_MATCH_LIMIT
-                                ));
-                            }
+                            reached_gameover_this_frame = true;
                         }
 
                         // ── Live score tracking ──────────────────────────────────────
@@ -4356,6 +4592,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 } else {
                                     session_p2_wins += 1;
                                 }
+                                if sync_completed_net_matches(
+                                    &mut net_match_count,
+                                    session_p1_wins,
+                                    session_p2_wins,
+                                ) && log_completed_net_match(
+                                    net_match_count,
+                                    &mut net_log,
+                                    NETPLAY_MATCH_LIMIT,
+                                ) {
+                                    mark_net_set_complete_pending(
+                                        &mut net_set_complete_pending_frame,
+                                        net_frame_counter,
+                                        &mut net_log,
+                                        NETPLAY_MATCH_LIMIT,
+                                    );
+                                }
+                            } else if ev == score::ScoreEvent::NewMatch
+                                && net_set_complete_pending_frame.is_some()
+                                && net_teardown_reason.is_none()
+                            {
+                                net_teardown_reason = Some(format!(
+                                    "game limit reached ({NETPLAY_MATCH_LIMIT} games)"
+                                ));
                             }
                             handle_score_event(
                                 ev,
@@ -4367,10 +4626,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 result_match_index,
                             );
                         }
-                        if completed_game_this_frame
-                            && !emitted_match_over
-                            && session_p1_wins.saturating_add(session_p2_wins) < net_match_count
-                        {
+                        if reached_gameover_this_frame && !emitted_match_over {
                             if let Some(ev) = inferred_match_over(now_score, MATCH_WIN_TARGET) {
                                 println!("[score] inferred match result at gameover");
                                 let mut result_match_index = None;
@@ -4381,6 +4637,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         session_p1_wins += 1;
                                     } else {
                                         session_p2_wins += 1;
+                                    }
+                                    if sync_completed_net_matches(
+                                        &mut net_match_count,
+                                        session_p1_wins,
+                                        session_p2_wins,
+                                    ) && log_completed_net_match(
+                                        net_match_count,
+                                        &mut net_log,
+                                        NETPLAY_MATCH_LIMIT,
+                                    ) {
+                                        mark_net_set_complete_pending(
+                                            &mut net_set_complete_pending_frame,
+                                            net_frame_counter,
+                                            &mut net_log,
+                                            NETPLAY_MATCH_LIMIT,
+                                        );
                                     }
                                 }
                                 handle_score_event(
@@ -4423,9 +4695,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if let Some(f) = net_log.as_mut() {
                                 use std::io::Write;
                                 let _ = writeln!(f,
-                                    "[net/early] frame={} sess_state={:?} advance_count={} loads={} confirmed={}",
+                                    "[net/early] frame={} sess_state={:?} advance_count={} saves={} loads={} timing_us=S{} H{} L{} confirmed={}",
                                     net_frame_counter, sess.current_state(),
-                                    step_stats.advance_count, step_stats.load_count,
+                                    step_stats.advance_count, step_stats.save_count,
+                                    step_stats.load_count, step_stats.save_state_micros,
+                                    step_stats.checksum_micros, step_stats.load_state_micros,
                                     sess.confirmed_frame());
                             }
                         }
@@ -4435,16 +4709,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 use std::io::Write;
                                 let _ = writeln!(
                                     f,
-                                    "[net/rollback] frame={} resim_depth={} loads={}",
+                                    "[net/rollback] frame={} resim_depth={} saves={} loads={} timing_us=S{} H{} L{}",
                                     net_frame_counter,
                                     step_stats.advance_count - 1,
-                                    step_stats.load_count
+                                    step_stats.save_count,
+                                    step_stats.load_count,
+                                    step_stats.save_state_micros,
+                                    step_stats.checksum_micros,
+                                    step_stats.load_state_micros
                                 );
                             }
                         }
-                        latest_net_rollback_frames =
-                            step_stats.advance_count.saturating_sub(1) as u32;
-                        latest_net_load_count = step_stats.load_count as u32;
+                        net_stats.record_step(step_stats);
 
                         let post_confirmed = sess.confirmed_frame();
                         if pre_ready && post_confirmed > pre_confirmed {
@@ -4459,6 +4735,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         } else if net_frames_since_progress > 120 && net_teardown_reason.is_none() {
                             net_teardown_reason = Some("peer timed out (no progress)".into());
                         }
+                        if pending_net_set_expired(
+                            net_set_complete_pending_frame,
+                            net_frame_counter,
+                            NETPLAY_SET_COMPLETE_GRACE_FRAMES,
+                        ) && net_teardown_reason.is_none()
+                        {
+                            net_teardown_reason =
+                                Some(format!("game limit reached ({NETPLAY_MATCH_LIMIT} games)"));
+                        }
 
                         net_frame_counter = net_frame_counter.wrapping_add(1);
                         if net_frame_counter >= net_spectate_next {
@@ -4472,15 +4757,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 );
                             }
                         }
-                        if net_frame_counter >= net_stats_next_frame {
-                            net_stats_next_frame = net_frame_counter.wrapping_add(275);
+                        if net_frame_counter >= net_stats.next_network_sample_frame {
+                            net_stats.next_network_sample_frame =
+                                net_frame_counter.wrapping_add(275);
                             let remote_handle = 1 - local_handle;
                             if let Ok(stats) = sess.network_stats(remote_handle) {
-                                latest_net_ping_ms = Some(stats.ping as i32);
-                                latest_net_kbps_sent = Some(stats.kbps_sent.to_string());
-                                latest_net_local_frames_behind =
+                                net_stats.ping_ms = Some(stats.ping as i32);
+                                net_stats.kbps_sent = Some(stats.kbps_sent.to_string());
+                                net_stats.local_frames_behind =
                                     Some(stats.local_frames_behind.to_string());
-                                latest_net_remote_frames_behind =
+                                net_stats.remote_frames_behind =
                                     Some(stats.remote_frames_behind.to_string());
                                 let line = format!(
                                     "[net/diag] frame={} confirmed={} ping={}ms kbps_sent={} local_frames_ahead={} remote_frames_ahead={}",
@@ -4703,6 +4989,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Some(q) = &audio_queue {
                         unsafe {
                             if !AUDIO_BUFFER.is_empty() {
+                                let rollback_recovery_audio =
+                                    net_session.is_some() && net_stats.rollback_frames > 0;
+                                prepare_game_audio(
+                                    &mut AUDIO_BUFFER,
+                                    rollback_recovery_audio,
+                                    &mut audio_tail_sample,
+                                );
                                 if let Some(recorder) = clip_recorder.as_mut() {
                                     recorder.record_audio(&AUDIO_BUFFER);
                                 }
@@ -4775,6 +5068,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             inc.frames_advanced = net_frame_counter;
                             inc.p1_score = Some(session_p1_wins as u16);
                             inc.p2_score = Some(session_p2_wins as u16);
+                            inc.transport_path = net_transport_path;
+                            inc.ggrs_state = net_session
+                                .as_ref()
+                                .map(|s| format!("{:?}", s.current_state()));
+                            attach_relay_diagnostics(&mut inc, relay_chat.as_ref());
                             inc.net_log_path = Some(std::path::PathBuf::from("freeplay-net.log"));
                             let (_size, hash) = rom_fingerprint();
                             inc.rom_hash = Some(format!("{:016x}", hash));
@@ -4880,22 +5178,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             path.to_string_lossy().into_owned()
                         });
                         net_session = None;
+                        set_netplay_window_chrome(&mut canvas, false);
                         net_match_count = 0;
                         net_in_fight = false;
+                        net_set_complete_pending_frame = None;
                         net_frames_since_progress = 0;
-                        net_stats_next_frame = 0;
                         ranked_match_index = 0;
                         net_spectate_next = 165;
                         net_frame_counter = 0;
                         net_runtime = NetRuntime::default();
                         net_log = None;
-                        latest_net_ping_ms = None;
-                        latest_net_kbps_sent = None;
-                        latest_net_local_frames_behind = None;
-                        latest_net_remote_frames_behind = None;
-                        latest_net_rollback_frames = 0;
-                        latest_net_load_count = 0;
+                        net_stats.reset();
+                        audio_tail_sample = None;
                         relay_chat = None;
+                        net_transport_path = None;
                         chat_open = false;
                         chat_draft.clear();
                         chat_lines.clear();
@@ -4949,9 +5245,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     cfg.aspect_mode,
                     cfg.crt_corner_bend,
                 )?;
-                // Netplay names should come up as soon as the round intro starts;
-                // lab/replay overlays still wait for spawned fighters so they do
-                // not cover the VS screen.
+                // Fight overlays wait for spawned fighters so they do not cover
+                // the VS portrait/loading screen.
                 let overlay_screen = core
                     .as_ref()
                     .map(|c| {
@@ -4962,17 +5257,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let s = score::Score::read(c);
                         let match_decided = s.p1_match_wins >= MATCH_WIN_TARGET
                             || s.p2_match_wins >= MATCH_WIN_TARGET;
-                        let round_intro_started = gstate != 0
-                            && gstate != GS_AMODE
-                            && gstate != GS_GAMEOVER
-                            && s.round_num > 0;
                         let fighters_spawned = matches!(gstate, GS_FIGHTING | 0x03) && p1_hp > 0;
-                        !match_decided
-                            && if net_session.is_some() {
-                                round_intro_started
-                            } else {
-                                fighters_spawned
-                            }
+                        !match_decided && fighters_spawned
                     })
                     .unwrap_or(false);
                 if overlay_screen
@@ -5128,17 +5414,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if net_stats_visible && net_session.is_some() {
                     canvas.set_logical_size(0, 0)?;
                     let (win_w, win_h) = canvas.output_size().unwrap_or((1200, 762));
-                    let ping_label = latest_net_ping_ms.map(|ms| format!("{ms} ms"));
-                    let mk2_perf = core.as_ref().and_then(mk2_perf::sample);
-                    let detail_rows = net_stats_detail_rows(
-                        latest_net_rollback_frames,
-                        latest_net_load_count,
-                        latest_net_kbps_sent.as_deref(),
-                        latest_net_local_frames_behind.as_deref(),
-                        latest_net_remote_frames_behind.as_deref(),
-                        latest_net_ping_ms,
-                        mk2_perf,
-                    );
+                    let ping_label = net_stats.ping_label();
+                    let mk2_perf = net_stats.sample_mk2_perf(core.as_ref(), net_frame_counter);
+                    let detail_rows = net_stats.detail_rows(mk2_perf);
                     draw_net_stats_overlay(
                         &mut canvas,
                         &mut font,
@@ -5224,7 +5502,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             Ok(matchmaking::Update::Connected {
                                 peer_endpoint,
                                 is_host,
-                                turn,
+                                transport,
                                 session_id,
                                 room_id,
                                 peer_username,
@@ -5245,136 +5523,127 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     matchmaking::username_from_cached_token().or(discord_user);
                                 discord_id =
                                     matchmaking::discord_id_from_cached_token().or(discord_id);
+                                let transport_path = match &transport {
+                                    matchmaking::MatchTransport::Relay { .. } => "relay",
+                                    matchmaking::MatchTransport::Direct { .. } => "direct",
+                                };
 
                                 ensure_core_loaded(&mut core, &mut audio_queue, &audio_subsystem)?;
                                 let mut log = open_net_log();
-                                if let Some(c) = &core {
-                                    input::clear_all_inputs();
-                                    c.reset();
-                                    reset_for_netplay(
-                                        c,
-                                        &mut trainer,
-                                        &mut lab_reset_slots,
-                                        &mut ghost_playback,
-                                        &mut ghost_recording,
-                                    );
-                                    if let Some(f) = log.as_mut() {
-                                        use std::io::Write;
-                                        let _ = writeln!(
-                                            f,
-                                            "[net] core reset for canonical online start"
-                                        );
-                                    }
-                                }
-                                match_replay_playback = None;
-                                input_history.clear();
+                                shutdown_local_runtime_for_netplay(
+                                    core.as_ref(),
+                                    audio_queue.as_ref(),
+                                    &mut trainer,
+                                    &mut lab_reset_slots,
+                                    &mut lab_dummy,
+                                    &mut punish_trainer,
+                                    &mut damage_tracker,
+                                    &mut ghost_playback,
+                                    &mut ghost_recording,
+                                    &mut drone_runner,
+                                    &mut ghost_port_mask,
+                                    &mut match_replay_playback,
+                                    &mut match_replay_recording,
+                                    &mut replay_review_paused,
+                                    &mut replay_review_tick,
+                                    &mut replay_clip_in,
+                                    &mut replay_clip_out,
+                                    &mut clip_recorder,
+                                    &mut input_history,
+                                    &mut score_tracker,
+                                    &mut local_play_mode,
+                                    &mut session_p1_wins,
+                                    &mut session_p2_wins,
+                                    &mut auto_start_done,
+                                    &mut auto_start_frame,
+                                    &mut audio_tail_sample,
+                                    log.as_mut(),
+                                    "matchmaking connected",
+                                );
                                 net_runtime = NetRuntime::default();
                                 net_match_count = 0;
                                 ranked_match_index = 0;
                                 net_in_fight = false;
+                                net_set_complete_pending_frame = None;
                                 net_frames_since_progress = 0;
-                                session_p1_wins = 0;
-                                session_p2_wins = 0;
-                                score_tracker.reset();
 
                                 local_handle = if is_host { 0 } else { 1 };
+                                net_transport_path = None;
                                 let mut lines: Vec<String> = Vec::new();
 
-                                // Branch: TURN relay vs direct UDP
+                                // Branch: relay vs direct UDP
                                 let result: Result<netplay::Session, Box<dyn std::error::Error>> =
-                                    if let Some(creds) = turn {
-                                        // ── TURN PATH ──
-                                        // Both clients open their own TURN allocation. Each side installs
-                                        // a permission for the OTHER's STUN address (their NAT-mapped
-                                        // public IP). When we Send to that peer address through TURN,
-                                        // coturn finds the matching allocation internally and forwards
-                                        // the packet — the two relay sockets never have to talk to each
-                                        // other on the public network.
-                                        //
-                                        // We do NOT install a permission for the peer's TURN-relayed
-                                        // address. coturn 4.6 hardcodes a "no peer = own external-ip"
-                                        // rule and rejects it. The peer's STUN IP is what we use as
-                                        // the GGRS peer label, AND it's what TURN routes by.
-                                        println!("[net] using freeplay-relay: {}", creds.uri);
-
-                                        match relay_socket::RelaySocket::connect(
-                                            &creds.uri,
-                                            &creds.username,
-                                            &creds.password,
-                                            menu::DEFAULT_NETPLAY_PORT,
-                                        ) {
-                                            Ok(socket) => {
-                                                let peer_label = socket.peer_label();
-                                                relay_chat = match socket.chat_handle() {
-                                                    Ok(handle) => Some(handle),
-                                                    Err(e) => {
-                                                        println!(
-                                                            "[chat] relay chat unavailable: {e}"
-                                                        );
-                                                        None
-                                                    }
-                                                };
-                                                if let Some(f) = log.as_mut() {
-                                                    use std::io::Write;
-                                                    let _ = writeln!(f,
-                                                        "[net] relay session ready, routing through {peer_label} (registered={}, peer_ready={})",
-                                                        socket.is_registered(),
-                                                        socket.is_peer_ready());
+                                    match transport {
+                                        matchmaking::MatchTransport::Relay { socket } => {
+                                            let peer_label = socket.peer_label();
+                                            let relay_diag = socket.diagnostics();
+                                            relay_chat = match socket.chat_handle() {
+                                                Ok(handle) => Some(handle),
+                                                Err(e) => {
+                                                    println!("[chat] relay chat unavailable: {e}");
+                                                    None
                                                 }
-                                                println!(
-                                                    "[net] relay session ready (registered={}, peer_ready={})",
+                                            };
+                                            if let Some(f) = log.as_mut() {
+                                                use std::io::Write;
+                                                let _ = writeln!(f,
+                                                    "[net] relay session ready, routing through {peer_label} (registered={}, peer_ready={}, data_received={})",
                                                     socket.is_registered(),
-                                                    socket.is_peer_ready()
-                                                );
+                                                    socket.is_peer_ready(),
+                                                    relay_diag.data_received);
+                                            }
+                                            println!(
+                                                "[net] relay session ready (registered={}, peer_ready={}, data_received={})",
+                                                socket.is_registered(),
+                                                socket.is_peer_ready(),
+                                                relay_diag.data_received
+                                            );
 
-                                                let log_ref = &mut log;
-                                                let lines_ref = &mut lines;
-                                                netplay::start_session_with_socket(
-                                                    local_handle,
-                                                    peer_label,
-                                                    socket,
-                                                    cfg.input_delay,
-                                                    |line: &str| {
-                                                        println!("[net] {}", line);
-                                                        if let Some(f) = log_ref.as_mut() {
-                                                            use std::io::Write;
-                                                            let _ = writeln!(f, "{}", line);
-                                                        }
-                                                        lines_ref.push(line.to_string());
-                                                    },
-                                                )
-                                                .map_err(|e| {
-                                                    Box::new(e) as Box<dyn std::error::Error>
-                                                })
-                                            }
-                                            Err(e) => {
-                                                Err(Box::new(e) as Box<dyn std::error::Error>)
-                                            }
+                                            let log_ref = &mut log;
+                                            let lines_ref = &mut lines;
+                                            netplay::start_session_with_socket(
+                                                local_handle,
+                                                peer_label,
+                                                socket,
+                                                cfg.input_delay,
+                                                |line: &str| {
+                                                    println!("[net] {}", line);
+                                                    if let Some(f) = log_ref.as_mut() {
+                                                        use std::io::Write;
+                                                        let _ = writeln!(f, "{}", line);
+                                                    }
+                                                    lines_ref.push(line.to_string());
+                                                },
+                                            )
+                                            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
                                         }
-                                    } else {
-                                        // ── DIRECT UDP PATH (unchanged) ──
-                                        relay_chat = None;
-                                        let log_ref = &mut log;
-                                        let lines_ref = &mut lines;
-                                        netplay::start_session_verbose(
-                                            menu::DEFAULT_NETPLAY_PORT,
-                                            local_handle,
-                                            stun_peer,
-                                            cfg.input_delay,
-                                            |line: &str| {
-                                                println!("[net] {}", line);
-                                                if let Some(f) = log_ref.as_mut() {
-                                                    use std::io::Write;
-                                                    let _ = writeln!(f, "{}", line);
-                                                }
-                                                lines_ref.push(line.to_string());
-                                            },
-                                        )
+                                        matchmaking::MatchTransport::Direct { peer_addr } => {
+                                            // ── DIRECT UDP PATH ──
+                                            relay_chat = None;
+                                            let log_ref = &mut log;
+                                            let lines_ref = &mut lines;
+                                            netplay::start_session_verbose(
+                                                menu::DEFAULT_NETPLAY_PORT,
+                                                local_handle,
+                                                peer_addr,
+                                                cfg.input_delay,
+                                                |line: &str| {
+                                                    println!("[net] {}", line);
+                                                    if let Some(f) = log_ref.as_mut() {
+                                                        use std::io::Write;
+                                                        let _ = writeln!(f, "{}", line);
+                                                    }
+                                                    lines_ref.push(line.to_string());
+                                                },
+                                            )
+                                        }
                                     };
 
                                 match result {
                                     Ok(s) => {
                                         net_session = Some(s);
+                                        set_netplay_window_chrome(&mut canvas, true);
+                                        net_transport_path = Some(transport_path);
                                         chat_open = false;
                                         chat_draft.clear();
                                         chat_lines.clear();
@@ -5391,13 +5660,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         match_replay_recording =
                                             Some(match_replay::Recording::new(p1, p2));
                                         net_log = log;
-                                        latest_net_ping_ms = None;
-                                        latest_net_kbps_sent = None;
-                                        latest_net_local_frames_behind = None;
-                                        latest_net_remote_frames_behind = None;
-                                        latest_net_rollback_frames = 0;
-                                        latest_net_load_count = 0;
-                                        net_stats_next_frame = 0;
+                                        net_stats.reset();
+                                        audio_tail_sample = None;
                                         net_frame_counter = 0;
                                         let who = discord_user.as_deref().unwrap_or("Anonymous");
                                         let role = if local_handle == 0 { "P1" } else { "P2" };
@@ -5428,6 +5692,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         inc.room_id = room_id.clone();
                                         inc.peer_endpoint = Some(peer_endpoint.clone());
                                         inc.role = Some(if is_host { "host" } else { "join" });
+                                        inc.transport_path = Some(transport_path);
+                                        inc.ggrs_state = Some("start_session_failed".into());
+                                        attach_relay_diagnostics(&mut inc, relay_chat.as_ref());
                                         inc.net_log_path =
                                             Some(std::path::PathBuf::from("freeplay-net.log"));
                                         let (_size, hash) = rom_fingerprint();
@@ -5460,6 +5727,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 // to publish a Connected event. Server-side
                                 // queue state has it.
                                 inc.role = Some(if local_handle == 0 { "host" } else { "join" });
+                                inc.transport_path = if kind == incident::KIND_TURN_FALLBACK_FAILED
+                                {
+                                    Some("relay")
+                                } else if kind == incident::KIND_HOLE_PUNCH_FAILED {
+                                    Some("direct")
+                                } else {
+                                    None
+                                };
+                                inc.ggrs_state = Some("not_started".into());
                                 inc.net_log_path =
                                     Some(std::path::PathBuf::from("freeplay-net.log"));
                                 let (_size, hash) = rom_fingerprint();
@@ -5467,6 +5743,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 incident::submit(inc);
 
                                 mm_rx = None;
+                                net_transport_path = None;
+                                relay_chat = None;
                                 state = AppState::Menu(MenuScreen::TestResult {
                                     lines: vec![
                                         String::new(),
@@ -5570,6 +5848,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     cfg.player_username_confirmed = true;
                                     cfg.player_username_autogenerated = false;
                                     config::save(&cfg);
+                                    shutdown_for_online_start!("find-match queue");
                                     start_find_match_queue(
                                         &cfg,
                                         &mut mm_rx,
@@ -5631,7 +5910,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
 
-                if matches!(state, AppState::Menu(menu::MenuScreen::LiveMatches { .. }))
+                if (matches!(state, AppState::Menu(menu::MenuScreen::LiveMatches { .. }))
+                    || matches!(
+                        state,
+                        AppState::Menu(menu::MenuScreen::OnlineHub {
+                            tab: menu::OnlineTab::Watch,
+                            ..
+                        })
+                    ))
                     && live_matches_rx.is_none()
                     && Instant::now() >= live_matches_next_refresh
                 {
@@ -5639,6 +5925,129 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     live_matches_rx = Some(rx);
                     matchmaking::fetch_live_matches(tx);
                     live_matches_next_refresh = Instant::now() + Duration::from_secs(7);
+                }
+
+                if matches!(
+                    state,
+                    AppState::Menu(menu::MenuScreen::OnlineHub {
+                        tab: menu::OnlineTab::General,
+                        ..
+                    })
+                ) && lobby_rx.is_none()
+                    && Instant::now() >= lobby_next_refresh
+                {
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    lobby_rx = Some(rx);
+                    matchmaking::fetch_general_lobby(tx);
+                    lobby_next_refresh = Instant::now() + Duration::from_secs(7);
+                }
+
+                if let Some(rx) = &lobby_rx {
+                    if let AppState::Menu(menu::MenuScreen::OnlineHub {
+                        ref mut status,
+                        ref mut chat_lines,
+                        ..
+                    }) = state
+                    {
+                        match rx.try_recv() {
+                            Ok(matchmaking::LobbyUpdate::Loaded(snapshot)) => {
+                                *status = snapshot.status.clone();
+                                *chat_lines = lobby_snapshot_lines(&snapshot);
+                                lobby_rx = None;
+                            }
+                            Ok(matchmaking::LobbyUpdate::Error(message)) => {
+                                *status = "General lobby unavailable".into();
+                                *chat_lines = vec![format!(
+                                    "SYSTEM Lobby service pending or unreachable: {message}"
+                                )];
+                                lobby_rx = None;
+                            }
+                            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                                lobby_rx = None;
+                            }
+                        }
+                    } else {
+                        lobby_rx = None;
+                    }
+                }
+
+                if let Some(rx) = &lobby_chat_post_rx {
+                    if let AppState::Menu(menu::MenuScreen::OnlineHub {
+                        ref mut status,
+                        ref mut chat_lines,
+                        ..
+                    }) = state
+                    {
+                        match rx.try_recv() {
+                            Ok(matchmaking::LobbyChatPostUpdate::Sent) => {
+                                *status = "Chat sent".into();
+                                lobby_next_refresh = Instant::now();
+                                lobby_chat_post_rx = None;
+                            }
+                            Ok(matchmaking::LobbyChatPostUpdate::Error(message)) => {
+                                *status = "Chat send failed".into();
+                                chat_lines.push(format!("SYSTEM Chat send failed: {message}"));
+                                lobby_chat_post_rx = None;
+                            }
+                            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                                lobby_chat_post_rx = None;
+                            }
+                        }
+                    } else {
+                        lobby_chat_post_rx = None;
+                    }
+                }
+
+                if matches!(
+                    state,
+                    AppState::Menu(menu::MenuScreen::OnlineHub {
+                        tab: menu::OnlineTab::Lobbies,
+                        ..
+                    })
+                ) && lobby_list_rx.is_none()
+                    && Instant::now() >= lobby_list_next_refresh
+                {
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    lobby_list_rx = Some(rx);
+                    matchmaking::fetch_lobbies(tx);
+                    lobby_list_next_refresh = Instant::now() + Duration::from_secs(10);
+                }
+
+                if let Some(rx) = &lobby_list_rx {
+                    if let AppState::Menu(menu::MenuScreen::OnlineHub {
+                        ref mut status,
+                        ref mut lobbies,
+                        ref mut cursor,
+                        ..
+                    }) = state
+                    {
+                        match rx.try_recv() {
+                            Ok(matchmaking::LobbyListUpdate::Loaded(list)) => {
+                                *lobbies = list.into_iter().map(lobby_room_to_preview).collect();
+                                *cursor = 0;
+                                *status = if lobbies.is_empty() {
+                                    "No public lobbies right now".into()
+                                } else {
+                                    "Select a lobby to inspect".into()
+                                };
+                                lobby_list_rx = None;
+                            }
+                            Ok(matchmaking::LobbyListUpdate::Error(message)) => {
+                                lobbies.clear();
+                                *cursor = 0;
+                                *status = format!("Lobbies unavailable: {message}");
+                                lobby_list_rx = None;
+                            }
+                            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                                lobby_list_rx = None;
+                            }
+                        }
+                    } else {
+                        lobby_list_rx = None;
+                    }
                 }
 
                 // Populate the Drone loader when entering the screen.
@@ -5834,13 +6243,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 // Drain the live-match browser fetcher.
                 if let Some(rx) = &live_matches_rx {
-                    if let AppState::Menu(menu::MenuScreen::LiveMatches {
-                        ref mut cursor,
-                        ref mut matches,
-                        ref mut status,
-                    }) = state
-                    {
-                        match rx.try_recv() {
+                    match &mut state {
+                        AppState::Menu(menu::MenuScreen::LiveMatches {
+                            cursor,
+                            matches,
+                            status,
+                        })
+                        | AppState::Menu(menu::MenuScreen::OnlineHub {
+                            cursor,
+                            live_matches: matches,
+                            status,
+                            ..
+                        }) => match rx.try_recv() {
                             Ok(matchmaking::LiveMatchesUpdate::Loaded(list)) => {
                                 *matches = list;
                                 *cursor = 0;
@@ -5861,9 +6275,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                                 live_matches_rx = None;
                             }
+                        },
+                        _ => {
+                            live_matches_rx = None;
                         }
-                    } else {
-                        live_matches_rx = None;
                     }
                 }
 
@@ -6145,7 +6560,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // frame instead of accumulating (relative sleeps ran the game ~2% slow).
         let now = Instant::now();
         if now < next_frame_deadline {
-            std::thread::sleep(next_frame_deadline - now);
+            frame_timer::wait_until_frame_deadline(next_frame_deadline);
             next_frame_deadline += frame_duration;
         } else if now - next_frame_deadline > frame_duration * 4 {
             // Fell far behind (window drag, stall) — resync instead of
@@ -6173,16 +6588,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .map(|sample| sample.detail_rows().join(" | "))
                     .unwrap_or_else(|| "MK2 PERF unavailable".to_string());
                 let line = format!(
-                    "[perf/slow] fps={sampled_fps:.1} renderer={} filter={} ping={} rollback={} loads={} behind=L{} R{} {mk2_rows}",
+                    "[perf/slow] fps={sampled_fps:.1} renderer={} filter={} ping={} rollback={} saves={} loads={} timing_us=S{} H{} L{} behind=L{} R{} {mk2_rows}",
                     renderer_name(&canvas),
                     cfg.video_filter.label(),
-                    latest_net_ping_ms
+                    net_stats
+                        .ping_ms
                         .map(|ms| format!("{ms}ms"))
                         .unwrap_or_else(|| "--".to_string()),
-                    latest_net_rollback_frames,
-                    latest_net_load_count,
-                    latest_net_local_frames_behind.as_deref().unwrap_or("-"),
-                    latest_net_remote_frames_behind.as_deref().unwrap_or("-"),
+                    net_stats.rollback_frames,
+                    net_stats.save_count,
+                    net_stats.load_count,
+                    net_stats.save_state_micros,
+                    net_stats.checksum_micros,
+                    net_stats.load_state_micros,
+                    net_stats.local_frames_behind.as_deref().unwrap_or("-"),
+                    net_stats.remote_frames_behind.as_deref().unwrap_or("-"),
                 );
                 println!("{line}");
                 if let Some(f) = net_log.as_mut() {
@@ -6194,4 +6614,80 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{shutdown_local_runtime_for_netplay, LocalPlayMode};
+
+    #[test]
+    fn shutdown_local_runtime_for_netplay_clears_local_state() {
+        let mut trainer = crate::memory::PokeList::new();
+        let mut reset_slots = crate::lab::ResetSlots::default();
+        let mut dummy = crate::lab::DummyController::default();
+        let mut punish = crate::lab::PunishTrainer::default();
+        let mut damage = crate::lab::DamageTracker::default();
+        let mut ghost_playback = None;
+        let mut ghost_recording = None;
+        let mut drone_runner = None;
+        let mut ghost_port_mask = 0;
+        let mut replay_playback = None;
+        let mut replay_recording = None;
+        let mut replay_paused = true;
+        let mut replay_tick = 123;
+        let mut replay_clip_in = Some(10);
+        let mut replay_clip_out = Some(20);
+        let mut clip_recorder = None;
+        let mut input_history = crate::input_history::InputHistory::new();
+        let mut score_tracker = crate::score::ScoreTracker::new();
+        let mut local_mode = LocalPlayMode::Lab;
+        let mut p1_wins = 2;
+        let mut p2_wins = 1;
+        let mut auto_start_done = false;
+        let mut auto_start_frame = 77;
+        let mut audio_tail = Some((1, -1));
+
+        shutdown_local_runtime_for_netplay(
+            None,
+            None,
+            &mut trainer,
+            &mut reset_slots,
+            &mut dummy,
+            &mut punish,
+            &mut damage,
+            &mut ghost_playback,
+            &mut ghost_recording,
+            &mut drone_runner,
+            &mut ghost_port_mask,
+            &mut replay_playback,
+            &mut replay_recording,
+            &mut replay_paused,
+            &mut replay_tick,
+            &mut replay_clip_in,
+            &mut replay_clip_out,
+            &mut clip_recorder,
+            &mut input_history,
+            &mut score_tracker,
+            &mut local_mode,
+            &mut p1_wins,
+            &mut p2_wins,
+            &mut auto_start_done,
+            &mut auto_start_frame,
+            &mut audio_tail,
+            None,
+            "test",
+        );
+
+        assert_eq!(local_mode, LocalPlayMode::Arcade);
+        assert_eq!(ghost_port_mask, 0b11);
+        assert!(!replay_paused);
+        assert_eq!(replay_tick, 0);
+        assert!(replay_clip_in.is_none());
+        assert!(replay_clip_out.is_none());
+        assert_eq!(p1_wins, 0);
+        assert_eq!(p2_wins, 0);
+        assert!(auto_start_done);
+        assert_eq!(auto_start_frame, 0);
+        assert!(audio_tail.is_none());
+    }
 }

@@ -53,6 +53,14 @@ impl std::fmt::Display for RelayError {
 
 impl std::error::Error for RelayError {}
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RelayDiagnostics {
+    pub registered: bool,
+    pub peer_ready: bool,
+    pub data_received: bool,
+}
+
+#[derive(Debug)]
 pub struct RelaySocket {
     sock: UdpSocket,
     relay_addr: SocketAddr,
@@ -68,12 +76,17 @@ pub struct RelaySocket {
     /// by the relay (no peer to forward to). We let GGRS retry — its
     /// Synchronizing handshake naturally re-sends.
     peer_ready: Arc<Mutex<bool>>,
+    data_received: Arc<Mutex<bool>>,
     chat_inbox: Arc<Mutex<VecDeque<String>>>,
 }
 
+#[derive(Debug)]
 pub struct RelayChatHandle {
     sock: UdpSocket,
     relay_addr: SocketAddr,
+    registered: Arc<Mutex<bool>>,
+    peer_ready: Arc<Mutex<bool>>,
+    data_received: Arc<Mutex<bool>>,
     inbox: Arc<Mutex<VecDeque<String>>>,
 }
 
@@ -97,6 +110,10 @@ impl RelayChatHandle {
             return Vec::new();
         };
         inbox.drain(..).collect()
+    }
+
+    pub fn diagnostics(&self) -> RelayDiagnostics {
+        relay_diagnostics(&self.registered, &self.peer_ready, &self.data_received)
     }
 }
 
@@ -174,6 +191,7 @@ impl RelaySocket {
         let mut buf = [0u8; 2048];
         let mut registered = false;
         let mut peer_ready = false;
+        let mut data_received = false;
         while Instant::now() < deadline {
             if Instant::now() >= next_send {
                 sock.send_to(&pkt, relay_addr).map_err(RelayError::Send)?;
@@ -183,6 +201,7 @@ impl RelaySocket {
                 Ok((n, _from)) if n >= 1 => match buf[0] {
                     TAG_REGISTERED => registered = true,
                     TAG_PEER_READY => peer_ready = true,
+                    TAG_DATA => data_received = true,
                     TAG_ERROR if n >= 3 => {
                         let code = buf[1];
                         let msg_len = buf[2] as usize;
@@ -222,6 +241,7 @@ impl RelaySocket {
             peer_label: relay_addr,
             registered: Arc::new(Mutex::new(registered)),
             peer_ready: Arc::new(Mutex::new(peer_ready)),
+            data_received: Arc::new(Mutex::new(data_received)),
             chat_inbox: Arc::new(Mutex::new(VecDeque::new())),
         })
     }
@@ -243,12 +263,31 @@ impl RelaySocket {
         self.registered.lock().map(|g| *g).unwrap_or(false)
     }
 
+    pub fn diagnostics(&self) -> RelayDiagnostics {
+        relay_diagnostics(&self.registered, &self.peer_ready, &self.data_received)
+    }
+
     pub fn chat_handle(&self) -> io::Result<RelayChatHandle> {
         Ok(RelayChatHandle {
             sock: self.sock.try_clone()?,
             relay_addr: self.relay_addr,
+            registered: self.registered.clone(),
+            peer_ready: self.peer_ready.clone(),
+            data_received: self.data_received.clone(),
             inbox: self.chat_inbox.clone(),
         })
+    }
+}
+
+fn relay_diagnostics(
+    registered: &Arc<Mutex<bool>>,
+    peer_ready: &Arc<Mutex<bool>>,
+    data_received: &Arc<Mutex<bool>>,
+) -> RelayDiagnostics {
+    RelayDiagnostics {
+        registered: registered.lock().map(|g| *g).unwrap_or(false),
+        peer_ready: peer_ready.lock().map(|g| *g).unwrap_or(false),
+        data_received: data_received.lock().map(|g| *g).unwrap_or(false),
     }
 }
 
@@ -280,6 +319,9 @@ impl NonBlockingSocket<SocketAddr> for RelaySocket {
             match self.sock.recv_from(&mut buf) {
                 Ok((n, _from)) if n >= 1 => match buf[0] {
                     TAG_DATA => {
+                        if let Ok(mut g) = self.data_received.lock() {
+                            *g = true;
+                        }
                         let payload = &buf[1..n];
                         if let Some(text) = payload.strip_prefix(CHAT_PREFIX) {
                             if let Ok(text) = std::str::from_utf8(text) {
@@ -299,6 +341,11 @@ impl NonBlockingSocket<SocketAddr> for RelaySocket {
                     }
                     TAG_PEER_READY => {
                         if let Ok(mut g) = self.peer_ready.lock() {
+                            *g = true;
+                        }
+                    }
+                    TAG_REGISTERED => {
+                        if let Ok(mut g) = self.registered.lock() {
                             *g = true;
                         }
                     }

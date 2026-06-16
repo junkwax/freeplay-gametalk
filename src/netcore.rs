@@ -17,11 +17,16 @@ use crate::memory;
 use crate::mk2_addrs;
 use crate::netplay;
 use crate::retro::{self, SILENT_MODE};
+use std::time::{Duration, Instant};
 
 #[derive(Default, Clone, Copy)]
 pub struct NetStepStats {
     pub advance_count: usize,
+    pub save_count: usize,
     pub load_count: usize,
+    pub save_state_micros: u64,
+    pub checksum_micros: u64,
+    pub load_state_micros: u64,
     pub peer_disconnected: bool,
     pub desync_detected: bool,
 }
@@ -90,27 +95,141 @@ pub fn detect_rtc_offset(blob: &[u8]) -> Option<usize> {
     best
 }
 
-/// XOR-fold the savestate into a u128, optionally zeroing 4 bytes at `mask_off`
+const HASH_LANE_INIT: [u64; 4] = [
+    0x243f_6a88_85a3_08d3,
+    0x1319_8a2e_0370_7344,
+    0xa409_3822_299f_31d0,
+    0x082e_fa98_ec4e_6c89,
+];
+const HASH_LANE_MUL: [u64; 4] = [
+    0x9e37_79b1_85eb_ca87,
+    0xc2b2_ae3d_27d4_eb4f,
+    0x1656_67b1_9e37_79f9,
+    0x85eb_ca77_c2b2_ae63,
+];
+const HASH_POS_MUL: u64 = 0xd6e8_feb8_6659_fd93;
+const HASH_FINAL_A: u64 = 0xff51_afd7_ed55_8ccd;
+const HASH_FINAL_B: u64 = 0xc4ce_b9fe_1a85_ec53;
+
+/// Hash the savestate into a u128, optionally zeroing 4 bytes at `mask_off`
 /// so the FBNeo wall-clock slot doesn't poison the hash.
 pub fn cksum_with_mask(blob: &[u8], mask_off: Option<usize>) -> u128 {
-    let mut cksum: u128 = 0;
-    for (i, chunk) in blob.chunks(16).enumerate() {
-        let mut w = [0u8; 16];
-        w[..chunk.len()].copy_from_slice(chunk);
-        if let Some(off) = mask_off {
-            let chunk_start = i * 16;
-            let chunk_end = chunk_start + chunk.len();
-            // Zero any of the 4 RTC bytes that fall inside this chunk.
-            for j in 0..4 {
-                let pos = off + j;
-                if pos >= chunk_start && pos < chunk_end {
-                    w[pos - chunk_start] = 0;
+    let mask = mask_off.and_then(|off| {
+        let end = off.saturating_add(4).min(blob.len());
+        (off < end).then_some((off, end))
+    });
+    let mut lanes = [
+        HASH_LANE_INIT[0] ^ blob.len() as u64,
+        HASH_LANE_INIT[1] ^ (blob.len() as u64).rotate_left(17),
+        HASH_LANE_INIT[2] ^ (blob.len() as u64).rotate_left(31),
+        HASH_LANE_INIT[3] ^ (blob.len() as u64).rotate_left(47),
+    ];
+
+    let mut block_index = 0usize;
+    let mut chunks = blob.chunks_exact(32);
+    for block in chunks.by_ref() {
+        let start = block_index * 32;
+        let words = if range_overlaps(start, start + 32, mask) {
+            [
+                masked_word_at(blob, start, mask),
+                masked_word_at(blob, start + 8, mask),
+                masked_word_at(blob, start + 16, mask),
+                masked_word_at(blob, start + 24, mask),
+            ]
+        } else {
+            [
+                read_exact_word(&block[0..8]),
+                read_exact_word(&block[8..16]),
+                read_exact_word(&block[16..24]),
+                read_exact_word(&block[24..32]),
+            ]
+        };
+        mix_hash_block(&mut lanes, block_index, words);
+        block_index += 1;
+    }
+
+    let remainder_start = block_index * 32;
+    if !chunks.remainder().is_empty() {
+        let words = [
+            masked_word_at(blob, remainder_start, mask),
+            masked_word_at(blob, remainder_start + 8, mask),
+            masked_word_at(blob, remainder_start + 16, mask),
+            masked_word_at(blob, remainder_start + 24, mask),
+        ];
+        mix_hash_block(&mut lanes, block_index, words);
+    }
+
+    let len = blob.len() as u64;
+    let lo = avalanche64(
+        lanes[0]
+            ^ lanes[1].rotate_left(13)
+            ^ lanes[2].rotate_left(29)
+            ^ lanes[3].rotate_left(43)
+            ^ len,
+    );
+    let hi = avalanche64(
+        lanes[2]
+            ^ lanes[3].rotate_left(19)
+            ^ lanes[0].rotate_left(37)
+            ^ lanes[1].rotate_left(51)
+            ^ len.rotate_left(7),
+    );
+    (u128::from(hi) << 64) | u128::from(lo)
+}
+
+fn read_exact_word(bytes: &[u8]) -> u64 {
+    u64::from_le_bytes(bytes.try_into().expect("hash word slices are 8 bytes"))
+}
+
+fn range_overlaps(start: usize, end: usize, mask: Option<(usize, usize)>) -> bool {
+    mask.is_some_and(|(mask_start, mask_end)| start < mask_end && end > mask_start)
+}
+
+fn masked_word_at(blob: &[u8], start: usize, mask: Option<(usize, usize)>) -> u64 {
+    let mut word = [0u8; 8];
+    if start < blob.len() {
+        let len = (blob.len() - start).min(8);
+        word[..len].copy_from_slice(&blob[start..start + len]);
+        if let Some((mask_start, mask_end)) = mask {
+            let end = start + len;
+            if start < mask_end && end > mask_start {
+                let from = mask_start.saturating_sub(start).min(len);
+                let to = mask_end.saturating_sub(start).min(len);
+                for byte in &mut word[from..to] {
+                    *byte = 0;
                 }
             }
         }
-        cksum ^= u128::from_le_bytes(w);
     }
-    cksum
+    u64::from_le_bytes(word)
+}
+
+fn mix_hash_block(lanes: &mut [u64; 4], block_index: usize, words: [u64; 4]) {
+    let base_pos = (block_index as u64).wrapping_mul(4);
+    for lane in 0..4 {
+        let pos = base_pos.wrapping_add(lane as u64);
+        let salted = words[lane]
+            ^ pos
+                .wrapping_mul(HASH_POS_MUL)
+                .rotate_left((lane as u32 * 11) + 7);
+        lanes[lane] ^= salted;
+        lanes[lane] = lanes[lane]
+            .rotate_left((lane as u32 * 9) + 13)
+            .wrapping_mul(HASH_LANE_MUL[lane])
+            .wrapping_add(HASH_LANE_INIT[3 - lane] ^ pos.rotate_left(23));
+    }
+}
+
+fn avalanche64(mut x: u64) -> u64 {
+    x ^= x >> 33;
+    x = x.wrapping_mul(HASH_FINAL_A);
+    x ^= x >> 33;
+    x = x.wrapping_mul(HASH_FINAL_B);
+    x ^ (x >> 33)
+}
+
+fn duration_micros(duration: Duration) -> u64 {
+    duration.as_micros().min(u64::MAX as u128) as u64
 }
 
 #[allow(static_mut_refs)]
@@ -267,6 +386,9 @@ pub fn step_netplay_frame(
     );
 
     let mut advances_seen = 0usize;
+    let mut save_state_time = Duration::ZERO;
+    let mut checksum_time = Duration::ZERO;
+    let mut load_state_time = Duration::ZERO;
     let mut sim_frame = sess
         .current_frame()
         .saturating_sub(advance_count.min(i32::MAX as usize) as i32);
@@ -275,7 +397,11 @@ pub fn step_netplay_frame(
     for req in requests {
         match req {
             GgrsRequest::SaveGameState { cell, frame } => {
+                let save_started = Instant::now();
                 let blob = core.save_state().unwrap_or_default();
+                save_state_time += save_started.elapsed();
+
+                let checksum_started = Instant::now();
                 if runtime.rtc_mask_offset.is_none() {
                     if let Some(off) = detect_rtc_offset(&blob) {
                         runtime.rtc_mask_offset = Some(off);
@@ -292,6 +418,7 @@ pub fn step_netplay_frame(
                 {
                     cksum ^= u128::from(sync) << 112;
                 }
+                checksum_time += checksum_started.elapsed();
                 dlog!(
                     "net",
                     "SaveGameState frame={frame} bytes={} cksum=0x{:032x}",
@@ -319,7 +446,9 @@ pub fn step_netplay_frame(
             }
             GgrsRequest::LoadGameState { cell, frame } => {
                 if let Some(blob) = cell.load() {
+                    let load_started = Instant::now();
                     let ok = core.load_state(&blob);
+                    load_state_time += load_started.elapsed();
                     dlog!(
                         "net",
                         "LoadGameState frame={frame} bytes={} ok={}",
@@ -384,8 +513,93 @@ pub fn step_netplay_frame(
     }
     NetStepStats {
         advance_count,
+        save_count,
         load_count,
+        save_state_micros: duration_micros(save_state_time),
+        checksum_micros: duration_micros(checksum_time),
+        load_state_micros: duration_micros(load_state_time),
         peer_disconnected: peer_disconnected_this_frame,
         desync_detected: desync_detected_this_frame,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cksum_with_mask;
+    use std::hint::black_box;
+    use std::time::Instant;
+
+    #[test]
+    fn checksum_mask_ignores_rtc_word() {
+        let mut a = vec![0x42; 48];
+        let mut b = a.clone();
+        a[19..23].copy_from_slice(&0x1234_5678u32.to_le_bytes());
+        b[19..23].copy_from_slice(&0x90ab_cdefu32.to_le_bytes());
+
+        assert_ne!(cksum_with_mask(&a, None), cksum_with_mask(&b, None));
+        assert_eq!(cksum_with_mask(&a, Some(19)), cksum_with_mask(&b, Some(19)));
+    }
+
+    #[test]
+    fn checksum_detects_paired_word_changes() {
+        let a = vec![0u8; 64];
+        let mut b = a.clone();
+        b[0] = 1;
+        b[16] = 1;
+
+        assert_ne!(cksum_with_mask(&a, None), cksum_with_mask(&b, None));
+    }
+
+    #[test]
+    fn checksum_mask_ignores_rtc_word_across_word_boundary() {
+        let mut a = vec![0x24; 64];
+        let mut b = a.clone();
+        a[6..10].copy_from_slice(&0x1234_5678u32.to_le_bytes());
+        b[6..10].copy_from_slice(&0x90ab_cdefu32.to_le_bytes());
+
+        assert_ne!(cksum_with_mask(&a, None), cksum_with_mask(&b, None));
+        assert_eq!(cksum_with_mask(&a, Some(6)), cksum_with_mask(&b, Some(6)));
+    }
+
+    #[test]
+    fn checksum_detects_same_lane_paired_word_changes() {
+        let a = vec![0u8; 96];
+        let mut b = a.clone();
+        b[0] = 1;
+        b[32] = 1;
+
+        assert_ne!(cksum_with_mask(&a, None), cksum_with_mask(&b, None));
+    }
+
+    #[test]
+    fn checksum_distinguishes_padded_lengths() {
+        assert_ne!(cksum_with_mask(&[0], None), cksum_with_mask(&[0, 0], None));
+        assert_ne!(
+            cksum_with_mask(&[0; 31], None),
+            cksum_with_mask(&[0; 32], None)
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn checksum_large_blob_smoke_timing() {
+        let mut blob = vec![0u8; 2_447_284];
+        for (i, byte) in blob.iter_mut().enumerate() {
+            *byte = (i as u8).wrapping_mul(37).wrapping_add((i >> 8) as u8);
+        }
+
+        let started = Instant::now();
+        let mut sum = 0u128;
+        const ITERS: u32 = 201;
+        for _ in 0..ITERS {
+            sum ^= black_box(cksum_with_mask(black_box(&blob), Some(2_100_003)));
+        }
+        let elapsed = started.elapsed();
+        eprintln!(
+            "checksum_large_blob_smoke_timing: {:?} total, {:.1} us/hash, acc=0x{sum:032x}",
+            elapsed,
+            elapsed.as_secs_f64() * 1_000_000.0 / f64::from(ITERS)
+        );
+        assert_ne!(sum, 0);
     }
 }

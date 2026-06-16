@@ -8,13 +8,19 @@
 
 use libloading::{Library, Symbol};
 use std::ffi::{c_char, c_void, CString};
+use std::path::{Path, PathBuf};
 use std::ptr;
+use std::sync::OnceLock;
 
 // --- Libretro environment command IDs ---
 pub const RETRO_ENVIRONMENT_SET_MESSAGE: u32 = 6;
+pub const RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY: u32 = 9;
 pub const RETRO_ENVIRONMENT_SET_PIXEL_FORMAT: u32 = 10;
 pub const RETRO_ENVIRONMENT_GET_VARIABLE: u32 = 15;
-pub const RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS: u32 = 19;
+pub const RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS: u32 = 11;
+pub const RETRO_ENVIRONMENT_GET_LIBRETRO_PATH: u32 = 19;
+pub const RETRO_ENVIRONMENT_GET_CONTENT_DIRECTORY: u32 = 30;
+pub const RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY: u32 = 31;
 pub const RETRO_ENVIRONMENT_GET_CORE_OPTIONS_VERSION: u32 = 52;
 
 // --- Memory region IDs for retro_get_memory_data/size ---
@@ -74,6 +80,11 @@ pub static mut LIVE_INPUT: [[bool; 16]; 2] = [[false; 16]; 2];
 /// Interleaved stereo s16. Main loop drains this into the SDL audio queue
 /// each frame and then clears it.
 pub static mut AUDIO_BUFFER: Vec<i16> = Vec::new();
+
+static LIBRETRO_PATH: OnceLock<CString> = OnceLock::new();
+static SYSTEM_DIRECTORY: OnceLock<CString> = OnceLock::new();
+static CONTENT_DIRECTORY: OnceLock<CString> = OnceLock::new();
+static SAVE_DIRECTORY: OnceLock<CString> = OnceLock::new();
 
 #[allow(static_mut_refs)]
 pub unsafe fn clear_audio_buffer() {
@@ -142,9 +153,54 @@ struct RetroInputDescriptor {
     description: *const c_char,
 }
 
+fn cstring_from_path(path: PathBuf) -> CString {
+    CString::new(path.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| CString::new(".").expect("literal has no NUL"))
+}
+
+fn fallback_directory() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf))
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn set_env_path(cell: &'static OnceLock<CString>, path: PathBuf) {
+    let _ = cell.set(cstring_from_path(path));
+}
+
+fn configure_environment_paths(dll_path: &str, rom_path: &str) {
+    let fallback = fallback_directory();
+    let content_dir = Path::new(rom_path)
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| fallback.clone());
+
+    set_env_path(&LIBRETRO_PATH, PathBuf::from(dll_path));
+    set_env_path(&SYSTEM_DIRECTORY, fallback.clone());
+    set_env_path(&CONTENT_DIRECTORY, content_dir);
+    set_env_path(&SAVE_DIRECTORY, fallback);
+}
+
+unsafe fn write_env_path(cell: &'static OnceLock<CString>, data: *mut c_void, label: &str) -> bool {
+    if data.is_null() {
+        return false;
+    }
+    let Some(path) = cell.get() else {
+        return false;
+    };
+    *(data as *mut *const c_char) = path.as_ptr();
+    crate::dlog!("retro", "env {label}={}", path.as_c_str().to_string_lossy());
+    true
+}
+
 extern "C" fn environment_cb(cmd: u32, data: *mut c_void) -> bool {
     unsafe {
         match cmd {
+            RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY => {
+                write_env_path(&SYSTEM_DIRECTORY, data, "system_directory")
+            }
             RETRO_ENVIRONMENT_SET_PIXEL_FORMAT => {
                 let format = *(data as *const u32);
                 match format {
@@ -160,6 +216,15 @@ extern "C" fn environment_cb(cmd: u32, data: *mut c_void) -> bool {
             RETRO_ENVIRONMENT_GET_CORE_OPTIONS_VERSION => {
                 *(data as *mut u32) = 1;
                 true
+            }
+            RETRO_ENVIRONMENT_GET_LIBRETRO_PATH => {
+                write_env_path(&LIBRETRO_PATH, data, "libretro_path")
+            }
+            RETRO_ENVIRONMENT_GET_CONTENT_DIRECTORY => {
+                write_env_path(&CONTENT_DIRECTORY, data, "content_directory")
+            }
+            RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY => {
+                write_env_path(&SAVE_DIRECTORY, data, "save_directory")
             }
             RETRO_ENVIRONMENT_GET_VARIABLE => {
                 let var = &mut *(data as *mut RetroVariable);
@@ -271,6 +336,7 @@ pub struct Core {
     _lib: Library, // kept alive so the other symbols stay valid
     pub run: unsafe extern "C" fn(),
     pub av_info: SystemAvInfo,
+    pub load_ok: bool,
     reset_fn: unsafe extern "C" fn(),
     serialize_size_fn: unsafe extern "C" fn() -> usize,
     serialize_fn: unsafe extern "C" fn(*mut c_void, usize) -> bool,
@@ -338,6 +404,9 @@ impl Core {
 /// Returns a `Core` whose `run` is callable once per frame.
 pub unsafe fn load(dll_path: &str, rom_path: &str) -> Result<Core, Box<dyn std::error::Error>> {
     println!("Loading FBNeo Libretro Core...");
+    crate::dlog!("retro", "core dll={dll_path}");
+    crate::dlog!("retro", "rom zip={rom_path}");
+    configure_environment_paths(dll_path, rom_path);
     let lib = Library::new(dll_path)?;
 
     let retro_set_environment: Symbol<
@@ -391,8 +460,10 @@ pub unsafe fn load(dll_path: &str, rom_path: &str) -> Result<Core, Box<dyn std::
         size: 0,
         meta: ptr::null(),
     };
-    if !retro_load_game(&game_info) {
+    let load_ok = retro_load_game(&game_info);
+    if !load_ok {
         println!("WARNING: retro_load_game returned false (CRC mismatch?); booting anyway.");
+        crate::dlog!("retro", "retro_load_game returned false");
     }
     println!("ROM Loaded. Booting System...");
 
@@ -426,6 +497,7 @@ pub unsafe fn load(dll_path: &str, rom_path: &str) -> Result<Core, Box<dyn std::
         _lib: lib,
         run: run_fn,
         av_info,
+        load_ok,
         reset_fn,
         serialize_size_fn: ss_fn,
         serialize_fn: s_fn,
