@@ -87,6 +87,15 @@ pub enum LobbyMatchFormat {
     RankedFt10,
 }
 
+pub fn lobby_format_label(f: LobbyMatchFormat) -> &'static str {
+    match f {
+        LobbyMatchFormat::UnrankedVs => "Unranked VS",
+        LobbyMatchFormat::RankedFt3 => "Ranked FT3",
+        LobbyMatchFormat::RankedFt5 => "Ranked FT5",
+        LobbyMatchFormat::RankedFt10 => "Ranked FT10",
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LobbyRoom {
     pub id: String,

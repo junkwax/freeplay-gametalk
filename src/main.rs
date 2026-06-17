@@ -1592,6 +1592,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut lobby_next_refresh = Instant::now();
     let mut lobby_list_rx: Option<std::sync::mpsc::Receiver<matchmaking::LobbyListUpdate>> = None;
     let mut lobby_list_next_refresh = Instant::now();
+    let mut challenge_rx: Option<std::sync::mpsc::Receiver<matchmaking::ChallengeListUpdate>> = None;
+    let mut challenge_next_refresh = Instant::now();
     let mut lobby_chat_post_rx: Option<
         std::sync::mpsc::Receiver<matchmaking::LobbyChatPostUpdate>,
     > = None;
@@ -3122,6 +3124,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         status: "Creating lobby...".into(),
                                     });
                                 }
+                                NavResult::SendChallenge(target_id, format) => {
+                                    matchmaking::set_guest_profile(
+                                        cfg.player_username.clone(),
+                                        cfg.stats_email.clone(),
+                                        cfg.guest_device_id.clone(),
+                                    );
+                                    shutdown_for_online_start!("Send challenge");
+                                    let (tx, rx) = std::sync::mpsc::channel();
+                                    mm_rx = Some(rx);
+                                    matchmaking::start_send_challenge(
+                                        tx,
+                                        target_id,
+                                        format.wire().to_string(),
+                                    );
+                                    state = AppState::Menu(MenuScreen::Matchmaking {
+                                        status: "Challenging player...".into(),
+                                    });
+                                }
+                                NavResult::AcceptChallenge(challenge_id) => {
+                                    matchmaking::set_guest_profile(
+                                        cfg.player_username.clone(),
+                                        cfg.stats_email.clone(),
+                                        cfg.guest_device_id.clone(),
+                                    );
+                                    shutdown_for_online_start!("Accept challenge");
+                                    let (tx, rx) = std::sync::mpsc::channel();
+                                    mm_rx = Some(rx);
+                                    matchmaking::start_accept_challenge(tx, challenge_id);
+                                    state = AppState::Menu(MenuScreen::Matchmaking {
+                                        status: "Accepting challenge...".into(),
+                                    });
+                                }
                                 NavResult::ToggleFullscreen => {
                                     cfg.fullscreen = !cfg.fullscreen;
                                     config::save(&cfg);
@@ -3555,7 +3589,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             },
                             MenuNav::Left => state.nav_left(),
                             MenuNav::Right => state.nav_right(),
-                            MenuNav::Back => state.nav_back(),
+                            MenuNav::Back => {
+                                // Back on the incoming-challenge modal declines it.
+                                let declined = if let AppState::Menu(
+                                    menu::MenuScreen::OnlineHub { incoming, .. },
+                                ) = &mut state
+                                {
+                                    incoming.take().map(|c| c.challenge_id)
+                                } else {
+                                    None
+                                };
+                                if let Some(id) = declined {
+                                    matchmaking::decline_challenge(id);
+                                } else {
+                                    state.nav_back();
+                                }
+                            }
                             MenuNav::ToggleMenu => {}
                             MenuNav::SwitchPlayer => state.nav_switch_player(),
                         }
@@ -5993,10 +6042,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     live_matches_next_refresh = Instant::now() + Duration::from_secs(7);
                 }
 
+                // Refresh general-lobby presence/chat on Chat and Players (both
+                // need the online roster; this also registers our presence so
+                // others can challenge us).
                 if matches!(
                     state,
                     AppState::Menu(menu::MenuScreen::OnlineHub {
-                        tab: menu::OnlineTab::Chat,
+                        tab: menu::OnlineTab::Chat | menu::OnlineTab::Players,
                         ..
                     })
                 ) && lobby_rx.is_none()
@@ -6110,6 +6162,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     } else {
                         lobby_list_rx = None;
+                    }
+                }
+
+                // Poll incoming challenges anywhere in the Online hub and raise
+                // a modal prompt when one arrives.
+                if matches!(state, AppState::Menu(menu::MenuScreen::OnlineHub { .. }))
+                    && challenge_rx.is_none()
+                    && Instant::now() >= challenge_next_refresh
+                {
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    challenge_rx = Some(rx);
+                    matchmaking::fetch_challenges(tx);
+                    challenge_next_refresh = Instant::now() + Duration::from_secs(4);
+                }
+
+                if let Some(rx) = &challenge_rx {
+                    match rx.try_recv() {
+                        Ok(matchmaking::ChallengeListUpdate::Loaded(list)) => {
+                            if let AppState::Menu(menu::MenuScreen::OnlineHub {
+                                ref mut incoming,
+                                ..
+                            }) = state
+                            {
+                                if incoming.is_none() {
+                                    *incoming = list.into_iter().next();
+                                }
+                            }
+                            challenge_rx = None;
+                        }
+                        Ok(matchmaking::ChallengeListUpdate::Error(e)) => {
+                            // Not signed in / transient — quiet, just retry later.
+                            let _ = e;
+                            challenge_rx = None;
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                            challenge_rx = None;
+                        }
                     }
                 }
 

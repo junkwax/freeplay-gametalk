@@ -5,8 +5,8 @@ use crate::config::{
 use crate::font::Font;
 use crate::input::{is_action_active, Action, Binding, Bindings, Player, PlayerBindings};
 use crate::matchmaking::{
-    HistoryRow, LeaderboardRow, LiveMatch, LobbyChatMessage, LobbyUser, ProfileData,
-    RemoteGhostMeta,
+    HistoryRow, IncomingChallenge, LeaderboardRow, LiveMatch, LobbyChatMessage, LobbyUser,
+    ProfileData, RemoteGhostMeta,
 };
 use crate::version;
 use sdl2::pixels::Color;
@@ -57,6 +57,11 @@ pub enum MenuScreen {
         /// On-screen keyboard cursor (row, col) used on the Chat section.
         osk_row: usize,
         osk_col: usize,
+        /// When set, the format chooser is open for the selected player on the
+        /// Players section (value is the highlighted format index 0..4).
+        challenge_pick: Option<usize>,
+        /// A challenge someone sent us — shown as a modal accept/decline prompt.
+        incoming: Option<IncomingChallenge>,
         lobbies: Vec<LobbyPreview>,
         live_matches: Vec<LiveMatch>,
         status: String,
@@ -222,6 +227,8 @@ pub enum OnlineTab {
     Play,
     /// General lobby chat + online presence.
     Chat,
+    /// Online players you can challenge directly.
+    Players,
     /// Browse / create / join public lobbies.
     Lobbies,
     /// Watch live matches.
@@ -229,9 +236,10 @@ pub enum OnlineTab {
 }
 
 impl OnlineTab {
-    const ALL: [OnlineTab; 4] = [
+    const ALL: [OnlineTab; 5] = [
         OnlineTab::Play,
         OnlineTab::Chat,
+        OnlineTab::Players,
         OnlineTab::Lobbies,
         OnlineTab::Watch,
     ];
@@ -240,6 +248,7 @@ impl OnlineTab {
         match self {
             OnlineTab::Play => "Play",
             OnlineTab::Chat => "Chat",
+            OnlineTab::Players => "Players",
             OnlineTab::Lobbies => "Lobbies",
             OnlineTab::Watch => "Watch",
         }
@@ -484,6 +493,7 @@ fn content_row_count(tab: OnlineTab, lobbies: &[LobbyPreview], live_matches: &[L
     match tab {
         OnlineTab::Play => 2,             // format selector + Find Match
         OnlineTab::Chat => 1,             // the input line (scroll is separate)
+        OnlineTab::Players => 1,          // presence selection (clamped separately)
         OnlineTab::Lobbies => 1 + lobbies.len(), // Create row + each lobby
         OnlineTab::Watch => live_matches.len().max(1),
     }
@@ -542,6 +552,10 @@ pub enum NavResult {
     JoinLobby(String),
     /// Host a new public lobby with the given challenge format.
     CreateLobby(ChallengeFormat),
+    /// Challenge a player (presence player_id) to a match in the given format.
+    SendChallenge(String, ChallengeFormat),
+    /// Accept an incoming challenge by its id.
+    AcceptChallenge(String),
     /// Toggle desktop fullscreen and persist config.
     ToggleFullscreen,
     /// Adjust audio volume by signed percentage points.
@@ -591,22 +605,35 @@ impl AppState {
                 cursor,
                 osk_row,
                 osk_col,
+                challenge_pick,
+                incoming,
                 ..
-            }) => match focus {
-                HubFocus::Rail => {
-                    *tab = tab.prev();
-                    *cursor = 0;
+            }) => {
+                if incoming.is_some() {
+                    return; // modal prompt: only Accept/Back respond
                 }
-                HubFocus::Content => {
-                    if *tab == OnlineTab::Chat {
-                        // Move up a row on the on-screen keyboard.
-                        *osk_row = osk_row.saturating_sub(1);
-                        *osk_col = (*osk_col).min(osk_row_len(*osk_row).saturating_sub(1));
-                    } else {
-                        *cursor = cursor.saturating_sub(1);
+                match focus {
+                    HubFocus::Rail => {
+                        *tab = tab.prev();
+                        *cursor = 0;
+                        *challenge_pick = None;
                     }
+                    HubFocus::Content => match tab {
+                        OnlineTab::Chat => {
+                            *osk_row = osk_row.saturating_sub(1);
+                            *osk_col = (*osk_col).min(osk_row_len(*osk_row).saturating_sub(1));
+                        }
+                        OnlineTab::Players => {
+                            if let Some(f) = challenge_pick {
+                                *challenge_pick = Some(f.saturating_sub(1));
+                            } else {
+                                *cursor = cursor.saturating_sub(1);
+                            }
+                        }
+                        _ => *cursor = cursor.saturating_sub(1),
+                    },
                 }
-            },
+            }
             AppState::Menu(MenuScreen::LabMenu { cursor }) => {
                 *cursor = cursor.saturating_sub(1);
             }
@@ -645,23 +672,42 @@ impl AppState {
                 cursor,
                 osk_row,
                 osk_col,
+                challenge_pick,
+                incoming,
+                presence,
                 lobbies,
                 live_matches,
                 ..
-            }) => match focus {
-                HubFocus::Rail => {
-                    *tab = tab.next();
-                    *cursor = 0;
+            }) => {
+                if incoming.is_some() {
+                    return;
                 }
-                HubFocus::Content => {
-                    if *tab == OnlineTab::Chat {
-                        *osk_row = (*osk_row + 1).min(OSK_ROWS - 1);
-                        *osk_col = (*osk_col).min(osk_row_len(*osk_row).saturating_sub(1));
-                    } else if *cursor + 1 < content_row_count(*tab, lobbies, live_matches) {
-                        *cursor += 1;
+                match focus {
+                    HubFocus::Rail => {
+                        *tab = tab.next();
+                        *cursor = 0;
+                        *challenge_pick = None;
                     }
+                    HubFocus::Content => match tab {
+                        OnlineTab::Chat => {
+                            *osk_row = (*osk_row + 1).min(OSK_ROWS - 1);
+                            *osk_col = (*osk_col).min(osk_row_len(*osk_row).saturating_sub(1));
+                        }
+                        OnlineTab::Players => {
+                            if let Some(f) = challenge_pick {
+                                *challenge_pick = Some((*f + 1).min(ChallengeFormat::ALL.len() - 1));
+                            } else if *cursor + 1 < presence.len() {
+                                *cursor += 1;
+                            }
+                        }
+                        _ => {
+                            if *cursor + 1 < content_row_count(*tab, lobbies, live_matches) {
+                                *cursor += 1;
+                            }
+                        }
+                    },
                 }
-            },
+            }
             AppState::Menu(MenuScreen::LabMenu { cursor }) => {
                 if *cursor + 1 < LAB_MENU_ITEMS.len() {
                     *cursor += 1;
@@ -731,13 +777,22 @@ impl AppState {
     /// hub content it returns focus to the rail; elsewhere it swaps player.
     pub fn nav_left(&mut self) {
         if let AppState::Menu(MenuScreen::OnlineHub {
-            tab, focus, osk_col, ..
+            tab,
+            focus,
+            osk_col,
+            challenge_pick,
+            incoming,
+            ..
         }) = self
         {
+            if incoming.is_some() {
+                return;
+            }
             if *focus == HubFocus::Content && *tab == OnlineTab::Chat {
                 *osk_col = osk_col.saturating_sub(1);
             } else {
                 *focus = HubFocus::Rail;
+                *challenge_pick = None;
             }
             return;
         }
@@ -752,9 +807,13 @@ impl AppState {
             focus,
             osk_row,
             osk_col,
+            incoming,
             ..
         }) = self
         {
+            if incoming.is_some() {
+                return;
+            }
             if *focus == HubFocus::Content && *tab == OnlineTab::Chat {
                 let max_col = osk_row_len(*osk_row).saturating_sub(1);
                 *osk_col = (*osk_col + 1).min(max_col);
@@ -814,6 +873,8 @@ impl AppState {
                         chat_scroll: 0,
                         osk_row: 0,
                         osk_col: 0,
+                        challenge_pick: None,
+                        incoming: None,
                         lobbies: Vec::new(),
                         live_matches: Vec::new(),
                         status: "Choose a section".into(),
@@ -898,10 +959,20 @@ impl AppState {
                 mut challenge_format,
                 osk_row,
                 osk_col,
+                challenge_pick,
+                incoming,
+                presence,
                 lobbies,
                 live_matches,
                 ..
             }) => {
+                // An incoming challenge prompt takes priority: Accept it.
+                if let Some(ch) = incoming {
+                    if let AppState::Menu(MenuScreen::OnlineHub { incoming, .. }) = self {
+                        *incoming = None;
+                    }
+                    return NavResult::AcceptChallenge(ch.challenge_id);
+                }
                 // From the rail, Enter dives into the section content.
                 if focus == HubFocus::Rail {
                     if let AppState::Menu(MenuScreen::OnlineHub { focus, .. }) = self {
@@ -910,6 +981,44 @@ impl AppState {
                     return NavResult::Stay;
                 }
                 match tab {
+                    OnlineTab::Players => {
+                        if presence.is_empty() {
+                            return NavResult::Stay;
+                        }
+                        match challenge_pick {
+                            None => {
+                                // Open the format chooser at the global format.
+                                let idx = ChallengeFormat::ALL
+                                    .iter()
+                                    .position(|f| *f == challenge_format)
+                                    .unwrap_or(0);
+                                if let AppState::Menu(MenuScreen::OnlineHub {
+                                    challenge_pick,
+                                    ..
+                                }) = self
+                                {
+                                    *challenge_pick = Some(idx);
+                                }
+                                NavResult::Stay
+                            }
+                            Some(fmt_idx) => {
+                                let fmt = ChallengeFormat::ALL
+                                    [fmt_idx.min(ChallengeFormat::ALL.len() - 1)];
+                                let target = presence.get(cursor).map(|u| u.player_id.clone());
+                                if let AppState::Menu(MenuScreen::OnlineHub {
+                                    challenge_pick,
+                                    ..
+                                }) = self
+                                {
+                                    *challenge_pick = None;
+                                }
+                                match target {
+                                    Some(id) => NavResult::SendChallenge(id, fmt),
+                                    None => NavResult::Stay,
+                                }
+                            }
+                        }
+                    }
                     OnlineTab::Play => {
                         if cursor == 0 {
                             challenge_format = challenge_format.next();
@@ -1118,9 +1227,20 @@ impl AppState {
     }
 
     pub fn nav_back(&mut self) {
-        // In the Online hub, Back first returns from content to the rail, then
-        // from the rail out to the main menu.
-        if let AppState::Menu(MenuScreen::OnlineHub { focus, .. }) = self {
+        // In the Online hub, Back closes the format chooser, then returns from
+        // content to the rail, then from the rail out to the main menu. (The
+        // incoming-challenge modal's decline is handled in main.rs, before
+        // nav_back, because it needs to fire a network call.)
+        if let AppState::Menu(MenuScreen::OnlineHub {
+            focus,
+            challenge_pick,
+            ..
+        }) = self
+        {
+            if challenge_pick.is_some() {
+                *challenge_pick = None;
+                return;
+            }
             if *focus == HubFocus::Content {
                 *focus = HubFocus::Rail;
                 return;
@@ -1290,6 +1410,8 @@ pub fn draw(
             chat_scroll,
             osk_row,
             osk_col,
+            challenge_pick,
+            incoming,
             lobbies,
             live_matches,
             status,
@@ -1305,6 +1427,8 @@ pub fn draw(
             presence,
             *chat_scroll,
             (*osk_row, *osk_col),
+            *challenge_pick,
+            incoming.as_ref(),
             lobbies,
             live_matches,
             status,
@@ -1908,7 +2032,6 @@ fn draw_main(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_arguments)]
 fn draw_online_hub(
     canvas: &mut Canvas<Window>,
     font: &mut Font,
@@ -1921,6 +2044,8 @@ fn draw_online_hub(
     presence: &[LobbyUser],
     chat_scroll: usize,
     osk: (usize, usize),
+    challenge_pick: Option<usize>,
+    incoming: Option<&IncomingChallenge>,
     lobbies: &[LobbyPreview],
     live_matches: &[LiveMatch],
     status: &str,
@@ -1963,6 +2088,33 @@ fn draw_online_hub(
     let y = top + 30 + 20 * body as i32; // content start
 
     match tab {
+        OnlineTab::Players => {
+            if presence.is_empty() {
+                font.draw(canvas, "No players online right now.", x, y, body, HUB_TEXT)?;
+                font.draw(
+                    canvas,
+                    "Open the Chat section to join the lobby and appear here.",
+                    x + 10,
+                    y + 16 * body as i32,
+                    small,
+                    HUB_DIM,
+                )?;
+            } else {
+                font.draw(canvas, "Select a player, then pick a format to challenge.", x, y, small, HUB_DIM)?;
+                let row_gap = 30;
+                let list_y = y + 22;
+                let max_rows = ((bottom - list_y) / row_gap).max(1) as usize;
+                for (i, u) in presence.iter().take(max_rows).enumerate() {
+                    let row_y = list_y + i as i32 * row_gap;
+                    let sel = content_focus && cursor == i;
+                    draw_online_row(canvas, font, &u.username, sel, x, row_y, content_w, body)?;
+                    if !u.status.is_empty() {
+                        let sw = font.text_width_exact(&u.status, small);
+                        font.draw(canvas, &u.status, x + content_w - sw - 6, row_y + 2, small, HUB_FAINT)?;
+                    }
+                }
+            }
+        }
         OnlineTab::Play => {
             let fmt_line = format!("Format:  {}", challenge_format.label());
             draw_online_row(canvas, font, &fmt_line, content_focus && cursor == 0, x, y, content_w, body)?;
@@ -2129,17 +2281,110 @@ fn draw_online_hub(
         }
     }
 
+    // Format chooser overlay (challenging a selected player).
+    if let Some(pick) = challenge_pick {
+        if let Some(target) = presence.get(cursor) {
+            draw_format_chooser(canvas, font, &target.username, pick, body, w, h)?;
+        }
+    }
+
+    // Incoming-challenge modal takes the whole screen's attention.
+    if let Some(ch) = incoming {
+        draw_incoming_challenge(canvas, font, ch, body, small, w, h)?;
+    }
+
     // Focus-aware footer hints.
-    let footer = match focus {
-        HubFocus::Rail => "UP/DOWN Section    RIGHT/ENTER Open    ESC Back",
-        HubFocus::Content => match tab {
-            OnlineTab::Chat => "D-pad keys   A press key   ENTER send   ESC back",
-            OnlineTab::Play => "UP/DOWN Move    ENTER Select/Change    LEFT Back",
-            _ => "UP/DOWN Move    ENTER Select    LEFT Back",
-        },
+    let footer = if incoming.is_some() {
+        "ENTER Accept    ESC Decline"
+    } else if challenge_pick.is_some() {
+        "UP/DOWN Format    ENTER Challenge    ESC Cancel"
+    } else {
+        match focus {
+            HubFocus::Rail => "UP/DOWN Section    RIGHT/ENTER Open    ESC Back",
+            HubFocus::Content => match tab {
+                OnlineTab::Chat => "D-pad keys   A press key   ENTER send   ESC back",
+                OnlineTab::Play => "UP/DOWN Move    ENTER Select/Change    LEFT Back",
+                OnlineTab::Players => "UP/DOWN Player    ENTER Challenge    LEFT Back",
+                _ => "UP/DOWN Move    ENTER Select    LEFT Back",
+            },
+        }
     };
     let fw = font.text_width_exact(footer, small);
     font.draw(canvas, footer, (w - fw) / 2, h - footer_h + 8, small, HUB_FAINT)?;
+    Ok(())
+}
+
+/// Small centered popup listing the four challenge formats.
+fn draw_format_chooser(
+    canvas: &mut Canvas<Window>,
+    font: &mut Font,
+    target: &str,
+    pick: usize,
+    body: u32,
+    w: i32,
+    h: i32,
+) -> Result<(), String> {
+    let bw = (w / 3).clamp(220, 360);
+    let row_h = 14 * body as i32 + 10;
+    let bh = row_h * ChallengeFormat::ALL.len() as i32 + 40;
+    let bx = (w - bw) / 2;
+    let by = (h - bh) / 2;
+    draw_panel(canvas, bx, by, bw, bh, Color::RGBA(20, 24, 38, 248))?;
+    let title = format!("Challenge {target}");
+    let title = fit_line(font, &title, body, bw - 24);
+    font.draw(canvas, &title, bx + 14, by + 12, body, HUB_ACCENT)?;
+    for (i, fmt) in ChallengeFormat::ALL.iter().enumerate() {
+        let ry = by + 36 + i as i32 * row_h;
+        let selected = i == pick;
+        if selected {
+            canvas.set_draw_color(HUB_PANEL_SEL);
+            canvas.fill_rect(Rect::new(bx + 8, ry - 4, (bw - 16) as u32, row_h as u32))?;
+            canvas.set_draw_color(HUB_ACCENT);
+            canvas.fill_rect(Rect::new(bx + 8, ry - 4, 3, row_h as u32))?;
+        }
+        font.draw(
+            canvas,
+            fmt.label(),
+            bx + 18,
+            ry,
+            body,
+            if selected { HUB_ACCENT } else { HUB_TEXT },
+        )?;
+    }
+    Ok(())
+}
+
+/// Centered modal prompting to accept or decline an incoming challenge.
+fn draw_incoming_challenge(
+    canvas: &mut Canvas<Window>,
+    font: &mut Font,
+    ch: &IncomingChallenge,
+    body: u32,
+    small: u32,
+    w: i32,
+    h: i32,
+) -> Result<(), String> {
+    // Dim the whole screen.
+    canvas.set_draw_color(Color::RGBA(0, 0, 0, 170));
+    canvas.fill_rect(Rect::new(0, 0, w as u32, h as u32))?;
+    let bw = (w / 3).clamp(260, 420);
+    let bh = 30 * body as i32 + 60;
+    let bx = (w - bw) / 2;
+    let by = (h - bh) / 2;
+    draw_panel(canvas, bx, by, bw, bh, Color::RGBA(22, 26, 42, 252))?;
+    font.draw(canvas, "Challenge!", bx + 16, by + 14, body, HUB_ACCENT)?;
+    let fmt = crate::matchmaking::lobby_format_label(ch.format);
+    let line = format!("{} wants to play  ({})", ch.from_username, fmt);
+    let line = fit_line(font, &line, small, bw - 32);
+    font.draw(canvas, &line, bx + 16, by + 16 + 18 * body as i32, small, HUB_TEXT)?;
+    font.draw(
+        canvas,
+        "ENTER Accept      ESC Decline",
+        bx + 16,
+        by + bh - 14 * small as i32 - 12,
+        small,
+        HUB_DIM,
+    )?;
     Ok(())
 }
 
