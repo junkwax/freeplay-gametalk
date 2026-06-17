@@ -54,6 +54,9 @@ pub enum MenuScreen {
         chat: Vec<LobbyChatMessage>,
         presence: Vec<LobbyUser>,
         chat_scroll: usize,
+        /// On-screen keyboard cursor (row, col) used on the Chat section.
+        osk_row: usize,
+        osk_col: usize,
         lobbies: Vec<LobbyPreview>,
         live_matches: Vec<LiveMatch>,
         status: String,
@@ -442,6 +445,40 @@ fn nick_color(name: &str) -> Color {
     NICK_PALETTE[(h as usize) % NICK_PALETTE.len()]
 }
 
+// ── On-screen keyboard ───────────────────────────────────────────────────────
+// A d-pad-navigable keyboard so controller players can type in chat without a
+// physical keyboard. Physical-keyboard input still works in parallel.
+const OSK_CHAR_ROWS: [&str; 4] = ["1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm"];
+const OSK_ROWS: usize = 5; // 4 character rows + 1 action row
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum OskKey {
+    Char(char),
+    Space,
+    Backspace,
+    Send,
+}
+
+fn osk_row_len(row: usize) -> usize {
+    if row < 4 {
+        OSK_CHAR_ROWS[row].chars().count()
+    } else {
+        3 // Space, Del, Send
+    }
+}
+
+fn osk_key_at(row: usize, col: usize) -> OskKey {
+    if row < 4 {
+        OskKey::Char(OSK_CHAR_ROWS[row].chars().nth(col).unwrap_or(' '))
+    } else {
+        match col {
+            0 => OskKey::Space,
+            1 => OskKey::Backspace,
+            _ => OskKey::Send,
+        }
+    }
+}
+
 /// Number of selectable rows in a section's content pane (for cursor clamping).
 fn content_row_count(tab: OnlineTab, lobbies: &[LobbyPreview], live_matches: &[LiveMatch]) -> usize {
     match tab {
@@ -552,18 +589,19 @@ impl AppState {
                 tab,
                 focus,
                 cursor,
-                chat_scroll,
+                osk_row,
+                osk_col,
                 ..
             }) => match focus {
                 HubFocus::Rail => {
                     *tab = tab.prev();
                     *cursor = 0;
-                    *chat_scroll = 0;
                 }
                 HubFocus::Content => {
                     if *tab == OnlineTab::Chat {
-                        // Scroll back toward older messages.
-                        *chat_scroll = chat_scroll.saturating_add(1);
+                        // Move up a row on the on-screen keyboard.
+                        *osk_row = osk_row.saturating_sub(1);
+                        *osk_col = (*osk_col).min(osk_row_len(*osk_row).saturating_sub(1));
                     } else {
                         *cursor = cursor.saturating_sub(1);
                     }
@@ -605,7 +643,8 @@ impl AppState {
                 tab,
                 focus,
                 cursor,
-                chat_scroll,
+                osk_row,
+                osk_col,
                 lobbies,
                 live_matches,
                 ..
@@ -613,11 +652,11 @@ impl AppState {
                 HubFocus::Rail => {
                     *tab = tab.next();
                     *cursor = 0;
-                    *chat_scroll = 0;
                 }
                 HubFocus::Content => {
                     if *tab == OnlineTab::Chat {
-                        *chat_scroll = chat_scroll.saturating_sub(1);
+                        *osk_row = (*osk_row + 1).min(OSK_ROWS - 1);
+                        *osk_col = (*osk_col).min(osk_row_len(*osk_row).saturating_sub(1));
                     } else if *cursor + 1 < content_row_count(*tab, lobbies, live_matches) {
                         *cursor += 1;
                     }
@@ -688,24 +727,72 @@ impl AppState {
         }
     }
 
-    /// D-pad/arrow Left. In the Online hub, returns focus from content to the
-    /// rail; elsewhere it falls back to the player-swap behavior.
+    /// D-pad/arrow Left. On the Chat keyboard it moves the key cursor; in other
+    /// hub content it returns focus to the rail; elsewhere it swaps player.
     pub fn nav_left(&mut self) {
-        if let AppState::Menu(MenuScreen::OnlineHub { focus, .. }) = self {
-            *focus = HubFocus::Rail;
+        if let AppState::Menu(MenuScreen::OnlineHub {
+            tab, focus, osk_col, ..
+        }) = self
+        {
+            if *focus == HubFocus::Content && *tab == OnlineTab::Chat {
+                *osk_col = osk_col.saturating_sub(1);
+            } else {
+                *focus = HubFocus::Rail;
+            }
             return;
         }
         self.nav_switch_player();
     }
 
-    /// D-pad/arrow Right. In the Online hub, dives from the rail into content;
-    /// elsewhere it falls back to the player-swap behavior.
+    /// D-pad/arrow Right. On the Chat keyboard it moves the key cursor; in the
+    /// rail it dives into content; elsewhere it swaps player.
     pub fn nav_right(&mut self) {
-        if let AppState::Menu(MenuScreen::OnlineHub { focus, .. }) = self {
-            *focus = HubFocus::Content;
+        if let AppState::Menu(MenuScreen::OnlineHub {
+            tab,
+            focus,
+            osk_row,
+            osk_col,
+            ..
+        }) = self
+        {
+            if *focus == HubFocus::Content && *tab == OnlineTab::Chat {
+                let max_col = osk_row_len(*osk_row).saturating_sub(1);
+                *osk_col = (*osk_col + 1).min(max_col);
+            } else {
+                *focus = HubFocus::Content;
+            }
             return;
         }
         self.nav_switch_player();
+    }
+
+    /// Send the current chat draft (trimmed). Clears the draft on send.
+    fn send_chat_draft(&mut self) -> NavResult {
+        if let AppState::Menu(MenuScreen::OnlineHub { chat_draft, .. }) = self {
+            let message = chat_draft.trim().to_string();
+            if !message.is_empty() {
+                chat_draft.clear();
+                return NavResult::SendLobbyChat(message);
+            }
+        }
+        NavResult::Stay
+    }
+
+    /// Edit the chat draft from the on-screen keyboard: `Some(c)` appends a
+    /// character (capped), `None` is backspace.
+    fn osk_edit_draft(&mut self, ch: Option<char>) {
+        if let AppState::Menu(MenuScreen::OnlineHub { chat_draft, .. }) = self {
+            match ch {
+                Some(c) => {
+                    if chat_draft.chars().count() < 180 {
+                        chat_draft.push(c);
+                    }
+                }
+                None => {
+                    chat_draft.pop();
+                }
+            }
+        }
     }
 
     pub fn nav_accept(&mut self, rom_present: bool) -> NavResult {
@@ -725,6 +812,8 @@ impl AppState {
                         chat: Vec::new(),
                         presence: Vec::new(),
                         chat_scroll: 0,
+                        osk_row: 0,
+                        osk_col: 0,
                         lobbies: Vec::new(),
                         live_matches: Vec::new(),
                         status: "Choose a section".into(),
@@ -807,6 +896,8 @@ impl AppState {
                 focus,
                 cursor,
                 mut challenge_format,
+                osk_row,
+                osk_col,
                 lobbies,
                 live_matches,
                 ..
@@ -835,12 +926,16 @@ impl AppState {
                         }
                     }
                     OnlineTab::Chat => {
-                        if let AppState::Menu(MenuScreen::OnlineHub { chat_draft, .. }) = self {
-                            let message = chat_draft.trim().to_string();
-                            if !message.is_empty() {
-                                chat_draft.clear();
-                                return NavResult::SendLobbyChat(message);
+                        // Accept presses the selected on-screen-keyboard key.
+                        // (Physical Enter sends via a dedicated handler in
+                        // main.rs, so keyboard users aren't affected.)
+                        match osk_key_at(osk_row, osk_col) {
+                            OskKey::Send => {
+                                return self.send_chat_draft();
                             }
+                            OskKey::Backspace => self.osk_edit_draft(None),
+                            OskKey::Space => self.osk_edit_draft(Some(' ')),
+                            OskKey::Char(c) => self.osk_edit_draft(Some(c)),
                         }
                         NavResult::Stay
                     }
@@ -1193,6 +1288,8 @@ pub fn draw(
             chat,
             presence,
             chat_scroll,
+            osk_row,
+            osk_col,
             lobbies,
             live_matches,
             status,
@@ -1207,6 +1304,7 @@ pub fn draw(
             chat,
             presence,
             *chat_scroll,
+            (*osk_row, *osk_col),
             lobbies,
             live_matches,
             status,
@@ -1822,6 +1920,7 @@ fn draw_online_hub(
     chat: &[LobbyChatMessage],
     presence: &[LobbyUser],
     chat_scroll: usize,
+    osk: (usize, usize),
     lobbies: &[LobbyPreview],
     live_matches: &[LiveMatch],
     status: &str,
@@ -1889,8 +1988,17 @@ fn draw_online_hub(
         OnlineTab::Chat => {
             let line_h = (16 * small as i32).max(15);
             let input_h = 14 * small as i32 + 14;
+            let key_h = 14 * small as i32 + 8;
+            let osk_gap = 4;
+            // Reserve on-screen-keyboard space only while composing (focused).
+            let osk_h = if content_focus {
+                OSK_ROWS as i32 * (key_h + osk_gap) + 4
+            } else {
+                0
+            };
             let log_top = y;
-            let log_bottom = bottom - 12 - input_h - 8;
+            let input_y = bottom - osk_h - if content_focus { 8 } else { 4 } - input_h;
+            let log_bottom = input_y - 8;
             let log_h = (log_bottom - log_top).max(line_h);
 
             let presence_w = (content_w / 3).clamp(96, 240);
@@ -1935,8 +2043,8 @@ fn draw_online_hub(
                 }
             }
 
-            // Input box (typing is always active while in this section).
-            let input_y = log_bottom + 8;
+            // Input box (typing active while in this section — physical
+            // keyboard or the on-screen keyboard below).
             let box_color = if content_focus { HUB_PANEL_SEL } else { HUB_RAIL_BG };
             draw_panel(canvas, x, input_y, content_w, input_h, box_color)?;
             let (draft, draft_color) = if chat_draft.is_empty() {
@@ -1946,6 +2054,21 @@ fn draw_online_hub(
             };
             let draft = fit_line(font, draft, small, content_w - 16);
             font.draw(canvas, &draft, x + 8, input_y + 4, small, draft_color)?;
+
+            // On-screen keyboard for controller players.
+            if content_focus {
+                draw_osk(
+                    canvas,
+                    font,
+                    osk,
+                    x,
+                    input_y + input_h + 6,
+                    content_w,
+                    small,
+                    key_h,
+                    osk_gap,
+                )?;
+            }
         }
         OnlineTab::Lobbies => {
             let create_label = format!("+  Create Lobby  ({})", challenge_format.label());
@@ -2010,7 +2133,7 @@ fn draw_online_hub(
     let footer = match focus {
         HubFocus::Rail => "UP/DOWN Section    RIGHT/ENTER Open    ESC Back",
         HubFocus::Content => match tab {
-            OnlineTab::Chat => "Type to chat    ENTER Send    UP/DOWN Scroll    LEFT Back",
+            OnlineTab::Chat => "D-pad keys   A press key   ENTER send   ESC back",
             OnlineTab::Play => "UP/DOWN Move    ENTER Select/Change    LEFT Back",
             _ => "UP/DOWN Move    ENTER Select    LEFT Back",
         },
@@ -2092,6 +2215,88 @@ fn draw_online_row(
         } else {
             Color::RGB(170, 178, 196)
         },
+    )?;
+    Ok(())
+}
+
+/// Display label for an on-screen-keyboard key.
+fn osk_key_label(row: usize, col: usize) -> String {
+    match osk_key_at(row, col) {
+        OskKey::Char(c) => c.to_string(),
+        OskKey::Space => "SPACE".into(),
+        OskKey::Backspace => "DEL".into(),
+        OskKey::Send => "SEND".into(),
+    }
+}
+
+/// Draw the d-pad-navigable on-screen keyboard. `sel` is the highlighted
+/// (row, col).
+#[allow(clippy::too_many_arguments)]
+fn draw_osk(
+    canvas: &mut Canvas<Window>,
+    font: &mut Font,
+    sel: (usize, usize),
+    x: i32,
+    y: i32,
+    w: i32,
+    small: u32,
+    key_h: i32,
+    gap: i32,
+) -> Result<(), String> {
+    // Character keys sized to fit the widest row (10 keys); the action row
+    // (SPACE/DEL/SEND) spans the same width in three wide keys.
+    let kw = ((w - 9 * gap) / 10).clamp(16, 56);
+    for row in 0..OSK_ROWS {
+        let row_y = y + row as i32 * (key_h + gap);
+        let len = osk_row_len(row);
+        if row < 4 {
+            for col in 0..len {
+                let kx = x + col as i32 * (kw + gap);
+                draw_osk_key(canvas, font, &osk_key_label(row, col), sel == (row, col), kx, row_y, kw, key_h, small)?;
+            }
+        } else {
+            let aw = (w - 2 * gap) / 3;
+            for col in 0..len {
+                let kx = x + col as i32 * (aw + gap);
+                draw_osk_key(canvas, font, &osk_key_label(row, col), sel == (row, col), kx, row_y, aw, key_h, small)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_osk_key(
+    canvas: &mut Canvas<Window>,
+    font: &mut Font,
+    label: &str,
+    selected: bool,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    small: u32,
+) -> Result<(), String> {
+    draw_panel(
+        canvas,
+        x,
+        y,
+        w,
+        h,
+        if selected { HUB_PANEL_SEL } else { HUB_PANEL },
+    )?;
+    if selected {
+        canvas.set_draw_color(HUB_ACCENT);
+        canvas.fill_rect(Rect::new(x, y, w as u32, 2))?;
+    }
+    let tw = font.text_width_exact(label, small);
+    font.draw(
+        canvas,
+        label,
+        x + (w - tw) / 2,
+        y + (h - 8 * small as i32) / 2,
+        small,
+        if selected { HUB_ACCENT } else { HUB_TEXT },
     )?;
     Ok(())
 }

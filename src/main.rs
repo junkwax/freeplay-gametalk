@@ -2397,6 +2397,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     state.text_backspace();
                 }
 
+                // Physical Enter sends a lobby chat message. Handled here, ahead
+                // of the generic menu-nav dispatch, because in the Chat section
+                // the gamepad A button drives the on-screen keyboard instead of
+                // sending — so keyboard users still send with Enter.
+                Event::KeyDown {
+                    keycode: Some(Keycode::Return | Keycode::KpEnter),
+                    ..
+                } if matches!(
+                    state,
+                    AppState::Menu(menu::MenuScreen::OnlineHub {
+                        tab: menu::OnlineTab::Chat,
+                        focus: menu::HubFocus::Content,
+                        ..
+                    })
+                ) =>
+                {
+                    let message = if let AppState::Menu(menu::MenuScreen::OnlineHub {
+                        ref mut chat_draft,
+                        ref mut status,
+                        ..
+                    }) = state
+                    {
+                        let m = chat_draft.trim().to_string();
+                        if m.is_empty() {
+                            None
+                        } else {
+                            chat_draft.clear();
+                            *status = "Sending chat...".into();
+                            Some(m)
+                        }
+                    } else {
+                        None
+                    };
+                    if let Some(message) = message {
+                        matchmaking::set_guest_profile(
+                            cfg.player_username.clone(),
+                            cfg.stats_email.clone(),
+                            cfg.guest_device_id.clone(),
+                        );
+                        let (tx, rx) = std::sync::mpsc::channel();
+                        lobby_chat_post_rx = Some(rx);
+                        matchmaking::send_lobby_chat(message, tx);
+                    }
+                }
+
                 Event::KeyDown {
                     keycode: Some(Keycode::F11),
                     repeat: false,
