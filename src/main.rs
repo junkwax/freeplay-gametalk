@@ -878,6 +878,7 @@ fn lobby_format_to_menu(format: matchmaking::LobbyMatchFormat) -> menu::Challeng
 
 fn lobby_room_to_preview(room: matchmaking::LobbyRoom) -> menu::LobbyPreview {
     menu::LobbyPreview {
+        id: room.id,
         name: room.name,
         host: room.host_username,
         format: lobby_format_to_menu(room.format),
@@ -885,26 +886,6 @@ fn lobby_room_to_preview(room: matchmaking::LobbyRoom) -> menu::LobbyPreview {
         private: room.private,
         status: room.status,
     }
-}
-
-fn lobby_snapshot_lines(snapshot: &matchmaking::LobbySnapshot) -> Vec<String> {
-    let mut lines = Vec::new();
-    if !snapshot.users.is_empty() {
-        let names = snapshot
-            .users
-            .iter()
-            .map(|user| user.username.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
-        lines.push(format!("ONLINE {names}"));
-    }
-    for msg in &snapshot.chat {
-        lines.push(format!("{}: {}", msg.username, msg.message));
-    }
-    if lines.is_empty() {
-        lines.push("SYSTEM No lobby messages yet".into());
-    }
-    lines
 }
 
 fn enter_replay_review(
@@ -1725,6 +1706,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 state,
                 AppState::Menu(menu::MenuScreen::TestIp { editing: true, .. })
                     | AppState::Menu(menu::MenuScreen::TextEdit { .. })
+                    | AppState::Menu(menu::MenuScreen::OnlineHub {
+                        tab: menu::OnlineTab::Chat,
+                        focus: menu::HubFocus::Content,
+                        ..
+                    })
                     | AppState::Menu(menu::MenuScreen::MatchUsername {
                         checking: false,
                         ..
@@ -2377,8 +2363,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         state,
                         AppState::Menu(menu::MenuScreen::TestIp { editing: true, .. })
                             | AppState::Menu(menu::MenuScreen::OnlineHub {
-                                tab: menu::OnlineTab::General,
-                                cursor: 1,
+                                tab: menu::OnlineTab::Chat,
+                                focus: menu::HubFocus::Content,
                                 ..
                             })
                             | AppState::Menu(menu::MenuScreen::TextEdit { .. })
@@ -2397,8 +2383,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     state,
                     AppState::Menu(menu::MenuScreen::TestIp { editing: true, .. })
                         | AppState::Menu(menu::MenuScreen::OnlineHub {
-                            tab: menu::OnlineTab::General,
-                            cursor: 1,
+                            tab: menu::OnlineTab::Chat,
+                            focus: menu::HubFocus::Content,
                             ..
                         })
                         | AppState::Menu(menu::MenuScreen::TextEdit { .. })
@@ -3063,6 +3049,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         *status = "Sending chat...".into();
                                     }
                                 }
+                                NavResult::JoinLobby(room_id) => {
+                                    // Reuse the Discord deep-link join path: tear
+                                    // down any local runtime, then hand the room
+                                    // id to matchmaking and wait on the queue
+                                    // screen for the connect handshake.
+                                    matchmaking::set_guest_profile(
+                                        cfg.player_username.clone(),
+                                        cfg.stats_email.clone(),
+                                        cfg.guest_device_id.clone(),
+                                    );
+                                    shutdown_for_online_start!("Join lobby");
+                                    let (tx, rx) = std::sync::mpsc::channel();
+                                    mm_rx = Some(rx);
+                                    matchmaking::start_join_room(tx, room_id);
+                                    state = AppState::Menu(MenuScreen::Matchmaking {
+                                        status: "Joining lobby...".into(),
+                                    });
+                                }
+                                NavResult::CreateLobby(format) => {
+                                    // Host a public lobby named after the player
+                                    // with the chosen format, then wait for a
+                                    // challenger on the queue screen.
+                                    matchmaking::set_guest_profile(
+                                        cfg.player_username.clone(),
+                                        cfg.stats_email.clone(),
+                                        cfg.guest_device_id.clone(),
+                                    );
+                                    shutdown_for_online_start!("Host lobby");
+                                    let host_name = if cfg.player_username.trim().is_empty() {
+                                        "Player".to_string()
+                                    } else {
+                                        cfg.player_username.clone()
+                                    };
+                                    let (tx, rx) = std::sync::mpsc::channel();
+                                    mm_rx = Some(rx);
+                                    matchmaking::start_host_room(
+                                        tx,
+                                        host_name,
+                                        format.wire().to_string(),
+                                        false,
+                                    );
+                                    state = AppState::Menu(MenuScreen::Matchmaking {
+                                        status: "Creating lobby...".into(),
+                                    });
+                                }
                                 NavResult::ToggleFullscreen => {
                                     cfg.fullscreen = !cfg.fullscreen;
                                     config::save(&cfg);
@@ -3494,6 +3525,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     }
                                 }
                             },
+                            MenuNav::Left => state.nav_left(),
+                            MenuNav::Right => state.nav_right(),
                             MenuNav::Back => state.nav_back(),
                             MenuNav::ToggleMenu => {}
                             MenuNav::SwitchPlayer => state.nav_switch_player(),
@@ -5804,6 +5837,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     state,
                     AppState::Menu(menu::MenuScreen::TestIp { editing: true, .. })
                         | AppState::Menu(menu::MenuScreen::TextEdit { .. })
+                        | AppState::Menu(menu::MenuScreen::OnlineHub {
+                            tab: menu::OnlineTab::Chat,
+                            focus: menu::HubFocus::Content,
+                            ..
+                        })
                         | AppState::Menu(menu::MenuScreen::MatchUsername {
                             checking: false,
                             ..
@@ -5930,7 +5968,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if matches!(
                     state,
                     AppState::Menu(menu::MenuScreen::OnlineHub {
-                        tab: menu::OnlineTab::General,
+                        tab: menu::OnlineTab::Chat,
                         ..
                     })
                 ) && lobby_rx.is_none()
@@ -5945,21 +5983,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(rx) = &lobby_rx {
                     if let AppState::Menu(menu::MenuScreen::OnlineHub {
                         ref mut status,
-                        ref mut chat_lines,
+                        ref mut chat,
+                        ref mut presence,
                         ..
                     }) = state
                     {
                         match rx.try_recv() {
                             Ok(matchmaking::LobbyUpdate::Loaded(snapshot)) => {
                                 *status = snapshot.status.clone();
-                                *chat_lines = lobby_snapshot_lines(&snapshot);
+                                *chat = snapshot.chat;
+                                *presence = snapshot.users;
                                 lobby_rx = None;
                             }
                             Ok(matchmaking::LobbyUpdate::Error(message)) => {
-                                *status = "General lobby unavailable".into();
-                                *chat_lines = vec![format!(
-                                    "SYSTEM Lobby service pending or unreachable: {message}"
-                                )];
+                                *status = format!("Lobby unreachable: {message}");
                                 lobby_rx = None;
                             }
                             Err(std::sync::mpsc::TryRecvError::Empty) => {}
@@ -5975,19 +6012,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(rx) = &lobby_chat_post_rx {
                     if let AppState::Menu(menu::MenuScreen::OnlineHub {
                         ref mut status,
-                        ref mut chat_lines,
                         ..
                     }) = state
                     {
                         match rx.try_recv() {
                             Ok(matchmaking::LobbyChatPostUpdate::Sent) => {
-                                *status = "Chat sent".into();
+                                *status = "Message sent".into();
                                 lobby_next_refresh = Instant::now();
                                 lobby_chat_post_rx = None;
                             }
                             Ok(matchmaking::LobbyChatPostUpdate::Error(message)) => {
-                                *status = "Chat send failed".into();
-                                chat_lines.push(format!("SYSTEM Chat send failed: {message}"));
+                                *status = format!("Send failed: {message}");
                                 lobby_chat_post_rx = None;
                             }
                             Err(std::sync::mpsc::TryRecvError::Empty) => {}

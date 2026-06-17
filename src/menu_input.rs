@@ -10,9 +10,12 @@ use sdl2::keyboard::Keycode;
 pub enum MenuNav {
     Up,
     Down,
+    Left,
+    Right,
     Accept,
     Back,
     ToggleMenu,
+    /// Tab key / shoulder — cycles the active "player" or hub section.
     SwitchPlayer,
 }
 
@@ -24,16 +27,19 @@ pub fn event_to_menu_nav(ev: &Event) -> Option<MenuNav> {
         } => match k {
             Keycode::Up => Some(MenuNav::Up),
             Keycode::Down => Some(MenuNav::Down),
+            Keycode::Left => Some(MenuNav::Left),
+            Keycode::Right => Some(MenuNav::Right),
             Keycode::Return | Keycode::KpEnter => Some(MenuNav::Accept),
             Keycode::Escape => Some(MenuNav::Back),
             Keycode::F1 => Some(MenuNav::ToggleMenu),
-            Keycode::Tab | Keycode::Left | Keycode::Right => Some(MenuNav::SwitchPlayer),
+            Keycode::Tab => Some(MenuNav::SwitchPlayer),
             _ => None,
         },
         Event::ControllerButtonDown { button, .. } => match button {
             Button::DPadUp => Some(MenuNav::Up),
             Button::DPadDown => Some(MenuNav::Down),
-            Button::DPadLeft | Button::DPadRight => Some(MenuNav::SwitchPlayer),
+            Button::DPadLeft => Some(MenuNav::Left),
+            Button::DPadRight => Some(MenuNav::Right),
             Button::A | Button::Start => Some(MenuNav::Accept),
             Button::B | Button::Back => Some(MenuNav::Back),
             _ => None,

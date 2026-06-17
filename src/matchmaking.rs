@@ -227,6 +227,17 @@ pub fn start_join_room(tx: Sender<Update>, room_id: String) {
     });
 }
 
+/// Host a public lobby: create a spar room, then wait for a challenger to join
+/// it from their lobby browser and connect like any other match. `format` is
+/// the wire format string ("vs"/"ft3"/"ft5"/"ft10").
+pub fn start_host_room(tx: Sender<Update>, name: String, format: String, private: bool) {
+    std::thread::spawn(move || {
+        if let Err(e) = run_host_room(&tx, &name, &format, private) {
+            let _ = tx.send(Update::Error(e));
+        }
+    });
+}
+
 #[allow(dead_code)]
 fn run(tx: &Sender<Update>) -> Result<(), String> {
     let mut maybe_session_id: Option<String> = None;
@@ -520,6 +531,99 @@ fn run_join_room(tx: &Sender<Update>, room_id: &str) -> Result<(), String> {
             "Direct P2P failed and no TURN relay configured: {punch_err}"
         )),
     }
+}
+
+/// POST /room/create — register a public spar room and a placeholder queue
+/// entry. Returns (room_id, creator_session_id); the host polls
+/// /match/status/<creator_session_id> for the join.
+fn create_room_http(
+    token: &str,
+    name: &str,
+    format: &str,
+    private: bool,
+    stun_endpoint: &str,
+) -> Result<(String, String), String> {
+    let rom_hash = rom_short_hash();
+    let body = format!(
+        r#"{{"stun_endpoint":"{stun_endpoint}","app_version":"{APP_VERSION}","rom_hash":"{rom_hash}","name":"{name}","format":"{format}","private":{private}}}"#
+    );
+    let url = format!("{}/room/create", signaling_url()?);
+    let resp = http_post_json(&url, token, &body)?;
+
+    let room_id =
+        json_str(&resp, "room_id").ok_or_else(|| format!("create missing room_id: {resp}"))?;
+    let creator_session_id = json_str(&resp, "creator_session_id")
+        .ok_or_else(|| format!("create missing creator_session_id: {resp}"))?;
+    Ok((room_id, creator_session_id))
+}
+
+fn run_host_room(
+    tx: &Sender<Update>,
+    name: &str,
+    format: &str,
+    private: bool,
+) -> Result<(), String> {
+    let token = auth_token(tx)?;
+    set_current_token(&token);
+
+    send(tx, Update::Status("Discovering network...".into()))?;
+    let stun_endpoint = stun_discover(GAME_PORT).map_err(|e| format!("STUN failed: {e}"))?;
+    println!("[mm] public endpoint: {stun_endpoint}");
+
+    send(tx, Update::Status("Creating lobby...".into()))?;
+    let (room_id, creator_session_id) =
+        create_room_http(&token, name, format, private, &stun_endpoint)?;
+    println!("[mm] hosting room {room_id} (session {creator_session_id})");
+
+    // Wait for a challenger and connect. On any failure, release the room/queue
+    // slot so it doesn't linger in the lobby browser.
+    let outcome = (|| -> Result<(), String> {
+        send(tx, Update::Status("Waiting for a challenger...".into()))?;
+        let match_info = poll_status(&token, &creator_session_id, tx)?;
+
+        if let Some(turn) = match_info.turn.clone() {
+            send(tx, Update::Status("Connecting via relay...".into()))?;
+            let transport = connect_relay(&turn)?;
+            return send(
+                tx,
+                Update::Connected {
+                    peer_endpoint: match_info.peer_endpoint.clone(),
+                    is_host: true,
+                    transport,
+                    session_id: creator_session_id.clone(),
+                    room_id: match_info.room_id.clone(),
+                    peer_username: match_info.peer_username.clone(),
+                },
+            );
+        }
+
+        send(tx, Update::Status("Connecting to challenger...".into()))?;
+        match hole_punch(&match_info.peer_endpoint, match_info.punch_at_ms) {
+            Ok(peer_addr) => send(
+                tx,
+                Update::Connected {
+                    peer_endpoint: peer_addr.to_string(),
+                    is_host: true,
+                    transport: MatchTransport::Direct { peer_addr },
+                    session_id: creator_session_id.clone(),
+                    room_id: match_info.room_id.clone(),
+                    peer_username: match_info.peer_username.clone(),
+                },
+            ),
+            Err(punch_err) => Err(format!(
+                "Direct P2P failed and no TURN relay configured: {punch_err}"
+            )),
+        }
+    })();
+
+    if outcome.is_err() {
+        if let Some(tok) = current_token() {
+            if let Err(e) = cancel_match(&tok, &creator_session_id) {
+                println!("[mm] host cleanup cancel failed: {e}");
+            }
+        }
+    }
+    outcome
 }
 
 struct JoinInfo {
