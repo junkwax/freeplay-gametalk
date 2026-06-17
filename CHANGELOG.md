@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.7.14 - 2026-06-17
+
+### Added
+
+- Added direct player challenges to the Online hub. A new "Players" section
+  lists everyone in the lobby; select a player and pick a format
+  (Unranked VS / FT3 / FT5 / FT10) to send a challenge. You can also right-click
+  a name in chat or the players list to open the format chooser, then left-click
+  a format to send.
+- Incoming challenges raise an accept/decline prompt (Enter accepts, Esc
+  declines).
+
 ## 0.7.13 - 2026-06-17
 
 ### Added
