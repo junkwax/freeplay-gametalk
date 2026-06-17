@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.7.12 - 2026-06-17
+
+### Changed
+
+- Redesigned the Online hub into a left nav rail (Play / Chat / Lobbies / Watch)
+  with a content pane and a clear rail-vs-content focus model. Up/Down switch
+  section on the rail and move within content; Right/Enter dive in; Left/Esc
+  step back out. Footer hints follow the current focus.
+- General lobby chat now shows colored sender names, scrollback, and an
+  "Online (N)" presence list, and chat typing works on the Chat section.
+
+### Added
+
+- Lobbies tab browses live public rooms and joins the selected one. "Create
+  Lobby" now hosts a public room with the chosen Play format and waits for a
+  challenger to join from their lobby browser.
+
+### Fixed
+
+- The ROM-missing banner no longer names a specific file; it reads "No valid
+  .zip found in the roms folder".
+- Release builds now stamp the crate version from the git tag, so a tagged
+  release always reports the tag's version.
+
 ## 0.7.11 - 2026-06-16
 
 ### Added
