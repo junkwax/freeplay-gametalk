@@ -1749,6 +1749,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
         }
 
+        // Menus draw at window resolution, so disable SDL logical scaling while
+        // a menu is up — otherwise mouse-event coordinates would arrive in the
+        // 400×254 logical space and not line up with the drawn hit regions.
+        if matches!(state, AppState::Menu(_)) {
+            let _ = canvas.set_logical_size(0, 0);
+        }
+
         for event in event_pump.poll_iter() {
             match event {
                 Event::Quit { .. } => break 'running,
@@ -2557,6 +2564,80 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 ));
                             }
                         }
+                    }
+                }
+
+                // Mouse challenges in the Online hub: right-click a player name
+                // to open the format chooser, left-click a format to send.
+                Event::MouseButtonDown {
+                    mouse_btn, x, y, ..
+                } if matches!(state, AppState::Menu(menu::MenuScreen::OnlineHub { .. })) => {
+                    match mouse_btn {
+                        sdl2::mouse::MouseButton::Right => {
+                            if let Some(idx) = menu::presence_hit_at(x, y) {
+                                if let AppState::Menu(menu::MenuScreen::OnlineHub {
+                                    tab,
+                                    focus,
+                                    cursor,
+                                    challenge_pick,
+                                    challenge_format,
+                                    presence,
+                                    ..
+                                }) = &mut state
+                                {
+                                    if idx < presence.len() {
+                                        *tab = menu::OnlineTab::Players;
+                                        *focus = menu::HubFocus::Content;
+                                        *cursor = idx;
+                                        *challenge_pick = Some(challenge_format.index());
+                                    }
+                                }
+                            }
+                        }
+                        sdl2::mouse::MouseButton::Left => {
+                            if let Some(fmt_idx) = menu::format_hit_at(x, y) {
+                                let target = if let AppState::Menu(
+                                    menu::MenuScreen::OnlineHub {
+                                        challenge_pick: Some(_),
+                                        cursor,
+                                        presence,
+                                        ..
+                                    },
+                                ) = &state
+                                {
+                                    presence.get(*cursor).map(|u| u.player_id.clone())
+                                } else {
+                                    None
+                                };
+                                if let Some(target_id) = target {
+                                    if let AppState::Menu(menu::MenuScreen::OnlineHub {
+                                        challenge_pick,
+                                        ..
+                                    }) = &mut state
+                                    {
+                                        *challenge_pick = None;
+                                    }
+                                    let fmt = menu::ChallengeFormat::at_index(fmt_idx);
+                                    matchmaking::set_guest_profile(
+                                        cfg.player_username.clone(),
+                                        cfg.stats_email.clone(),
+                                        cfg.guest_device_id.clone(),
+                                    );
+                                    shutdown_for_online_start!("Send challenge");
+                                    let (tx, rx) = std::sync::mpsc::channel();
+                                    mm_rx = Some(rx);
+                                    matchmaking::start_send_challenge(
+                                        tx,
+                                        target_id,
+                                        fmt.wire().to_string(),
+                                    );
+                                    state = AppState::Menu(MenuScreen::Matchmaking {
+                                        status: "Challenging player...".into(),
+                                    });
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                 }
 

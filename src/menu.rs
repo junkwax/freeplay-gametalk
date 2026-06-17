@@ -311,6 +311,16 @@ impl ChallengeFormat {
         }
     }
 
+    /// Format at a chooser index (clamped).
+    pub fn at_index(idx: usize) -> ChallengeFormat {
+        ChallengeFormat::ALL[idx.min(ChallengeFormat::ALL.len() - 1)]
+    }
+
+    /// Index of this format in the chooser order.
+    pub fn index(self) -> usize {
+        ChallengeFormat::ALL.iter().position(|f| *f == self).unwrap_or(0)
+    }
+
     /// Wire string sent to the signaling server's room/lobby format field.
     pub fn wire(self) -> &'static str {
         match self {
@@ -443,6 +453,49 @@ const NICK_PALETTE: [Color; 8] = [
     Color::RGB(120, 210, 220),
     Color::RGB(225, 130, 130),
 ];
+
+// ── Mouse hit regions ────────────────────────────────────────────────────────
+// The hub records clickable rectangles for challenge targets (presence names)
+// and the format chooser each time it draws, so the event loop can resolve a
+// right/left click to a player index or format index. Single-threaded UI, so a
+// thread-local is fine. Rects are in window-pixel space (menus draw with
+// logical scaling disabled, see main.rs).
+thread_local! {
+    static PRESENCE_HITS: std::cell::RefCell<Vec<(i32, i32, i32, i32, usize)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+    static FORMAT_HITS: std::cell::RefCell<Vec<(i32, i32, i32, i32, usize)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn hits_reset() {
+    PRESENCE_HITS.with(|h| h.borrow_mut().clear());
+    FORMAT_HITS.with(|h| h.borrow_mut().clear());
+}
+
+fn record_presence_hit(x: i32, y: i32, w: i32, h: i32, idx: usize) {
+    PRESENCE_HITS.with(|hits| hits.borrow_mut().push((x, y, w, h, idx)));
+}
+
+fn record_format_hit(x: i32, y: i32, w: i32, h: i32, idx: usize) {
+    FORMAT_HITS.with(|hits| hits.borrow_mut().push((x, y, w, h, idx)));
+}
+
+fn hit_lookup(hits: &std::cell::RefCell<Vec<(i32, i32, i32, i32, usize)>>, px: i32, py: i32) -> Option<usize> {
+    hits.borrow()
+        .iter()
+        .find(|(x, y, w, h, _)| px >= *x && px < *x + *w && py >= *y && py < *y + *h)
+        .map(|t| t.4)
+}
+
+/// Player presence index at a window-pixel point, if any (for right-click).
+pub fn presence_hit_at(px: i32, py: i32) -> Option<usize> {
+    PRESENCE_HITS.with(|h| hit_lookup(h, px, py))
+}
+
+/// Format-chooser row index at a window-pixel point, if any (for left-click).
+pub fn format_hit_at(px: i32, py: i32) -> Option<usize> {
+    FORMAT_HITS.with(|h| hit_lookup(h, px, py))
+}
 
 /// FNV-1a hash → stable color for a username.
 fn nick_color(name: &str) -> Color {
@@ -2053,6 +2106,7 @@ fn draw_online_hub(
     h: i32,
 ) -> Result<(), String> {
     draw_title(canvas, font, "ONLINE", w, h)?;
+    hits_reset();
     let body = body_scale(h);
     let small = small_scale(h);
     let content_focus = focus == HubFocus::Content;
@@ -2108,6 +2162,7 @@ fn draw_online_hub(
                     let row_y = list_y + i as i32 * row_gap;
                     let sel = content_focus && cursor == i;
                     draw_online_row(canvas, font, &u.username, sel, x, row_y, content_w, body)?;
+                    record_presence_hit(x - 8, row_y - 5, content_w + 12, row_gap, i);
                     if !u.status.is_empty() {
                         let sw = font.text_width_exact(&u.status, small);
                         font.draw(canvas, &u.status, x + content_w - sw - 6, row_y + 2, small, HUB_FAINT)?;
@@ -2188,9 +2243,10 @@ fn draw_online_hub(
                 font.draw(canvas, "(nobody yet)", px + 8, uy, small, HUB_FAINT)?;
             } else {
                 let max_users = ((log_h - line_h - 8) / line_h).max(1) as usize;
-                for u in presence.iter().take(max_users) {
+                for (i, u) in presence.iter().take(max_users).enumerate() {
                     let name = fit_line(font, &u.username, small, presence_w - 16);
                     font.draw(canvas, &name, px + 8, uy, small, nick_color(&u.username))?;
+                    record_presence_hit(px, uy - 2, presence_w, line_h, i);
                     uy += line_h;
                 }
             }
@@ -2336,6 +2392,7 @@ fn draw_format_chooser(
     for (i, fmt) in ChallengeFormat::ALL.iter().enumerate() {
         let ry = by + 36 + i as i32 * row_h;
         let selected = i == pick;
+        record_format_hit(bx + 8, ry - 4, bw - 16, row_h, i);
         if selected {
             canvas.set_draw_color(HUB_PANEL_SEL);
             canvas.fill_rect(Rect::new(bx + 8, ry - 4, (bw - 16) as u32, row_h as u32))?;
