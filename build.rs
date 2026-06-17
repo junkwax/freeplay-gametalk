@@ -11,6 +11,15 @@ fn main() {
     let (y, m, d) = civil_date(secs);
     println!("cargo:rustc-env=FREEPLAY_BUILD_DATE={y:04}-{m:02}-{d:02}");
 
+    // Version: prefer the most recent git tag (stripped of a leading "v") so
+    // local builds report the released version without editing Cargo.toml —
+    // matching how CI releases derive the version from the tag. Fall back to
+    // Cargo.toml's version when git/tags aren't available (e.g. source tarball).
+    let version = git_output(["describe", "--tags", "--abbrev=0"])
+        .map(|tag| tag.trim_start_matches('v').to_string())
+        .unwrap_or_else(|| std::env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.0.0".into()));
+    println!("cargo:rustc-env=FREEPLAY_VERSION={version}");
+
     // Best-effort git revision. Silently absent if git isn't available.
     if let Some(mut hash) = git_output(["rev-parse", "--short", "HEAD"]) {
         if git_is_dirty() {
@@ -23,7 +32,7 @@ fn main() {
     // The sdl2 crate emits `rustc-link-search=native=lib` (project root),
     // but our pre-built libs live in src/lib/.
     println!("cargo:rustc-link-search=native=src/lib");
-    embed_windows_icon();
+    embed_windows_icon(&version);
 
     // Rerun when the build script itself or src/ changes. Cargo already tracks
     // src changes for the main build, but build scripts need explicit hints.
@@ -58,6 +67,10 @@ fn git_status_ok<const N: usize>(args: [&str; N]) -> bool {
 fn print_git_rerun_hints() {
     println!("cargo:rerun-if-changed=.git/HEAD");
     println!("cargo:rerun-if-changed=.git/index");
+    // Re-derive the version when tags change (e.g. a fresh `git tag vX.Y.Z`),
+    // even if HEAD didn't move.
+    println!("cargo:rerun-if-changed=.git/refs/tags");
+    println!("cargo:rerun-if-changed=.git/packed-refs");
 
     let head = match std::fs::read_to_string(".git/HEAD") {
         Ok(head) => head,
@@ -68,7 +81,7 @@ fn print_git_rerun_hints() {
     }
 }
 
-fn embed_windows_icon() {
+fn embed_windows_icon(version: &str) {
     if std::env::var("CARGO_CFG_WINDOWS").is_err() {
         return;
     }
@@ -79,7 +92,7 @@ fn embed_windows_icon() {
     };
     let rc_path = out_dir.join("freeplay_icon.rc");
     let res_path = out_dir.join("freeplay_icon.res");
-    if std::fs::write(&rc_path, build_rc_contents()).is_err() {
+    if std::fs::write(&rc_path, build_rc_contents(version)).is_err() {
         return;
     }
 
@@ -127,8 +140,8 @@ fn find_rc_exe() -> Option<std::path::PathBuf> {
 /// product name, version, and the project URL instead of blank fields.
 /// (The Explorer/SmartScreen "Publisher" line comes from an Authenticode
 /// signature, not from this resource — unsigned builds still say Unknown.)
-fn build_rc_contents() -> String {
-    let semver = std::env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.0.0".into());
+fn build_rc_contents(version: &str) -> String {
+    let semver = version.to_string();
     let mut parts = semver.split('.').map(|p| p.parse::<u16>().unwrap_or(0));
     let (maj, min, pat) = (
         parts.next().unwrap_or(0),

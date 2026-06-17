@@ -3,7 +3,14 @@
 
 $ErrorActionPreference = "Stop"
 
-$VERSION = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' | ForEach-Object { $_.Matches[0].Groups[1].Value })
+# Prefer the latest git tag (stripped of a leading "v") so the package matches
+# the released version without editing Cargo.toml — same source of truth the
+# binary uses via build.rs. Fall back to Cargo.toml, then "dev".
+$VERSION = (git describe --tags --abbrev=0 2>$null)
+if ($VERSION) { $VERSION = $VERSION -replace '^v', '' }
+if (-not $VERSION) {
+    $VERSION = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' | ForEach-Object { $_.Matches[0].Groups[1].Value })
+}
 if (-not $VERSION) { $VERSION = "dev" }
 
 $OUT_DIR = "dist\freeplay-gametalk-v$VERSION"
