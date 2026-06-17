@@ -30,13 +30,18 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  validate-version:
-    name: Validate release version
+  version:
+    name: Resolve release version
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
     steps:
-      - uses: actions/checkout@v5
-
-      - name: Ensure tag matches Cargo.toml
+      # The git tag is the source of truth. Each build job stamps Cargo.toml
+      # with this version before `cargo build`, so the released artifacts carry
+      # the tag's version without anyone hand-editing Cargo.toml. Tag must look
+      # like vX.Y.Z (semver after the leading "v").
+      - name: Resolve version from tag
+        id: resolve
         env:
           EVENT_NAME: ${{ github.event_name }}
           REF_NAME: ${{ github.ref_name }}
@@ -44,21 +49,31 @@ jobs:
         run: |
           tag="${REF_NAME}"
           if [ "$EVENT_NAME" != "push" ]; then tag="${INPUT_TAG}"; fi
-          version="$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "([^"]+)"/\1/')"
-          expected="v${version}"
-          if [ "$tag" != "$expected" ]; then
-            echo "Release tag ${tag} does not match Cargo.toml version ${version}; expected ${expected}." >&2
+          version="${tag#v}"
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+'; then
+            echo "Tag '${tag}' is not vX.Y.Z; cannot derive a version." >&2
             exit 1
           fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Release version: ${version}"
 
   windows:
     name: Windows release package
-    needs: validate-version
+    needs: version
     runs-on: windows-latest
     env:
       VCPKG_DEFAULT_TRIPLET: x64-windows
     steps:
       - uses: actions/checkout@v5
+
+      - name: Stamp version from tag
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          (Get-Content Cargo.toml -Raw) -replace '(?m)^version = "[^"]*"', "version = `"$env:VERSION`"" |
+            Set-Content Cargo.toml -NoNewline
+          Select-String Cargo.toml -Pattern '^version ='
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -171,10 +186,17 @@ jobs:
 
   linux:
     name: Linux release package
-    needs: validate-version
+    needs: version
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+
+      - name: Stamp version from tag
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          perl -i -pe 'BEGIN{$d=0} if(!$d && /^version = /){s/^version = .*/version = "$ENV{VERSION}"/; $d=1}' Cargo.toml
+          grep -m1 '^version = ' Cargo.toml
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -255,7 +277,7 @@ jobs:
 
   macos:
     name: macOS release package (${{ matrix.arch }})
-    needs: validate-version
+    needs: version
     strategy:
       # Build both Mac architectures natively, one per runner: macos-14 is
       # Apple Silicon (arm64), macos-15-intel is GitHub's current Intel label.
@@ -272,6 +294,13 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v5
+
+      - name: Stamp version from tag
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          perl -i -pe 'BEGIN{$d=0} if(!$d && /^version = /){s/^version = .*/version = "$ENV{VERSION}"/; $d=1}' Cargo.toml
+          grep -m1 '^version = ' Cargo.toml
 
       - uses: dtolnay/rust-toolchain@stable
 
