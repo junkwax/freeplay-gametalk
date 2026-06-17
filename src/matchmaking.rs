@@ -110,6 +110,20 @@ pub enum LobbyChatPostUpdate {
     Error(String),
 }
 
+/// An incoming challenge addressed to us (someone in the lobby challenged us).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IncomingChallenge {
+    pub challenge_id: String,
+    pub from_username: String,
+    pub format: LobbyMatchFormat,
+}
+
+#[derive(Debug)]
+pub enum ChallengeListUpdate {
+    Loaded(Vec<IncomingChallenge>),
+    Error(String),
+}
+
 #[derive(Debug)]
 pub enum UsernameCheckUpdate {
     Available(String),
@@ -533,6 +547,205 @@ fn run_join_room(tx: &Sender<Update>, room_id: &str) -> Result<(), String> {
             "Direct P2P failed and no TURN relay configured: {punch_err}"
         )),
     }
+}
+
+// ── Challenges ───────────────────────────────────────────────────────────────
+// Direct player-vs-player challenges from the lobby presence list. The
+// challenger POSTs /challenges and waits on their session like a host; the
+// target accepts via /challenges/:id/accept and connects like a joiner.
+
+/// Connect a settled match (relay or hole punch) and report Connected.
+fn connect_match(
+    tx: &Sender<Update>,
+    mi: &MatchInfo,
+    session_id: &str,
+    is_host: bool,
+) -> Result<(), String> {
+    if let Some(turn) = mi.turn.clone() {
+        send(tx, Update::Status("Connecting via relay...".into()))?;
+        let transport = connect_relay(&turn)?;
+        return send(
+            tx,
+            Update::Connected {
+                peer_endpoint: mi.peer_endpoint.clone(),
+                is_host,
+                transport,
+                session_id: session_id.to_string(),
+                room_id: mi.room_id.clone(),
+                peer_username: mi.peer_username.clone(),
+            },
+        );
+    }
+    send(tx, Update::Status("Connecting to opponent...".into()))?;
+    match hole_punch(&mi.peer_endpoint, mi.punch_at_ms) {
+        Ok(peer_addr) => send(
+            tx,
+            Update::Connected {
+                peer_endpoint: peer_addr.to_string(),
+                is_host,
+                transport: MatchTransport::Direct { peer_addr },
+                session_id: session_id.to_string(),
+                room_id: mi.room_id.clone(),
+                peer_username: mi.peer_username.clone(),
+            },
+        ),
+        Err(punch_err) => Err(format!(
+            "Direct P2P failed and no TURN relay configured: {punch_err}"
+        )),
+    }
+}
+
+/// Challenge a specific player: `target_id` is their lobby presence player_id,
+/// `format` the wire string ("vs"/"ft3"/"ft5"/"ft10").
+pub fn start_send_challenge(tx: Sender<Update>, target_id: String, format: String) {
+    std::thread::spawn(move || {
+        if let Err(e) = run_send_challenge(&tx, &target_id, &format) {
+            let _ = tx.send(Update::Error(e));
+        }
+    });
+}
+
+fn run_send_challenge(tx: &Sender<Update>, target_id: &str, format: &str) -> Result<(), String> {
+    let token = auth_token(tx)?;
+    set_current_token(&token);
+
+    send(tx, Update::Status("Discovering network...".into()))?;
+    let stun_endpoint = stun_discover(GAME_PORT).map_err(|e| format!("STUN failed: {e}"))?;
+
+    send(tx, Update::Status("Sending challenge...".into()))?;
+    let challenger_session_id = send_challenge_http(&token, target_id, format, &stun_endpoint)?;
+
+    let outcome = (|| -> Result<(), String> {
+        send(tx, Update::Status("Waiting for them to accept...".into()))?;
+        let match_info = poll_status(&token, &challenger_session_id, tx)?;
+        connect_match(tx, &match_info, &challenger_session_id, true)
+    })();
+
+    if outcome.is_err() {
+        if let Some(tok) = current_token() {
+            let _ = cancel_match(&tok, &challenger_session_id);
+        }
+    }
+    outcome
+}
+
+fn send_challenge_http(
+    token: &str,
+    target_id: &str,
+    format: &str,
+    stun_endpoint: &str,
+) -> Result<String, String> {
+    let rom_hash = rom_short_hash();
+    let body = format!(
+        r#"{{"target_id":"{target_id}","format":"{format}","stun_endpoint":"{stun_endpoint}","app_version":"{APP_VERSION}","rom_hash":"{rom_hash}"}}"#
+    );
+    let url = format!("{}/challenges", signaling_url()?);
+    let resp = http_post_json(&url, token, &body)?;
+    json_str(&resp, "challenger_session_id")
+        .ok_or_else(|| format!("challenge response missing challenger_session_id: {resp}"))
+}
+
+/// Accept an incoming challenge by id and connect (joiner role).
+pub fn start_accept_challenge(tx: Sender<Update>, challenge_id: String) {
+    std::thread::spawn(move || {
+        if let Err(e) = run_accept_challenge(&tx, &challenge_id) {
+            let _ = tx.send(Update::Error(e));
+        }
+    });
+}
+
+fn run_accept_challenge(tx: &Sender<Update>, challenge_id: &str) -> Result<(), String> {
+    let token = auth_token(tx)?;
+    set_current_token(&token);
+
+    send(tx, Update::Status("Discovering network...".into()))?;
+    let stun_endpoint = stun_discover(GAME_PORT).map_err(|e| format!("STUN failed: {e}"))?;
+
+    send(tx, Update::Status("Accepting challenge...".into()))?;
+    let rom_hash = rom_short_hash();
+    let body = format!(
+        r#"{{"stun_endpoint":"{stun_endpoint}","app_version":"{APP_VERSION}","rom_hash":"{rom_hash}"}}"#
+    );
+    let url = format!("{}/challenges/{challenge_id}/accept", signaling_url()?);
+    let resp = http_post_json(&url, &token, &body)?;
+
+    let session_id = json_str(&resp, "session_id")
+        .ok_or_else(|| format!("accept response missing session_id: {resp}"))?;
+    let peer_endpoint = json_nested_str(&resp, "match_info", "peer_endpoint")
+        .ok_or_else(|| format!("accept response missing peer_endpoint: {resp}"))?;
+    let room_id = json_nested_str(&resp, "match_info", "room_id");
+    let punch_at_ms = json_nested_i64(&resp, "match_info", "punch_at_ms")
+        .ok_or_else(|| format!("accept response missing punch_at_ms: {resp}"))?;
+    let role = json_nested_str(&resp, "match_info", "role").unwrap_or_else(|| "join".to_string());
+    let peer_username = json_nested_str(&resp, "match_info", "username");
+    let turn = parse_turn_creds(&resp);
+    let match_info = MatchInfo {
+        session_id: session_id.clone(),
+        room_id,
+        peer_endpoint,
+        punch_at_ms,
+        role,
+        turn,
+        peer_username,
+    };
+    connect_match(tx, &match_info, &session_id, false)
+}
+
+/// Decline an incoming challenge (fire-and-forget).
+pub fn decline_challenge(challenge_id: String) {
+    std::thread::spawn(move || {
+        let Some(token) = current_token() else { return };
+        if let Ok(url) = signaling_url().map(|u| format!("{u}/challenges/{challenge_id}/decline")) {
+            let _ = http_post_json(&url, &token, "{}");
+        }
+    });
+}
+
+/// Poll the player's incoming challenges.
+pub fn fetch_challenges(tx: Sender<ChallengeListUpdate>) {
+    std::thread::spawn(move || {
+        let update = match fetch_challenges_inner() {
+            Ok(list) => ChallengeListUpdate::Loaded(list),
+            Err(e) => ChallengeListUpdate::Error(e),
+        };
+        let _ = tx.send(update);
+    });
+}
+
+fn fetch_challenges_inner() -> Result<Vec<IncomingChallenge>, String> {
+    let token = current_token().ok_or_else(|| "not signed in".to_string())?;
+    let url = format!("{}/challenges", signaling_url()?);
+    let resp = http_get(&url, &token)?;
+    Ok(parse_incoming_challenges(&resp))
+}
+
+fn parse_incoming_challenges(json: &str) -> Vec<IncomingChallenge> {
+    let mut out = Vec::new();
+    let Some(body) = json_array_body(json, "challenges") else {
+        return out;
+    };
+    for chunk in json_object_chunks(body) {
+        // Only inbound challenges (someone challenging us).
+        if json_str(chunk, "direction").as_deref() == Some("outgoing") {
+            continue;
+        }
+        let Some(challenge_id) = json_str(chunk, "challenge_id").or_else(|| json_str(chunk, "id"))
+        else {
+            continue;
+        };
+        let from_username = json_str(chunk, "challenger_username")
+            .or_else(|| json_str(chunk, "from_username"))
+            .unwrap_or_else(|| "Someone".into());
+        let format = json_str(chunk, "format")
+            .and_then(|raw| parse_lobby_match_format(&raw))
+            .unwrap_or(LobbyMatchFormat::UnrankedVs);
+        out.push(IncomingChallenge {
+            challenge_id,
+            from_username,
+            format,
+        });
+    }
+    out
 }
 
 /// POST /room/create — register a public spar room and a placeholder queue
