@@ -134,7 +134,9 @@ pub enum MatchTransport {
     },
 }
 
-const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+// Derived from the git tag via build.rs (see version::VERSION) so the
+// matchmaking compatibility key matches the version users actually see.
+const APP_VERSION: &str = crate::version::VERSION;
 const GAME_PORT: u16 = 7000;
 const PUNCH_PAYLOAD: &[u8] = b"MK2PUNCH";
 
