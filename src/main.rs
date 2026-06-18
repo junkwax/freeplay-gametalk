@@ -1617,6 +1617,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut lobby_list_next_refresh = Instant::now();
     let mut challenge_rx: Option<std::sync::mpsc::Receiver<matchmaking::ChallengeListUpdate>> = None;
     let mut challenge_next_refresh = Instant::now();
+    let mut lobby_view_rx: Option<std::sync::mpsc::Receiver<matchmaking::LobbyViewUpdate>> = None;
+    let mut lobby_view_next_refresh = Instant::now();
     // Tracks whether the player is driving menus with a controller, so the chat
     // on-screen keyboard only appears for pad users (keyboard users just type).
     let mut menu_input_pad = test_force_pad;
@@ -3209,50 +3211,54 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         *status = "Sending chat...".into();
                                     }
                                 }
-                                NavResult::JoinLobby(room_id) => {
-                                    // Reuse the Discord deep-link join path: tear
-                                    // down any local runtime, then hand the room
-                                    // id to matchmaking and wait on the queue
-                                    // screen for the connect handshake.
+                                NavResult::JoinLobby(lobby_id) => {
+                                    // Join a king-of-the-hill lobby and open its
+                                    // room screen.
                                     matchmaking::set_guest_profile(
                                         cfg.player_username.clone(),
                                         cfg.stats_email.clone(),
                                         cfg.guest_device_id.clone(),
                                     );
-                                    shutdown_for_online_start!("Join lobby");
                                     let (tx, rx) = std::sync::mpsc::channel();
-                                    mm_rx = Some(rx);
-                                    matchmaking::start_join_room(tx, room_id);
-                                    state = AppState::Menu(MenuScreen::Matchmaking {
+                                    lobby_view_rx = Some(rx);
+                                    matchmaking::join_lobby(tx, lobby_id.clone(), false);
+                                    state = AppState::Menu(MenuScreen::Lobby {
+                                        id: lobby_id,
+                                        view: None,
                                         status: "Joining lobby...".into(),
                                     });
                                 }
                                 NavResult::CreateLobby(format) => {
-                                    // Host a public lobby named after the player
-                                    // with the chosen format, then wait for a
-                                    // challenger on the queue screen.
+                                    // Create a king-of-the-hill lobby named after
+                                    // the player; navigate to it once it exists.
                                     matchmaking::set_guest_profile(
                                         cfg.player_username.clone(),
                                         cfg.stats_email.clone(),
                                         cfg.guest_device_id.clone(),
                                     );
-                                    shutdown_for_online_start!("Host lobby");
                                     let host_name = if cfg.player_username.trim().is_empty() {
                                         "Player".to_string()
                                     } else {
-                                        cfg.player_username.clone()
+                                        format!("{}'s lobby", cfg.player_username)
                                     };
                                     let (tx, rx) = std::sync::mpsc::channel();
-                                    mm_rx = Some(rx);
-                                    matchmaking::start_host_room(
+                                    lobby_view_rx = Some(rx);
+                                    matchmaking::create_lobby(
                                         tx,
                                         host_name,
+                                        format.ranked(),
                                         format.wire().to_string(),
-                                        false,
                                     );
-                                    state = AppState::Menu(MenuScreen::Matchmaking {
+                                    state = AppState::Menu(MenuScreen::Lobby {
+                                        id: String::new(),
+                                        view: None,
                                         status: "Creating lobby...".into(),
                                     });
+                                }
+                                NavResult::SetLobbyQueue(lobby_id, spectate) => {
+                                    let (tx, rx) = std::sync::mpsc::channel();
+                                    lobby_view_rx = Some(rx);
+                                    matchmaking::join_lobby(tx, lobby_id, spectate);
                                 }
                                 NavResult::SendChallenge(target_id, format) => {
                                     matchmaking::set_guest_profile(
@@ -3729,8 +3735,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 } else {
                                     None
                                 };
+                                // Leaving a lobby tells the server (auto-destroys
+                                // when empty) and returns to the hub.
+                                let left_lobby = if let AppState::Menu(
+                                    menu::MenuScreen::Lobby { id, .. },
+                                ) = &state
+                                {
+                                    Some(id.clone())
+                                } else {
+                                    None
+                                };
                                 if let Some(id) = declined {
                                     matchmaking::decline_challenge(id);
+                                } else if let Some(id) = left_lobby {
+                                    if !id.is_empty() {
+                                        matchmaking::leave_lobby(id);
+                                    }
+                                    lobby_view_rx = None;
+                                    state = AppState::Menu(menu::MenuScreen::Main { cursor: 0 });
                                 } else {
                                     state.nav_back();
                                 }
@@ -6330,6 +6352,56 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Err(std::sync::mpsc::TryRecvError::Empty) => {}
                         Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                             challenge_rx = None;
+                        }
+                    }
+                }
+
+                // King-of-the-hill lobby: poll state while the lobby screen is up.
+                if let AppState::Menu(menu::MenuScreen::Lobby { id, .. }) = &state {
+                    if !id.is_empty()
+                        && lobby_view_rx.is_none()
+                        && Instant::now() >= lobby_view_next_refresh
+                    {
+                        let (tx, rx) = std::sync::mpsc::channel();
+                        lobby_view_rx = Some(rx);
+                        matchmaking::fetch_lobby(tx, id.clone());
+                        lobby_view_next_refresh = Instant::now() + Duration::from_millis(2000);
+                    }
+                }
+                if let Some(rx) = &lobby_view_rx {
+                    match rx.try_recv() {
+                        Ok(matchmaking::LobbyViewUpdate::Created(new_id)) => {
+                            if let AppState::Menu(menu::MenuScreen::Lobby { id, status, .. }) =
+                                &mut state
+                            {
+                                *id = new_id;
+                                *status = "Loading lobby...".into();
+                            }
+                            lobby_view_next_refresh = Instant::now();
+                            lobby_view_rx = None;
+                        }
+                        Ok(matchmaking::LobbyViewUpdate::Loaded(v)) => {
+                            if let AppState::Menu(menu::MenuScreen::Lobby {
+                                id, view, status, ..
+                            }) = &mut state
+                            {
+                                *id = v.id.clone();
+                                *view = Some(v);
+                                *status = String::new();
+                            }
+                            lobby_view_rx = None;
+                        }
+                        Ok(matchmaking::LobbyViewUpdate::Error(e)) => {
+                            if let AppState::Menu(menu::MenuScreen::Lobby { status, .. }) =
+                                &mut state
+                            {
+                                *status = format!("Lobby unavailable: {e}");
+                            }
+                            lobby_view_rx = None;
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                            lobby_view_rx = None;
                         }
                     }
                 }

@@ -5,8 +5,8 @@ use crate::config::{
 use crate::font::Font;
 use crate::input::{is_action_active, Action, Binding, Bindings, Player, PlayerBindings};
 use crate::matchmaking::{
-    HistoryRow, IncomingChallenge, LeaderboardRow, LiveMatch, LobbyChatMessage, LobbyUser,
-    ProfileData, RemoteGhostMeta,
+    HistoryRow, IncomingChallenge, LeaderboardRow, LiveMatch, LobbyChatMessage, LobbyCurrent,
+    LobbyMemberInfo, LobbyUser, LobbyView, ProfileData, RemoteGhostMeta,
 };
 use crate::version;
 use sdl2::pixels::Color;
@@ -174,6 +174,13 @@ pub enum MenuScreen {
         value: String,
         field: EditField,
         came_from: Box<MenuScreen>,
+    },
+    /// A king-of-the-hill lobby room: current match, play queue, spectators.
+    /// `view` is `None` until the first poll lands.
+    Lobby {
+        id: String,
+        view: Option<LobbyView>,
+        status: String,
     },
 }
 
@@ -596,6 +603,35 @@ pub fn test_state(name: &str) -> Option<AppState> {
             }))
         }
         "main" => return Some(AppState::Menu(MenuScreen::Main { cursor: 0 })),
+        "lobby" => {
+            return Some(AppState::Menu(MenuScreen::Lobby {
+                id: "demo".into(),
+                status: String::new(),
+                view: Some(LobbyView {
+                    id: "demo".into(),
+                    name: "Long sets only".into(),
+                    ranked: true,
+                    format: crate::matchmaking::LobbyMatchFormat::RankedFt5,
+                    members: vec![
+                        LobbyMemberInfo { username: "ScorpionKiller".into(), rating: Some(1403), queued: true, in_match: true },
+                        LobbyMemberInfo { username: "SubZeroFan".into(), rating: Some(1521), queued: true, in_match: true },
+                        LobbyMemberInfo { username: "Reptile99".into(), rating: Some(1198), queued: true, in_match: false },
+                        LobbyMemberInfo { username: "kunglao".into(), rating: None, queued: false, in_match: false },
+                    ],
+                    queue: vec!["Reptile99".into(), "You".into()],
+                    current: Some(LobbyCurrent {
+                        host_username: "ScorpionKiller".into(),
+                        join_username: "SubZeroFan".into(),
+                        host_session: "s1".into(),
+                        join_session: "s2".into(),
+                    }),
+                    your_position: Some(1),
+                    your_queued: true,
+                    your_session: None,
+                    your_turn: false,
+                }),
+            }));
+        }
         _ => {}
     }
     let section = name
@@ -706,6 +742,8 @@ pub enum NavResult {
     SendChallenge(String, ChallengeFormat),
     /// Accept an incoming challenge by its id.
     AcceptChallenge(String),
+    /// Toggle the caller between the play queue and spectating in a lobby.
+    SetLobbyQueue(String, bool),
     /// Toggle desktop fullscreen and persist config.
     ToggleFullscreen,
     /// Adjust audio volume by signed percentage points.
@@ -1267,6 +1305,14 @@ impl AppState {
                 }
             }
             AppState::Menu(MenuScreen::About) => NavResult::Stay,
+            AppState::Menu(MenuScreen::Lobby { id, view, .. }) => match view {
+                Some(v) => {
+                    let queued = v.your_queued || v.your_position.is_some();
+                    // Toggle: queued -> spectate, spectating -> join queue.
+                    NavResult::SetLobbyQueue(id, queued)
+                }
+                None => NavResult::Stay,
+            },
             AppState::Menu(MenuScreen::GhostSelect {
                 cursor, entries, ..
             }) => {
@@ -1705,6 +1751,9 @@ pub fn draw(
         AppState::Menu(MenuScreen::Spectate { session_id, status }) => {
             draw_spectate(canvas, font, session_id, status, w, h)?
         }
+        AppState::Menu(MenuScreen::Lobby { view, status, .. }) => {
+            draw_lobby(canvas, font, view.as_ref(), status, w, h)?
+        }
         AppState::Rebinding {
             action,
             player,
@@ -1806,6 +1855,116 @@ fn draw_session_ended(
         small,
         Color::RGB(100, 100, 100),
     )?;
+    Ok(())
+}
+
+fn draw_lobby(
+    canvas: &mut Canvas<Window>,
+    font: &mut Font,
+    view: Option<&LobbyView>,
+    status: &str,
+    w: i32,
+    h: i32,
+) -> Result<(), String> {
+    let body = body_scale(h);
+    let small = small_scale(h);
+    let pad = (w / 24).clamp(16, 40);
+    let tscale = title_scale(h);
+    let title = view.map(|v| v.name.clone()).unwrap_or_else(|| "LOBBY".into());
+
+    font.draw(canvas, &title, pad, 22, tscale, HUB_ACCENT)?;
+    let line_y = 22 + 22 * tscale as i32;
+    canvas.set_draw_color(Color::RGB(120, 70, 10));
+    canvas.fill_rect(Rect::new(pad, line_y, (w - pad * 2) as u32, 2))?;
+    let panel_w = w - pad * 2;
+    let mut y = line_y + 16;
+
+    let footer_y = h - (16 * small as i32 + 26);
+    let Some(v) = view else {
+        font.draw(
+            canvas,
+            if status.is_empty() { "Loading lobby…" } else { status },
+            pad,
+            y,
+            small,
+            HUB_DIM,
+        )?;
+        let footer = "ESC Leave";
+        let fw = font.text_width_exact(footer, small);
+        font.draw(canvas, footer, (w - fw) / 2, footer_y, small, HUB_FAINT)?;
+        return Ok(());
+    };
+
+    let sub = format!(
+        "{} · {} · {} player{}",
+        if v.ranked { "Ranked" } else { "Unranked" },
+        crate::matchmaking::lobby_format_label(v.format),
+        v.members.len(),
+        if v.members.len() == 1 { "" } else { "s" },
+    );
+    font.draw(canvas, &sub, pad, y, small, HUB_DIM)?;
+    y += 16 * small as i32 + 10;
+
+    // Current match panel.
+    let mp_h = 22 * body as i32 + 24;
+    draw_panel(canvas, pad, y, panel_w, mp_h, HUB_PANEL)?;
+    if let Some(c) = &v.current {
+        font.draw(canvas, "NOW PLAYING", pad + 12, y + 8, small, HUB_ACCENT)?;
+        let line = format!("{}  vs  {}", c.host_username, c.join_username);
+        font.draw(canvas, &line, pad + 12, y + 10 + 14 * small as i32, body, HUB_TEXT)?;
+    } else {
+        font.draw(
+            canvas,
+            "Waiting for two players to queue up…",
+            pad + 12,
+            y + mp_h / 2 - 6,
+            small,
+            HUB_DIM,
+        )?;
+    }
+    y += mp_h + 14;
+
+    // Up-next queue.
+    font.draw(canvas, "UP NEXT", pad, y, small, HUB_ACCENT)?;
+    y += 16 * small as i32 + 6;
+    let row_h = 16 * small as i32 + 4;
+    if v.queue.is_empty() {
+        font.draw(canvas, "(queue is empty)", pad + 8, y, small, HUB_FAINT)?;
+    } else {
+        let max_rows = ((footer_y - y - 40) / row_h).max(1) as usize;
+        for (i, name) in v.queue.iter().take(max_rows).enumerate() {
+            let yours = v.your_position == Some(i);
+            let label = format!("{}.  {}{}", i + 1, name, if yours { "  (you)" } else { "" });
+            font.draw(
+                canvas,
+                &label,
+                pad + 8,
+                y + i as i32 * row_h,
+                small,
+                if yours { HUB_ACCENT } else { HUB_TEXT },
+            )?;
+        }
+    }
+
+    // Your status line above the footer.
+    let your = if v.your_turn {
+        "Your turn — get ready!".to_string()
+    } else if let Some(p) = v.your_position {
+        format!("You're #{} in the queue", p + 1)
+    } else if v.your_queued {
+        "You're queued to play".to_string()
+    } else {
+        "You're spectating".to_string()
+    };
+    font.draw(canvas, &your, pad, footer_y - 18 * small as i32 - 6, small, HUB_DIM)?;
+
+    let footer = if v.your_queued || v.your_position.is_some() {
+        "ENTER Spectate    ESC Leave"
+    } else {
+        "ENTER Join queue    ESC Leave"
+    };
+    let fw = font.text_width_exact(footer, small);
+    font.draw(canvas, footer, (w - fw) / 2, footer_y, small, HUB_FAINT)?;
     Ok(())
 }
 

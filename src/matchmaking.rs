@@ -135,6 +135,50 @@ pub enum ChallengeListUpdate {
     Error(String),
 }
 
+// ── King-of-the-hill lobby (client view) ────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LobbyMemberInfo {
+    pub username: String,
+    pub rating: Option<i32>,
+    pub queued: bool,
+    pub in_match: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LobbyCurrent {
+    pub host_username: String,
+    pub join_username: String,
+    pub host_session: String,
+    pub join_session: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LobbyView {
+    pub id: String,
+    pub name: String,
+    pub ranked: bool,
+    pub format: LobbyMatchFormat,
+    pub members: Vec<LobbyMemberInfo>,
+    /// usernames in queue order (front = next up).
+    pub queue: Vec<String>,
+    pub current: Option<LobbyCurrent>,
+    pub your_position: Option<usize>,
+    pub your_queued: bool,
+    pub your_session: Option<String>,
+    /// True when it's your turn to play (server returned your_match).
+    pub your_turn: bool,
+}
+
+#[derive(Debug)]
+pub enum LobbyViewUpdate {
+    /// A lobby was created — navigate to it with this id.
+    Created(String),
+    /// Latest lobby state.
+    Loaded(LobbyView),
+    Error(String),
+}
+
 #[derive(Debug)]
 pub enum UsernameCheckUpdate {
     Available(String),
@@ -257,6 +301,9 @@ pub fn start_join_room(tx: Sender<Update>, room_id: String) {
 /// Host a public lobby: create a spar room, then wait for a challenger to join
 /// it from their lobby browser and connect like any other match. `format` is
 /// the wire format string ("vs"/"ft3"/"ft5"/"ft10").
+/// Superseded by king-of-the-hill lobbies (`create_lobby`); kept for the
+/// single-use spar-room path / potential Discord-host reuse.
+#[allow(dead_code)]
 pub fn start_host_room(tx: Sender<Update>, name: String, format: String, private: bool) {
     std::thread::spawn(move || {
         if let Err(e) = run_host_room(&tx, &name, &format, private) {
@@ -762,6 +809,7 @@ fn parse_incoming_challenges(json: &str) -> Vec<IncomingChallenge> {
 /// POST /room/create — register a public spar room and a placeholder queue
 /// entry. Returns (room_id, creator_session_id); the host polls
 /// /match/status/<creator_session_id> for the join.
+#[allow(dead_code)]
 fn create_room_http(
     token: &str,
     name: &str,
@@ -783,6 +831,7 @@ fn create_room_http(
     Ok((room_id, creator_session_id))
 }
 
+#[allow(dead_code)]
 fn run_host_room(
     tx: &Sender<Update>,
     name: &str,
@@ -2257,7 +2306,7 @@ pub fn fetch_lobbies(tx: Sender<LobbyListUpdate>) {
                 return;
             }
         };
-        let url = format!("{base_url}/lobbies");
+        let url = format!("{base_url}/koh");
         match http_get_optional_auth(&url) {
             Ok(body) => match parse_lobbies(&body) {
                 Some(lobbies) => {
@@ -2274,6 +2323,137 @@ pub fn fetch_lobbies(tx: Sender<LobbyListUpdate>) {
             }
         }
     });
+}
+
+/// Token from cache (Discord) or a fresh guest login, no status channel.
+fn auth_token_quiet() -> Result<String, String> {
+    if let Some(t) = read_cached_token() {
+        set_current_token(&t);
+        return Ok(t);
+    }
+    let t = guest_login()?;
+    set_current_token(&t);
+    Ok(t)
+}
+
+/// POST /koh — create a king-of-the-hill lobby. `format` is the wire string.
+pub fn create_lobby(tx: Sender<LobbyViewUpdate>, name: String, ranked: bool, format: String) {
+    std::thread::spawn(move || {
+        let result = (|| -> Result<String, String> {
+            let token = auth_token_quiet()?;
+            let stun = stun_discover(GAME_PORT).map_err(|e| format!("STUN failed: {e}"))?;
+            let rom_hash = rom_short_hash();
+            let body = format!(
+                r#"{{"name":"{}","ranked":{ranked},"format":"{format}","stun_endpoint":"{stun}","app_version":"{APP_VERSION}","rom_hash":"{rom_hash}"}}"#,
+                json_escape(&name)
+            );
+            let url = format!("{}/koh", signaling_url()?);
+            let resp = http_post_json(&url, &token, &body)?;
+            json_str(&resp, "lobby_id")
+                .ok_or_else(|| format!("create lobby missing lobby_id: {resp}"))
+        })();
+        let _ = tx.send(match result {
+            Ok(id) => LobbyViewUpdate::Created(id),
+            Err(e) => LobbyViewUpdate::Error(e),
+        });
+    });
+}
+
+/// POST /koh/:id/join — join the play queue (or as a spectator).
+pub fn join_lobby(tx: Sender<LobbyViewUpdate>, lobby_id: String, spectate: bool) {
+    std::thread::spawn(move || {
+        let result = (|| -> Result<LobbyView, String> {
+            let token = auth_token_quiet()?;
+            let stun = stun_discover(GAME_PORT).map_err(|e| format!("STUN failed: {e}"))?;
+            let rom_hash = rom_short_hash();
+            let body = format!(
+                r#"{{"stun_endpoint":"{stun}","spectate":{spectate},"app_version":"{APP_VERSION}","rom_hash":"{rom_hash}"}}"#
+            );
+            let url = format!("{}/koh/{lobby_id}/join", signaling_url()?);
+            let resp = http_post_json(&url, &token, &body)?;
+            parse_lobby_view(&resp).ok_or_else(|| format!("join lobby parse failed: {resp}"))
+        })();
+        let _ = tx.send(match result {
+            Ok(v) => LobbyViewUpdate::Loaded(v),
+            Err(e) => LobbyViewUpdate::Error(e),
+        });
+    });
+}
+
+/// GET /koh/:id — poll lobby state.
+pub fn fetch_lobby(tx: Sender<LobbyViewUpdate>, lobby_id: String) {
+    std::thread::spawn(move || {
+        let result = (|| -> Result<LobbyView, String> {
+            let token = auth_token_quiet()?;
+            let url = format!("{}/koh/{lobby_id}", signaling_url()?);
+            let resp = http_get(&url, &token)?;
+            parse_lobby_view(&resp).ok_or_else(|| format!("lobby parse failed: {resp}"))
+        })();
+        let _ = tx.send(match result {
+            Ok(v) => LobbyViewUpdate::Loaded(v),
+            Err(e) => LobbyViewUpdate::Error(e),
+        });
+    });
+}
+
+/// POST /koh/:id/leave — fire-and-forget.
+pub fn leave_lobby(lobby_id: String) {
+    std::thread::spawn(move || {
+        let Some(token) = current_token() else { return };
+        if let Ok(url) = signaling_url().map(|u| format!("{u}/koh/{lobby_id}/leave")) {
+            let _ = http_post_json(&url, &token, "{}");
+        }
+    });
+}
+
+fn parse_lobby_view(json: &str) -> Option<LobbyView> {
+    let id = json_str(json, "id")?;
+    let members = json_array_body(json, "members")
+        .map(|body| {
+            json_object_chunks(body)
+                .iter()
+                .filter_map(|c| {
+                    Some(LobbyMemberInfo {
+                        username: json_str(c, "username")?,
+                        rating: json_f64(c, "rating").map(|r| r as i32),
+                        queued: json_str(c, "role").as_deref() == Some("queued"),
+                        in_match: json_bool(c, "in_match").unwrap_or(false),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let current = if json.contains("\"current\"") {
+        match (
+            json_nested_str(json, "current", "host_username"),
+            json_nested_str(json, "current", "join_username"),
+        ) {
+            (Some(h), Some(j)) => Some(LobbyCurrent {
+                host_username: h,
+                join_username: j,
+                host_session: json_nested_str(json, "current", "host_session").unwrap_or_default(),
+                join_session: json_nested_str(json, "current", "join_session").unwrap_or_default(),
+            }),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    Some(LobbyView {
+        id,
+        name: json_str(json, "name").unwrap_or_else(|| "Lobby".into()),
+        ranked: json_bool(json, "ranked").unwrap_or(false),
+        format: json_str(json, "format")
+            .and_then(|f| parse_lobby_match_format(&f))
+            .unwrap_or(LobbyMatchFormat::UnrankedVs),
+        members,
+        queue: json_string_array(json, "queue"),
+        current,
+        your_position: json_u64(json, "your_position").map(|p| p as usize),
+        your_queued: json_str(json, "your_role").as_deref() == Some("queued"),
+        your_session: json_str(json, "your_session"),
+        your_turn: json.contains("\"your_match\""),
+    })
 }
 
 pub fn send_lobby_chat(message: String, tx: Sender<LobbyChatPostUpdate>) {
@@ -2550,6 +2730,36 @@ fn json_array_body<'a>(json: &'a str, key: &str) -> Option<&'a str> {
         }
     }
     None
+}
+
+/// Collect the quoted strings in a JSON string array (e.g. `["a","b"]`).
+fn json_string_array(json: &str, key: &str) -> Vec<String> {
+    let Some(body) = json_array_body(json, key) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut chars = body.chars().peekable();
+    while let Some(&c) = chars.peek() {
+        if c == '"' {
+            chars.next();
+            let mut s = String::new();
+            while let Some(ch) = chars.next() {
+                match ch {
+                    '\\' => {
+                        if let Some(esc) = chars.next() {
+                            s.push(esc);
+                        }
+                    }
+                    '"' => break,
+                    _ => s.push(ch),
+                }
+            }
+            out.push(s);
+        } else {
+            chars.next();
+        }
+    }
+    out
 }
 
 fn json_object_chunks(body: &str) -> Vec<&str> {
