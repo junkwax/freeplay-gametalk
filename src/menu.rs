@@ -189,6 +189,8 @@ pub enum EditField {
     Username,
     StatsEmail,
     ReplayNote { path: String, cursor: usize },
+    /// Entering a lobby invite code to join a private lobby.
+    JoinCode,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -584,7 +586,7 @@ fn content_row_count(tab: OnlineTab, lobbies: &[LobbyPreview], live_matches: &[L
         OnlineTab::Play => 2,             // format selector + Find Match
         OnlineTab::Chat => 1,             // the input line (scroll is separate)
         OnlineTab::Players => 1,          // presence selection (clamped separately)
-        OnlineTab::Lobbies => 1 + lobbies.len(), // Create row + each lobby
+        OnlineTab::Lobbies => 3 + lobbies.len(), // Create public/private + Join code + lobbies
         OnlineTab::Watch => live_matches.len().max(1),
     }
 }
@@ -608,9 +610,10 @@ pub fn test_state(name: &str) -> Option<AppState> {
                 id: "demo".into(),
                 status: String::new(),
                 view: Some(LobbyView {
-                    id: "demo".into(),
+                    id: "AB3K9X".into(),
                     name: "Long sets only".into(),
                     ranked: true,
+                    private: true,
                     format: crate::matchmaking::LobbyMatchFormat::RankedFt5,
                     members: vec![
                         LobbyMemberInfo { username: "ScorpionKiller".into(), rating: Some(1403), queued: true, in_match: true },
@@ -736,8 +739,10 @@ pub enum NavResult {
     SendLobbyChat(String),
     /// Join a public lobby by its server room id (reuses the deep-link path).
     JoinLobby(String),
-    /// Host a new public lobby with the given challenge format.
-    CreateLobby(ChallengeFormat),
+    /// Host a new lobby with the given challenge format; bool = private.
+    CreateLobby(ChallengeFormat, bool),
+    /// Open the "join by invite code" text entry.
+    OpenJoinCode,
     /// Challenge a player (presence player_id) to a match in the given format.
     SendChallenge(String, ChallengeFormat),
     /// Accept an incoming challenge by its id.
@@ -1236,17 +1241,18 @@ impl AppState {
                         }
                         NavResult::Stay
                     }
-                    OnlineTab::Lobbies => {
-                        if cursor == 0 {
-                            // Row 0 is "Create Lobby" — host with the current
-                            // Play format and wait for a challenger.
-                            NavResult::CreateLobby(challenge_format)
-                        } else if let Some(lobby) = lobbies.get(cursor - 1) {
-                            NavResult::JoinLobby(lobby.id.clone())
-                        } else {
-                            NavResult::Stay
+                    OnlineTab::Lobbies => match cursor {
+                        0 => NavResult::CreateLobby(challenge_format, false),
+                        1 => NavResult::CreateLobby(challenge_format, true),
+                        2 => NavResult::OpenJoinCode,
+                        n => {
+                            if let Some(lobby) = lobbies.get(n - 3) {
+                                NavResult::JoinLobby(lobby.id.clone())
+                            } else {
+                                NavResult::Stay
+                            }
                         }
-                    }
+                    },
                     OnlineTab::Watch => {
                         if let Some(m) = live_matches.get(cursor) {
                             *self = AppState::Menu(MenuScreen::Spectate {
@@ -1511,6 +1517,11 @@ impl AppState {
                             && value.len() < MAX_USERNAME_LEN
                         {
                             value.push(c);
+                        }
+                    }
+                    EditField::JoinCode => {
+                        if c.is_ascii_alphanumeric() && value.len() < 6 {
+                            value.extend(c.to_uppercase());
                         }
                     }
                     EditField::StatsEmail | EditField::ReplayNote { .. } => {
@@ -1903,7 +1914,13 @@ fn draw_lobby(
         if v.members.len() == 1 { "" } else { "s" },
     );
     font.draw(canvas, &sub, pad, y, small, HUB_DIM)?;
-    y += 16 * small as i32 + 10;
+    y += 16 * small as i32 + 8;
+
+    if v.private {
+        let code = format!("PRIVATE — invite code:  {}", v.id);
+        font.draw(canvas, &code, pad, y, body, HUB_ACCENT)?;
+        y += 16 * body as i32 + 10;
+    }
 
     // Current match panel.
     let mp_h = 22 * body as i32 + 24;
@@ -2583,9 +2600,13 @@ fn draw_online_hub(
             }
         }
         OnlineTab::Lobbies => {
-            let create_label = format!("+  Create Lobby  ({})", challenge_format.label());
-            draw_online_row(canvas, font, &create_label, content_focus && cursor == 0, x, y, content_w, body)?;
-            let list_y = y + 44;
+            let act_gap = 26;
+            let pub_label = format!("+  Create Public Lobby  ({})", challenge_format.label());
+            draw_online_row(canvas, font, &pub_label, content_focus && cursor == 0, x, y, content_w, body)?;
+            let priv_label = format!("+  Create Private Lobby  ({})", challenge_format.label());
+            draw_online_row(canvas, font, &priv_label, content_focus && cursor == 1, x, y + act_gap, content_w, body)?;
+            draw_online_row(canvas, font, "Join by Invite Code", content_focus && cursor == 2, x, y + act_gap * 2, content_w, body)?;
+            let list_y = y + act_gap * 3 + 12;
             if lobbies.is_empty() {
                 font.draw(
                     canvas,
@@ -2596,15 +2617,14 @@ fn draw_online_hub(
                     HUB_DIM,
                 )?;
             } else {
-                let row_gap = 34;
+                let row_gap = 30;
                 let max_rows = ((bottom - list_y) / row_gap).max(1) as usize;
                 for (i, lobby) in lobbies.iter().take(max_rows).enumerate() {
                     let row_y = list_y + i as i32 * row_gap;
-                    let sel = content_focus && cursor == i + 1;
+                    let sel = content_focus && cursor == i + 3;
                     let label = format!("{}   {}   {}P", lobby.name, lobby.format.label(), lobby.players);
                     draw_online_row(canvas, font, &label, sel, x, row_y, content_w, body)?;
-                    let privacy = if lobby.private { "Private" } else { "Public" };
-                    let meta = format!("{} · {}", lobby.host, privacy);
+                    let meta = format!("{} · {}", lobby.host, lobby.status);
                     let mw = font.text_width_exact(&meta, small);
                     font.draw(canvas, &meta, x + content_w - mw - 6, row_y + 2, small, HUB_FAINT)?;
                 }

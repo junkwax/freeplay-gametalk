@@ -3007,7 +3007,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     let value = match &field {
                                         menu::EditField::Username => cfg.player_username.clone(),
                                         menu::EditField::StatsEmail => cfg.stats_email.clone(),
-                                        menu::EditField::ReplayNote { .. } => String::new(),
+                                        menu::EditField::ReplayNote { .. }
+                                        | menu::EditField::JoinCode => String::new(),
                                     };
                                     let label = match &field {
                                         menu::EditField::Username => {
@@ -3017,11 +3018,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             "Optional email for portable stats"
                                         }
                                         menu::EditField::ReplayNote { .. } => "Replay note",
+                                        menu::EditField::JoinCode => "Enter invite code",
                                     };
                                     let settings_cursor = match &field {
                                         menu::EditField::Username => 0,
                                         menu::EditField::StatsEmail => 1,
-                                        menu::EditField::ReplayNote { .. } => 0,
+                                        menu::EditField::ReplayNote { .. }
+                                        | menu::EditField::JoinCode => 0,
                                     };
                                     state = AppState::Menu(MenuScreen::TextEdit {
                                         title,
@@ -3048,6 +3051,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     });
                                 }
                                 NavResult::CommitText(field, value) => match field {
+                                    menu::EditField::JoinCode => {
+                                        let code = value.trim().to_uppercase();
+                                        if code.is_empty() {
+                                            state =
+                                                AppState::Menu(MenuScreen::Main { cursor: 0 });
+                                        } else {
+                                            matchmaking::set_guest_profile(
+                                                cfg.player_username.clone(),
+                                                cfg.stats_email.clone(),
+                                                cfg.guest_device_id.clone(),
+                                            );
+                                            let (tx, rx) = std::sync::mpsc::channel();
+                                            lobby_view_rx = Some(rx);
+                                            matchmaking::join_lobby(tx, code.clone(), false);
+                                            state = AppState::Menu(MenuScreen::Lobby {
+                                                id: code,
+                                                view: None,
+                                                status: "Joining lobby...".into(),
+                                            });
+                                        }
+                                    }
                                     menu::EditField::ReplayNote { path, cursor } => {
                                         let status =
                                             match match_replay::save_replay_note(&path, &value) {
@@ -3100,7 +3124,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     ));
                                                 }
                                             }
-                                            menu::EditField::ReplayNote { .. } => {}
+                                            menu::EditField::ReplayNote { .. }
+                                            | menu::EditField::JoinCode => {}
                                         }
                                         config::save(&cfg);
                                         matchmaking::clear_cached_token();
@@ -3108,7 +3133,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             cursor: match field {
                                                 menu::EditField::Username => 0,
                                                 menu::EditField::StatsEmail => 1,
-                                                menu::EditField::ReplayNote { .. } => 0,
+                                                menu::EditField::ReplayNote { .. }
+                                                | menu::EditField::JoinCode => 0,
                                             },
                                             player_username: cfg.player_username.clone(),
                                             stats_email: cfg.stats_email.clone(),
@@ -3228,7 +3254,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         status: "Joining lobby...".into(),
                                     });
                                 }
-                                NavResult::CreateLobby(format) => {
+                                NavResult::CreateLobby(format, private) => {
                                     // Create a king-of-the-hill lobby named after
                                     // the player; navigate to it once it exists.
                                     matchmaking::set_guest_profile(
@@ -3247,12 +3273,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         tx,
                                         host_name,
                                         format.ranked(),
+                                        private,
                                         format.wire().to_string(),
                                     );
                                     state = AppState::Menu(MenuScreen::Lobby {
                                         id: String::new(),
                                         view: None,
-                                        status: "Creating lobby...".into(),
+                                        status: if private {
+                                            "Creating private lobby...".into()
+                                        } else {
+                                            "Creating lobby...".into()
+                                        },
+                                    });
+                                }
+                                NavResult::OpenJoinCode => {
+                                    state = AppState::Menu(MenuScreen::TextEdit {
+                                        title: "JOIN LOBBY".into(),
+                                        label: "Enter the 6-character invite code".into(),
+                                        value: String::new(),
+                                        field: menu::EditField::JoinCode,
+                                        came_from: Box::new(menu::MenuScreen::Main { cursor: 0 }),
                                     });
                                 }
                                 NavResult::SetLobbyQueue(lobby_id, spectate) => {

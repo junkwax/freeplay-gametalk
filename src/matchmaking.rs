@@ -158,6 +158,7 @@ pub struct LobbyView {
     pub id: String,
     pub name: String,
     pub ranked: bool,
+    pub private: bool,
     pub format: LobbyMatchFormat,
     pub members: Vec<LobbyMemberInfo>,
     /// usernames in queue order (front = next up).
@@ -2337,14 +2338,20 @@ fn auth_token_quiet() -> Result<String, String> {
 }
 
 /// POST /koh — create a king-of-the-hill lobby. `format` is the wire string.
-pub fn create_lobby(tx: Sender<LobbyViewUpdate>, name: String, ranked: bool, format: String) {
+pub fn create_lobby(
+    tx: Sender<LobbyViewUpdate>,
+    name: String,
+    ranked: bool,
+    private: bool,
+    format: String,
+) {
     std::thread::spawn(move || {
         let result = (|| -> Result<String, String> {
             let token = auth_token_quiet()?;
             let stun = stun_discover(GAME_PORT).map_err(|e| format!("STUN failed: {e}"))?;
             let rom_hash = rom_short_hash();
             let body = format!(
-                r#"{{"name":"{}","ranked":{ranked},"format":"{format}","stun_endpoint":"{stun}","app_version":"{APP_VERSION}","rom_hash":"{rom_hash}"}}"#,
+                r#"{{"name":"{}","ranked":{ranked},"private":{private},"format":"{format}","stun_endpoint":"{stun}","app_version":"{APP_VERSION}","rom_hash":"{rom_hash}"}}"#,
                 json_escape(&name)
             );
             let url = format!("{}/koh", signaling_url()?);
@@ -2443,6 +2450,7 @@ fn parse_lobby_view(json: &str) -> Option<LobbyView> {
         id,
         name: json_str(json, "name").unwrap_or_else(|| "Lobby".into()),
         ranked: json_bool(json, "ranked").unwrap_or(false),
+        private: json_bool(json, "private").unwrap_or(false),
         format: json_str(json, "format")
             .and_then(|f| parse_lobby_match_format(&f))
             .unwrap_or(LobbyMatchFormat::UnrankedVs),
