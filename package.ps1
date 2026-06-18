@@ -7,6 +7,10 @@ $ErrorActionPreference = "Stop"
 # the released version without editing Cargo.toml — same source of truth the
 # binary uses via build.rs. Fall back to Cargo.toml, then "dev".
 $VERSION = (git describe --tags --abbrev=0 2>$null)
+# A tagless checkout (e.g. CI on a branch push, default shallow fetch) makes
+# `git describe` exit non-zero. We intentionally fall back below, but the leaked
+# $LASTEXITCODE would otherwise fail the whole pwsh step at its end — reset it.
+$global:LASTEXITCODE = 0
 if ($VERSION) { $VERSION = $VERSION -replace '^v', '' }
 if (-not $VERSION) {
     $VERSION = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' | ForEach-Object { $_.Matches[0].Groups[1].Value })
