@@ -518,6 +518,15 @@ pub fn format_hit_at(px: i32, py: i32) -> Option<usize> {
     FORMAT_HITS.with(|h| hit_lookup(h, px, py))
 }
 
+/// A presence/player label showing the rating in parentheses, e.g.
+/// `reptilefan (1403)`, when the server provided one.
+fn user_label(u: &LobbyUser) -> String {
+    match u.rating {
+        Some(r) => format!("{} ({r})", u.username),
+        None => u.username.clone(),
+    }
+}
+
 /// FNV-1a hash → stable color for a username.
 fn nick_color(name: &str) -> Color {
     let mut h: u32 = 2166136261;
@@ -603,10 +612,10 @@ pub fn test_state(name: &str) -> Option<AppState> {
         _ => return None,
     };
     let presence = vec![
-        LobbyUser { player_id: "p1".into(), username: "ScorpionKiller".into(), status: "online".into() },
-        LobbyUser { player_id: "p2".into(), username: "SubZeroFan".into(), status: "in lobby".into() },
-        LobbyUser { player_id: "p3".into(), username: "Reptile99".into(), status: "online".into() },
-        LobbyUser { player_id: "p4".into(), username: "kunglao".into(), status: "looking".into() },
+        LobbyUser { player_id: "p1".into(), username: "ScorpionKiller".into(), status: "online".into(), rating: Some(1403) },
+        LobbyUser { player_id: "p2".into(), username: "SubZeroFan".into(), status: "in lobby".into(), rating: Some(1521) },
+        LobbyUser { player_id: "p3".into(), username: "Reptile99".into(), status: "online".into(), rating: Some(1198) },
+        LobbyUser { player_id: "p4".into(), username: "kunglao".into(), status: "looking".into(), rating: None },
     ];
     let chat = vec![
         LobbyChatMessage { username: "ScorpionKiller".into(), message: "gg wp that was close".into(), timestamp: None },
@@ -2258,7 +2267,7 @@ fn draw_online_hub(
                 for (i, u) in presence.iter().take(max_rows).enumerate() {
                     let row_y = list_y + i as i32 * row_gap;
                     let sel = content_focus && cursor == i;
-                    draw_online_row(canvas, font, &u.username, sel, x, row_y, content_w, body)?;
+                    draw_online_row(canvas, font, &user_label(u), sel, x, row_y, content_w, body)?;
                     record_presence_hit(x - 8, row_y - 5, content_w + 12, row_gap, i);
                     if !u.status.is_empty() {
                         let sw = font.text_width_exact(&u.status, small);
@@ -2345,7 +2354,7 @@ fn draw_online_hub(
             } else {
                 let max_users = ((log_h - line_h - 8) / line_h).max(1) as usize;
                 for (i, u) in presence.iter().take(max_users).enumerate() {
-                    let name = fit_line(font, &u.username, small, presence_w - 16);
+                    let name = fit_line(font, &user_label(u), small, presence_w - 16);
                     font.draw(canvas, &name, px + 8, uy, small, nick_color(&u.username))?;
                     record_presence_hit(px, uy - 2, presence_w, line_h, i);
                     uy += line_h;

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.16 - 2026-06-18
+
+### Added
+
+- The lobby presence list and Players section now show each player's ranking
+  next to their name (e.g. `reptilefan (1403)`) when the server has a rating.
+
 ## 0.7.15 - 2026-06-18
 
 ### Changed

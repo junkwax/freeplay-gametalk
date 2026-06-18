@@ -57,6 +57,8 @@ pub struct LobbyUser {
     pub player_id: String,
     pub username: String,
     pub status: String,
+    /// Glicko rating from the stats service, if the server provided one.
+    pub rating: Option<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2422,6 +2424,7 @@ fn parse_lobby_users(json: &str) -> Vec<LobbyUser> {
                     .unwrap_or_default(),
                 username,
                 status: json_str(chunk, "status").unwrap_or_else(|| "online".into()),
+                rating: json_f64(chunk, "rating").map(|r| r as i32),
             });
         }
     }
