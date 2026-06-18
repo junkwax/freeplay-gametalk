@@ -154,6 +154,15 @@ pub struct LobbyCurrent {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LobbyReadyCheck {
+    pub champion_username: String,
+    pub challenger_username: String,
+    pub seconds_left: i64,
+    /// True when the local player is the challenger who must confirm ready.
+    pub you_are_challenger: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LobbyView {
     pub id: String,
     pub name: String,
@@ -164,6 +173,8 @@ pub struct LobbyView {
     /// usernames in queue order (front = next up).
     pub queue: Vec<String>,
     pub current: Option<LobbyCurrent>,
+    /// Pending ready-check (next two players pairing up), if any.
+    pub ready_check: Option<LobbyReadyCheck>,
     pub your_position: Option<usize>,
     pub your_queued: bool,
     pub your_session: Option<String>,
@@ -1760,8 +1771,12 @@ fn poll_status(token: &str, session_id: &str, tx: &Sender<Update>) -> Result<Mat
 }
 
 fn parse_turn_creds(json: &str) -> Option<TurnConnectInfo> {
-    let outer_pat = "\"match_info\":{";
-    let outer_start = json.find(outer_pat)? + outer_pat.len() - 1;
+    parse_turn_creds_under(json, "match_info")
+}
+
+fn parse_turn_creds_under(json: &str, outer_key: &str) -> Option<TurnConnectInfo> {
+    let outer_pat = format!("\"{outer_key}\":{{");
+    let outer_start = json.find(&outer_pat)? + outer_pat.len() - 1;
     let outer = &json[outer_start..];
 
     let turn_pat = "\"turn\":{";
@@ -2403,6 +2418,64 @@ pub fn fetch_lobby(tx: Sender<LobbyViewUpdate>, lobby_id: String) {
     });
 }
 
+/// POST /koh/:id/ready — challenger confirms ready; returns updated lobby view.
+pub fn ready_lobby(tx: Sender<LobbyViewUpdate>, lobby_id: String) {
+    std::thread::spawn(move || {
+        let result = (|| -> Result<LobbyView, String> {
+            let token = auth_token_quiet()?;
+            let url = format!("{}/koh/{lobby_id}/ready", signaling_url()?);
+            let resp = http_post_json(&url, &token, "{}")?;
+            parse_lobby_view(&resp).ok_or_else(|| format!("lobby parse failed: {resp}"))
+        })();
+        let _ = tx.send(match result {
+            Ok(v) => LobbyViewUpdate::Loaded(v),
+            Err(e) => LobbyViewUpdate::Error(e),
+        });
+    });
+}
+
+/// It's our turn in a king-of-the-hill lobby: re-fetch the lobby, extract our
+/// `your_match` MatchInfo, and run the same connect path challenges use. Feeds
+/// `Update` events (Status/Connected/Error) into the shared matchmaking channel
+/// so main.rs starts the GGRS session exactly as it does for a challenge.
+pub fn start_lobby_match(tx: Sender<Update>, lobby_id: String) {
+    std::thread::spawn(move || {
+        if let Err(e) = run_lobby_match(&tx, &lobby_id) {
+            let _ = tx.send(Update::Error(e));
+        }
+    });
+}
+
+fn run_lobby_match(tx: &Sender<Update>, lobby_id: &str) -> Result<(), String> {
+    let token = auth_token(tx)?;
+    set_current_token(&token);
+    let url = format!("{}/koh/{lobby_id}", signaling_url()?);
+    let resp = http_get(&url, &token)?;
+
+    let session_id = json_str(&resp, "your_session")
+        .ok_or("lobby match: no session assigned yet (try again)")?;
+    let peer_endpoint = json_nested_str(&resp, "your_match", "peer_endpoint")
+        .ok_or("lobby match: missing peer_endpoint")?;
+    let punch_at_ms =
+        json_nested_i64(&resp, "your_match", "punch_at_ms").ok_or("lobby match: missing punch_at_ms")?;
+    let role = json_nested_str(&resp, "your_match", "role").ok_or("lobby match: missing role")?;
+    let room_id = json_nested_str(&resp, "your_match", "room_id");
+    let peer_username = json_nested_str(&resp, "your_match", "username");
+    let turn = parse_turn_creds_under(&resp, "your_match");
+
+    let mi = MatchInfo {
+        session_id: session_id.clone(),
+        room_id,
+        peer_endpoint,
+        punch_at_ms,
+        role: role.clone(),
+        turn,
+        peer_username,
+    };
+    let is_host = role == "host";
+    connect_match(tx, &mi, &session_id, is_host)
+}
+
 /// POST /koh/:id/leave — fire-and-forget.
 pub fn leave_lobby(lobby_id: String) {
     std::thread::spawn(move || {
@@ -2446,6 +2519,23 @@ fn parse_lobby_view(json: &str) -> Option<LobbyView> {
     } else {
         None
     };
+    let ready_check = if json.contains("\"ready_check\"") {
+        match (
+            json_nested_str(json, "ready_check", "champion_username"),
+            json_nested_str(json, "ready_check", "challenger_username"),
+        ) {
+            (Some(champ), Some(chal)) => Some(LobbyReadyCheck {
+                champion_username: champ,
+                challenger_username: chal,
+                seconds_left: json_nested_i64(json, "ready_check", "seconds_left").unwrap_or(0),
+                you_are_challenger: json_nested_bool(json, "ready_check", "you_are_challenger")
+                    .unwrap_or(false),
+            }),
+            _ => None,
+        }
+    } else {
+        None
+    };
     Some(LobbyView {
         id,
         name: json_str(json, "name").unwrap_or_else(|| "Lobby".into()),
@@ -2457,6 +2547,7 @@ fn parse_lobby_view(json: &str) -> Option<LobbyView> {
         members,
         queue: json_string_array(json, "queue"),
         current,
+        ready_check,
         your_position: json_u64(json, "your_position").map(|p| p as usize),
         your_queued: json_str(json, "your_role").as_deref() == Some("queued"),
         your_session: json_str(json, "your_session"),
@@ -2923,20 +3014,28 @@ pub fn post_match_result(
     match_index: u32,
     p1_score: u16,
     p2_score: u16,
+    set_over: bool,
 ) -> Result<(), String> {
-    let body = match_result_body(session_id, match_index, p1_score, p2_score);
+    let body = match_result_body(session_id, match_index, p1_score, p2_score, set_over);
     let url = format!("{}/match/result", signaling_url()?);
     http_post_json(&url, token, &body)?;
     Ok(())
 }
 
-fn match_result_body(session_id: &str, match_index: u32, p1_score: u16, p2_score: u16) -> String {
+fn match_result_body(
+    session_id: &str,
+    match_index: u32,
+    p1_score: u16,
+    p2_score: u16,
+    set_over: bool,
+) -> String {
     format!(
-        r#"{{"session_id":"{}","match_index":{},"p1_score":{},"p2_score":{}}}"#,
+        r#"{{"session_id":"{}","match_index":{},"p1_score":{},"p2_score":{},"set_over":{}}}"#,
         json_escape(session_id),
         match_index,
         p1_score,
-        p2_score
+        p2_score,
+        set_over
     )
 }
 
@@ -3049,6 +3148,13 @@ fn json_nested_i64(json: &str, outer: &str, inner: &str) -> Option<i64> {
         .find(|c: char| !c.is_ascii_digit() && c != '-')
         .unwrap_or(val_sub.len());
     val_sub[..val_end].parse().ok()
+}
+
+fn json_nested_bool(json: &str, outer: &str, inner: &str) -> Option<bool> {
+    let pat_outer = format!("\"{outer}\":{{");
+    let start = json.find(&pat_outer)? + pat_outer.len() - 1;
+    let sub = &json[start..];
+    json_bool(sub, inner)
 }
 
 fn json_i64(json: &str, key: &str) -> Option<i64> {

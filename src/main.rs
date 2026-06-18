@@ -1550,6 +1550,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut net_in_fight: bool = false;
     let mut net_set_complete_pending_frame: Option<u32> = None;
     let mut net_teardown_reason: Option<String> = None;
+    // When a netplay session was launched from a king-of-the-hill lobby, this
+    // holds the lobby id so we return to the lobby screen (winner stays / loser
+    // re-queues) instead of the normal SessionEnded screen.
+    let mut lobby_return: Option<String> = None;
     let mut net_frames_since_progress: u32 = 0;
     let mut net_log: Option<std::fs::File> = None;
     let mut net_runtime = NetRuntime::default();
@@ -3300,6 +3304,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     lobby_view_rx = Some(rx);
                                     matchmaking::join_lobby(tx, lobby_id, spectate);
                                 }
+                                NavResult::ReadyLobby(lobby_id) => {
+                                    let (tx, rx) = std::sync::mpsc::channel();
+                                    lobby_view_rx = Some(rx);
+                                    matchmaking::ready_lobby(tx, lobby_id);
+                                }
                                 NavResult::SendChallenge(target_id, format) => {
                                     matchmaking::set_guest_profile(
                                         cfg.player_username.clone(),
@@ -4885,6 +4894,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let mut emitted_match_over = false;
                         for ev in score_tracker.step(now_score) {
                             let mut result_match_index = None;
+                            // `set_over` tells the server this game completed the
+                            // whole best-of-N set, so a KoH lobby rotates only now.
+                            let mut set_over = false;
                             if let score::ScoreEvent::MatchOver { winner, .. } = ev {
                                 emitted_match_over = true;
                                 ranked_match_index = ranked_match_index.saturating_add(1);
@@ -4903,6 +4915,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     &mut net_log,
                                     NETPLAY_MATCH_LIMIT,
                                 ) {
+                                    set_over = true;
                                     mark_net_set_complete_pending(
                                         &mut net_set_complete_pending_frame,
                                         net_frame_counter,
@@ -4926,12 +4939,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 &mut net_log,
                                 mm_session_id.as_deref(),
                                 result_match_index,
+                                set_over,
                             );
                         }
                         if reached_gameover_this_frame && !emitted_match_over {
                             if let Some(ev) = inferred_match_over(now_score, MATCH_WIN_TARGET) {
                                 println!("[score] inferred match result at gameover");
                                 let mut result_match_index = None;
+                                let mut set_over = false;
                                 if let score::ScoreEvent::MatchOver { winner, .. } = ev {
                                     ranked_match_index = ranked_match_index.saturating_add(1);
                                     result_match_index = Some(ranked_match_index);
@@ -4949,6 +4964,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         &mut net_log,
                                         NETPLAY_MATCH_LIMIT,
                                     ) {
+                                        set_over = true;
                                         mark_net_set_complete_pending(
                                             &mut net_set_complete_pending_frame,
                                             net_frame_counter,
@@ -4965,6 +4981,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     &mut net_log,
                                     mm_session_id.as_deref(),
                                     result_match_index,
+                                    set_over,
                                 );
                             } else {
                                 println!(
@@ -5526,10 +5543,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         trainer.set_enabled("p2_health", false);
                         trainer.set_enabled("freeze_timer", false);
                         input::clear_all_inputs();
-                        state = AppState::Menu(MenuScreen::SessionEnded {
-                            lines: teardown_lines,
-                            replay_path,
-                        });
+                        if let Some(lobby_id) = lobby_return.take() {
+                            // Came from a KoH lobby — go back to it. The server
+                            // rotates the queue from the match result (winner
+                            // stays, loser re-queues); we just resume polling.
+                            lobby_view_rx = None;
+                            lobby_view_next_refresh = Instant::now();
+                            state = AppState::Menu(MenuScreen::Lobby {
+                                id: lobby_id,
+                                view: None,
+                                status: "Returning to lobby...".into(),
+                            });
+                        } else {
+                            state = AppState::Menu(MenuScreen::SessionEnded {
+                                lines: teardown_lines,
+                                replay_path,
+                            });
+                        }
                     }
                 }
                 canvas.set_logical_size(0, 0)?;
@@ -6421,8 +6451,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             lobby_view_rx = None;
                         }
                         Ok(matchmaking::LobbyViewUpdate::Loaded(v)) => {
-                            if let AppState::Menu(menu::MenuScreen::Lobby {
-                                id, view, status, ..
+                            if v.your_turn && lobby_return.is_none() && net_session.is_none() {
+                                // It's our turn — connect to the opponent the
+                                // server paired us with and start netplay. We
+                                // route through the Matchmaking screen so the
+                                // shared mm_rx Connected->netplay path applies,
+                                // and remember the lobby so we return to it.
+                                let lobby_id = v.id.clone();
+                                shutdown_for_online_start!("lobby match");
+                                let (tx, rx) = std::sync::mpsc::channel();
+                                mm_rx = Some(rx);
+                                matchmaking::start_lobby_match(tx, lobby_id.clone());
+                                lobby_return = Some(lobby_id);
+                                state = AppState::Menu(MenuScreen::Matchmaking {
+                                    status: "Match starting — connecting...".into(),
+                                });
+                            } else if let AppState::Menu(menu::MenuScreen::Lobby {
+                                id,
+                                view,
+                                status,
+                                ..
                             }) = &mut state
                             {
                                 *id = v.id.clone();

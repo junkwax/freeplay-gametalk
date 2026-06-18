@@ -190,11 +190,17 @@ fn post_match_result_async(
     match_index: u32,
     p1_wins: u16,
     p2_wins: u16,
+    set_over: bool,
 ) {
     std::thread::spawn(move || {
-        if let Err(e) =
-            matchmaking::post_match_result(&token, &session_id, match_index, p1_wins, p2_wins)
-        {
+        if let Err(e) = matchmaking::post_match_result(
+            &token,
+            &session_id,
+            match_index,
+            p1_wins,
+            p2_wins,
+            set_over,
+        ) {
             println!("[score] failed to post match result to server: {e}");
             // Score-mismatch: server rejected because our scores disagree with
             // the partner's report. Capture an incident with our local RAM
@@ -226,6 +232,7 @@ pub fn handle_score_event(
     net_log: &mut Option<std::fs::File>,
     session_id: Option<&str>,
     match_index: Option<u32>,
+    set_over: bool,
 ) {
     use std::io::Write;
     let local_tag = match (discord_user, local_handle) {
@@ -264,7 +271,14 @@ pub fn handle_score_event(
             if let (Some(sid), Some(token), Some(match_index)) =
                 (session_id, matchmaking::current_token(), match_index)
             {
-                post_match_result_async(token, sid.to_string(), match_index, p1_wins, p2_wins);
+                post_match_result_async(
+                    token,
+                    sid.to_string(),
+                    match_index,
+                    p1_wins,
+                    p2_wins,
+                    set_over,
+                );
             }
 
             (

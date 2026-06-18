@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.7.19 - 2026-06-18
+
+### Added
+
+- King-of-the-hill lobbies now play matches automatically. When it's your turn
+  the client connects to the paired opponent and starts netplay; when the set
+  ends you return to the lobby (winner stays, loser re-queues) instead of the
+  normal end-of-session screen.
+- Ready check before each lobby match. The next two players pair up visually
+  and the challenger gets a 10-second countdown to confirm — press ENTER to
+  ready up. If they don't confirm in time they drop to spectating and the next
+  player in the queue is pulled up. The champion (the player staying on) is
+  auto-ready.
+
+### Fixed
+
+- Lobby queue rotation no longer happens mid-set: the winner-stays hand-off now
+  waits for the whole best-of-N set to finish rather than rotating after the
+  first game.
+
 ## 0.7.18 - 2026-06-18
 
 ### Added

@@ -5,7 +5,7 @@ use crate::config::{
 use crate::font::Font;
 use crate::input::{is_action_active, Action, Binding, Bindings, Player, PlayerBindings};
 use crate::matchmaking::{
-    HistoryRow, IncomingChallenge, LeaderboardRow, LiveMatch, LobbyChatMessage, LobbyCurrent,
+    HistoryRow, IncomingChallenge, LeaderboardRow, LiveMatch, LobbyChatMessage,
     LobbyMemberInfo, LobbyUser, LobbyView, ProfileData, RemoteGhostMeta,
 };
 use crate::version;
@@ -622,13 +622,14 @@ pub fn test_state(name: &str) -> Option<AppState> {
                         LobbyMemberInfo { username: "kunglao".into(), rating: None, queued: false, in_match: false },
                     ],
                     queue: vec!["Reptile99".into(), "You".into()],
-                    current: Some(LobbyCurrent {
-                        host_username: "ScorpionKiller".into(),
-                        join_username: "SubZeroFan".into(),
-                        host_session: "s1".into(),
-                        join_session: "s2".into(),
+                    current: None,
+                    ready_check: Some(crate::matchmaking::LobbyReadyCheck {
+                        champion_username: "ScorpionKiller".into(),
+                        challenger_username: "You".into(),
+                        seconds_left: 7,
+                        you_are_challenger: true,
                     }),
-                    your_position: Some(1),
+                    your_position: Some(0),
                     your_queued: true,
                     your_session: None,
                     your_turn: false,
@@ -749,6 +750,8 @@ pub enum NavResult {
     AcceptChallenge(String),
     /// Toggle the caller between the play queue and spectating in a lobby.
     SetLobbyQueue(String, bool),
+    /// Challenger confirms ready for the pending match in a lobby.
+    ReadyLobby(String),
     /// Toggle desktop fullscreen and persist config.
     ToggleFullscreen,
     /// Adjust audio volume by signed percentage points.
@@ -1313,9 +1316,14 @@ impl AppState {
             AppState::Menu(MenuScreen::About) => NavResult::Stay,
             AppState::Menu(MenuScreen::Lobby { id, view, .. }) => match view {
                 Some(v) => {
-                    let queued = v.your_queued || v.your_position.is_some();
-                    // Toggle: queued -> spectate, spectating -> join queue.
-                    NavResult::SetLobbyQueue(id, queued)
+                    if v.ready_check.as_ref().map_or(false, |rc| rc.you_are_challenger) {
+                        // You're the challenger in a pending match — confirm ready.
+                        NavResult::ReadyLobby(id)
+                    } else {
+                        let queued = v.your_queued || v.your_position.is_some();
+                        // Toggle: queued -> spectate, spectating -> join queue.
+                        NavResult::SetLobbyQueue(id, queued)
+                    }
                 }
                 None => NavResult::Stay,
             },
@@ -1924,20 +1932,31 @@ fn draw_lobby(
 
     // Current match panel.
     let mp_h = 22 * body as i32 + 24;
-    draw_panel(canvas, pad, y, panel_w, mp_h, HUB_PANEL)?;
-    if let Some(c) = &v.current {
-        font.draw(canvas, "NOW PLAYING", pad + 12, y + 8, small, HUB_ACCENT)?;
-        let line = format!("{}  vs  {}", c.host_username, c.join_username);
+    if let Some(rc) = &v.ready_check {
+        // A ready check pre-empts the now-playing panel: the next two players
+        // are pairing up and the challenger must confirm within the countdown.
+        let panel_col = if rc.you_are_challenger { HUB_PANEL_SEL } else { HUB_PANEL };
+        draw_panel(canvas, pad, y, panel_w, mp_h, panel_col)?;
+        let head = format!("READY CHECK · {}s", rc.seconds_left.max(0));
+        font.draw(canvas, &head, pad + 12, y + 8, small, HUB_ACCENT)?;
+        let line = format!("{}  vs  {}", rc.champion_username, rc.challenger_username);
         font.draw(canvas, &line, pad + 12, y + 10 + 14 * small as i32, body, HUB_TEXT)?;
     } else {
-        font.draw(
-            canvas,
-            "Waiting for two players to queue up…",
-            pad + 12,
-            y + mp_h / 2 - 6,
-            small,
-            HUB_DIM,
-        )?;
+        draw_panel(canvas, pad, y, panel_w, mp_h, HUB_PANEL)?;
+        if let Some(c) = &v.current {
+            font.draw(canvas, "NOW PLAYING", pad + 12, y + 8, small, HUB_ACCENT)?;
+            let line = format!("{}  vs  {}", c.host_username, c.join_username);
+            font.draw(canvas, &line, pad + 12, y + 10 + 14 * small as i32, body, HUB_TEXT)?;
+        } else {
+            font.draw(
+                canvas,
+                "Waiting for two players to queue up…",
+                pad + 12,
+                y + mp_h / 2 - 6,
+                small,
+                HUB_DIM,
+            )?;
+        }
     }
     y += mp_h + 14;
 
@@ -1964,8 +1983,17 @@ fn draw_lobby(
     }
 
     // Your status line above the footer.
-    let your = if v.your_turn {
+    let challenger_ready = v
+        .ready_check
+        .as_ref()
+        .map_or(false, |rc| rc.you_are_challenger);
+    let your = if challenger_ready {
+        let secs = v.ready_check.as_ref().map_or(0, |rc| rc.seconds_left.max(0));
+        format!("You're up! Confirm ready — {}s", secs)
+    } else if v.your_turn {
         "Your turn — get ready!".to_string()
+    } else if v.ready_check.is_some() {
+        "Next match pairing up…".to_string()
     } else if let Some(p) = v.your_position {
         format!("You're #{} in the queue", p + 1)
     } else if v.your_queued {
@@ -1973,9 +2001,12 @@ fn draw_lobby(
     } else {
         "You're spectating".to_string()
     };
-    font.draw(canvas, &your, pad, footer_y - 18 * small as i32 - 6, small, HUB_DIM)?;
+    let your_col = if challenger_ready { HUB_ACCENT } else { HUB_DIM };
+    font.draw(canvas, &your, pad, footer_y - 18 * small as i32 - 6, small, your_col)?;
 
-    let footer = if v.your_queued || v.your_position.is_some() {
+    let footer = if challenger_ready {
+        "ENTER Ready!    ESC Leave"
+    } else if v.your_queued || v.your_position.is_some() {
         "ENTER Spectate    ESC Leave"
     } else {
         "ENTER Join queue    ESC Leave"
