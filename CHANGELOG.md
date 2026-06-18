@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.17 - 2026-06-18
+
+### Added
+
+- King-of-the-hill lobbies: the Lobbies tab now creates and joins persistent
+  lobbies with a play queue. The lobby screen shows the current match, the
+  "up next" queue with your position, and your queue/spectate status; you can
+  toggle between queuing and spectating, and leaving destroys the lobby when
+  it's empty. (The automatic winner-stays match hand-off is the next step.)
+
 ## 0.7.16 - 2026-06-18
 
 ### Added
