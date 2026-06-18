@@ -1435,6 +1435,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     crate::rpc::set_discord_client_id(cfg.discord_client_id.clone());
     install_panic_incident_hook();
     let mut state = AppState::default();
+    // Debug: `--test-screen online:chat` (or :players/:lobbies/:watch/:play)
+    // jumps straight into a hub section with sample data so layout/fonts can be
+    // checked without the live server. `--test-osk` also shows the chat keyboard.
+    let test_args: Vec<String> = std::env::args().collect();
+    let mut test_force_pad = false;
+    for i in 0..test_args.len() {
+        let val = if test_args[i] == "--test-screen" {
+            test_args.get(i + 1).cloned()
+        } else {
+            test_args[i]
+                .strip_prefix("--test-screen=")
+                .map(str::to_string)
+        };
+        if let Some(name) = val {
+            if let Some(s) = menu::test_state(&name) {
+                state = s;
+                println!("[test] jumped to screen: {name}");
+            }
+        }
+        if test_args[i] == "--test-osk" {
+            test_force_pad = true;
+        }
+    }
     let mut rom_present = rom::PresenceCache::new();
 
     let mut discord_user: Option<String> = matchmaking::username_from_cached_token();
@@ -1594,6 +1617,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut lobby_list_next_refresh = Instant::now();
     let mut challenge_rx: Option<std::sync::mpsc::Receiver<matchmaking::ChallengeListUpdate>> = None;
     let mut challenge_next_refresh = Instant::now();
+    // Tracks whether the player is driving menus with a controller, so the chat
+    // on-screen keyboard only appears for pad users (keyboard users just type).
+    let mut menu_input_pad = test_force_pad;
     let mut lobby_chat_post_rx: Option<
         std::sync::mpsc::Receiver<matchmaking::LobbyChatPostUpdate>,
     > = None;
@@ -1757,6 +1783,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         for event in event_pump.poll_iter() {
+            // Remember the last input device so the chat keyboard shows for pad
+            // users only. A controller button flips to pad mode; any key press
+            // flips back to keyboard mode.
+            match &event {
+                Event::ControllerButtonDown { .. } => menu_input_pad = true,
+                Event::KeyDown { .. } => menu_input_pad = false,
+                _ => {}
+            }
             match event {
                 Event::Quit { .. } => break 'running,
 
@@ -2595,7 +2629,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                         sdl2::mouse::MouseButton::Left => {
-                            if let Some(fmt_idx) = menu::format_hit_at(x, y) {
+                            if let Some(pi) = menu::phrase_hit_at(x, y) {
+                                if let AppState::Menu(menu::MenuScreen::OnlineHub {
+                                    chat_draft,
+                                    ..
+                                }) = &mut state
+                                {
+                                    let ph = menu::quick_phrase(pi);
+                                    if chat_draft.chars().count() + ph.chars().count() + 1 <= 180 {
+                                        if !chat_draft.is_empty() && !chat_draft.ends_with(' ') {
+                                            chat_draft.push(' ');
+                                        }
+                                        chat_draft.push_str(ph);
+                                        chat_draft.push(' ');
+                                    }
+                                }
+                            } else if let Some(fmt_idx) = menu::format_hit_at(x, y) {
                                 let target = if let AppState::Menu(
                                     menu::MenuScreen::OnlineHub {
                                         challenge_pick: Some(_),
@@ -5969,6 +6018,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     discord_user.as_deref(),
                     &main_leaderboard,
                     toast_payload(&toast),
+                    menu_input_pad,
                 )
                 .map_err(|e| format!("menu draw: {e}"))?;
                 if net_stats_visible
@@ -6721,6 +6771,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     discord_user.as_deref(),
                     &main_leaderboard,
                     toast_payload(&toast),
+                    menu_input_pad,
                 )
                 .map_err(|e| format!("menu draw: {e}"))?;
                 canvas.present();
