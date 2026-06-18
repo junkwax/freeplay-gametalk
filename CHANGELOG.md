@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.7.15 - 2026-06-18
+
+### Changed
+
+- Reduced the Online hub font size and title scale for a more readable, less
+  oversized layout, and left-aligned the hub title.
+- The chat on-screen keyboard now only appears when navigating with a
+  controller; keyboard users just type. The chat input bar is clearly
+  highlighted (accent border + caret) when focused.
+
+### Added
+
+- Added a quick common-phrase strip above the chat input (GG / GGS / WP /
+  one more? / rematch? / nice / lag?) — click to drop it into your message.
+- Added a `--test-screen` debug flag (e.g. `--test-screen online:chat`,
+  `controls`, `main`; plus `--test-osk`) that jumps straight into a screen with
+  sample data for layout testing.
+
 ## 0.7.14 - 2026-06-17
 
 ### Added

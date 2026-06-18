@@ -258,7 +258,7 @@ impl<'ttf, 'tc> Font<'ttf, 'tc> {
             ttf_ctx,
             &["media/mk2.ttf", "src/media/mk2.ttf", "mk2.ttf"],
             "mk2.ttf",
-            16,
+            15,
         );
         let overlay_candidates = overlay_font_candidates();
         let overlay_refs: Vec<&str> = overlay_candidates.iter().map(String::as_str).collect();

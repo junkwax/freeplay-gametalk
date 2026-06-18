@@ -465,11 +465,32 @@ thread_local! {
         const { std::cell::RefCell::new(Vec::new()) };
     static FORMAT_HITS: std::cell::RefCell<Vec<(i32, i32, i32, i32, usize)>> =
         const { std::cell::RefCell::new(Vec::new()) };
+    static PHRASE_HITS: std::cell::RefCell<Vec<(i32, i32, i32, i32, usize)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Common chat phrases offered as one-click inserts.
+pub const QUICK_PHRASES: [&str; 7] =
+    ["gg", "ggs", "wp", "one more?", "rematch?", "nice", "lag?"];
+
+/// The quick phrase at an index (for the click handler).
+pub fn quick_phrase(idx: usize) -> &'static str {
+    QUICK_PHRASES.get(idx).copied().unwrap_or("")
 }
 
 fn hits_reset() {
     PRESENCE_HITS.with(|h| h.borrow_mut().clear());
     FORMAT_HITS.with(|h| h.borrow_mut().clear());
+    PHRASE_HITS.with(|h| h.borrow_mut().clear());
+}
+
+fn record_phrase_hit(x: i32, y: i32, w: i32, h: i32, idx: usize) {
+    PHRASE_HITS.with(|hits| hits.borrow_mut().push((x, y, w, h, idx)));
+}
+
+/// Quick-phrase chip index at a window-pixel point, if any.
+pub fn phrase_hit_at(px: i32, py: i32) -> Option<usize> {
+    PHRASE_HITS.with(|h| hit_lookup(h, px, py))
 }
 
 fn record_presence_hit(x: i32, y: i32, w: i32, h: i32, idx: usize) {
@@ -550,6 +571,73 @@ fn content_row_count(tab: OnlineTab, lobbies: &[LobbyPreview], live_matches: &[L
         OnlineTab::Lobbies => 1 + lobbies.len(), // Create row + each lobby
         OnlineTab::Watch => live_matches.len().max(1),
     }
+}
+
+/// Build an Online hub pre-populated with sample data and jumped to a section,
+/// for layout/font testing via `--test-screen`. Accepts names like
+/// `online:chat`, `online:players`, `online:lobbies`, `online:watch`,
+/// `online:play` (or just the section name).
+pub fn test_state(name: &str) -> Option<AppState> {
+    // Non-online dense screens, for checking readability at the current font.
+    match name {
+        "controls" => {
+            return Some(AppState::Menu(MenuScreen::Controls {
+                cursor: 0,
+                player: Player::P1,
+            }))
+        }
+        "main" => return Some(AppState::Menu(MenuScreen::Main { cursor: 0 })),
+        _ => {}
+    }
+    let section = name
+        .strip_prefix("online:")
+        .or_else(|| name.strip_prefix("online"))
+        .unwrap_or(name)
+        .trim_start_matches(':');
+    let tab = match section {
+        "chat" => OnlineTab::Chat,
+        "players" => OnlineTab::Players,
+        "lobbies" => OnlineTab::Lobbies,
+        "watch" => OnlineTab::Watch,
+        "play" | "" => OnlineTab::Play,
+        _ => return None,
+    };
+    let presence = vec![
+        LobbyUser { player_id: "p1".into(), username: "ScorpionKiller".into(), status: "online".into() },
+        LobbyUser { player_id: "p2".into(), username: "SubZeroFan".into(), status: "in lobby".into() },
+        LobbyUser { player_id: "p3".into(), username: "Reptile99".into(), status: "online".into() },
+        LobbyUser { player_id: "p4".into(), username: "kunglao".into(), status: "looking".into() },
+    ];
+    let chat = vec![
+        LobbyChatMessage { username: "ScorpionKiller".into(), message: "gg wp that was close".into(), timestamp: None },
+        LobbyChatMessage { username: "SubZeroFan".into(), message: "anyone up for an ft5?".into(), timestamp: None },
+        LobbyChatMessage { username: "Reptile99".into(), message: "lobby is open, hop in".into(), timestamp: None },
+    ];
+    let lobbies = vec![
+        LobbyPreview { id: "r1".into(), name: "Long sets only".into(), host: "Jax".into(), format: ChallengeFormat::RankedFt10, players: 2, private: false, status: "open".into() },
+        LobbyPreview { id: "r2".into(), name: "casual fun".into(), host: "Sonya".into(), format: ChallengeFormat::UnrankedVs, players: 1, private: true, status: "open".into() },
+    ];
+    let live_matches = vec![
+        LiveMatch { session_id: "s1".into(), p1_name: "Liu Kang".into(), p2_name: "Kung Lao".into(), p1_score: 2, p2_score: 1 },
+        LiveMatch { session_id: "s2".into(), p1_name: "Mileena".into(), p2_name: "Kitana".into(), p1_score: 0, p2_score: 3 },
+    ];
+    Some(AppState::Menu(MenuScreen::OnlineHub {
+        tab,
+        focus: HubFocus::Content,
+        cursor: 0,
+        challenge_format: ChallengeFormat::RankedFt5,
+        chat_draft: String::new(),
+        chat,
+        presence,
+        chat_scroll: 0,
+        osk_row: 0,
+        osk_col: 0,
+        challenge_pick: None,
+        incoming: None,
+        lobbies,
+        live_matches,
+        status: "Sample data — test screen".into(),
+    }))
 }
 
 pub enum NavResult {
@@ -1426,6 +1514,7 @@ fn parse_ip_port(s: &str) -> Option<std::net::SocketAddr> {
 
 // --- Rendering ---
 
+#[allow(clippy::too_many_arguments)]
 pub fn draw(
     state: &AppState,
     bindings: &Bindings,
@@ -1437,6 +1526,7 @@ pub fn draw(
     discord_user: Option<&str>,
     main_leaderboard: &LeaderboardState,
     toast: Option<Toast<'_>>,
+    osk_visible: bool,
 ) -> Result<(), String> {
     canvas.set_draw_color(Color::RGB(8, 8, 16));
     canvas.clear();
@@ -1480,6 +1570,7 @@ pub fn draw(
             presence,
             *chat_scroll,
             (*osk_row, *osk_col),
+            osk_visible,
             *challenge_pick,
             incoming.as_ref(),
             lobbies,
@@ -1898,7 +1989,7 @@ fn fit_line(font: &mut Font, text: &str, scale: u32, max_w: i32) -> String {
 }
 
 fn title_scale(h: i32) -> u32 {
-    ((h / 180).max(3) as u32).min(6)
+    ((h / 260).max(2) as u32).min(4)
 }
 fn body_scale(h: i32) -> u32 {
     ((h / 320).max(2) as u32).min(3)
@@ -2097,6 +2188,7 @@ fn draw_online_hub(
     presence: &[LobbyUser],
     chat_scroll: usize,
     osk: (usize, usize),
+    osk_visible: bool,
     challenge_pick: Option<usize>,
     incoming: Option<&IncomingChallenge>,
     lobbies: &[LobbyPreview],
@@ -2105,14 +2197,19 @@ fn draw_online_hub(
     w: i32,
     h: i32,
 ) -> Result<(), String> {
-    draw_title(canvas, font, "ONLINE", w, h)?;
     hits_reset();
     let body = body_scale(h);
     let small = small_scale(h);
     let content_focus = focus == HubFocus::Content;
-
     let pad = (w / 24).clamp(16, 40);
-    let top = 24 + 24 * title_scale(h) as i32 + 18;
+
+    // Left-aligned title with an underline spanning the content width.
+    let tscale = title_scale(h);
+    font.draw(canvas, "ONLINE", pad, 22, tscale, HUB_ACCENT)?;
+    let line_y = 22 + 22 * tscale as i32;
+    canvas.set_draw_color(Color::RGB(120, 70, 10));
+    canvas.fill_rect(Rect::new(pad, line_y, (w - pad * 2) as u32, 2))?;
+    let top = line_y + 16;
     let footer_h = 16 * small as i32 + 28;
     let bottom = h - footer_h;
     let area_h = bottom - top;
@@ -2197,15 +2294,19 @@ fn draw_online_hub(
             let input_h = 14 * small as i32 + 14;
             let key_h = 14 * small as i32 + 8;
             let osk_gap = 4;
-            // Reserve on-screen-keyboard space only while composing (focused).
-            let osk_h = if content_focus {
+            // The on-screen keyboard only appears when the player is driving the
+            // UI with a controller (osk_visible); keyboard users just type.
+            let show_osk = content_focus && osk_visible;
+            let osk_h = if show_osk {
                 OSK_ROWS as i32 * (key_h + osk_gap) + 4
             } else {
                 0
             };
+            let strip_h = 12 * small as i32 + 8;
             let log_top = y;
-            let input_y = bottom - osk_h - if content_focus { 8 } else { 4 } - input_h;
-            let log_bottom = input_y - 8;
+            let input_y = bottom - osk_h - if show_osk { 8 } else { 4 } - input_h;
+            let strip_y = input_y - strip_h - 6;
+            let log_bottom = strip_y - 6;
             let log_h = (log_bottom - log_top).max(line_h);
 
             let presence_w = (content_w / 3).clamp(96, 240);
@@ -2251,20 +2352,55 @@ fn draw_online_hub(
                 }
             }
 
-            // Input box (typing active while in this section — physical
-            // keyboard or the on-screen keyboard below).
-            let box_color = if content_focus { HUB_PANEL_SEL } else { HUB_RAIL_BG };
+            // Quick-phrase chips — click to drop a common message into the bar.
+            font.draw(canvas, "QUICK:", x, strip_y + 3, small, HUB_FAINT)?;
+            let mut chip_x = x + font.text_width_exact("QUICK:", small) + 10;
+            for (i, ph) in QUICK_PHRASES.iter().enumerate() {
+                let cw = font.text_width_exact(ph, small) + 16;
+                if chip_x + cw > x + content_w {
+                    break;
+                }
+                draw_panel(canvas, chip_x, strip_y, cw, strip_h, HUB_PANEL)?;
+                font.draw(canvas, ph, chip_x + 8, strip_y + 3, small, HUB_TEXT)?;
+                record_phrase_hit(chip_x, strip_y, cw, strip_h, i);
+                chip_x += cw + 6;
+            }
+
+            // Input box. When focused (you're "in" the chat bar) make it clearly
+            // active: brighter fill, an accent border + left bar, and a caret.
+            let box_color = if content_focus {
+                Color::RGBA(44, 52, 84, 250)
+            } else {
+                HUB_RAIL_BG
+            };
             draw_panel(canvas, x, input_y, content_w, input_h, box_color)?;
+            if content_focus {
+                canvas.set_draw_color(HUB_ACCENT);
+                canvas.draw_rect(Rect::new(x, input_y, content_w as u32, input_h as u32))?;
+                canvas.fill_rect(Rect::new(x, input_y, 3, input_h as u32))?;
+            }
             let (draft, draft_color) = if chat_draft.is_empty() {
                 ("Type a message…", HUB_FAINT)
             } else {
                 (chat_draft, Color::RGB(236, 240, 255))
             };
-            let draft = fit_line(font, draft, small, content_w - 16);
-            font.draw(canvas, &draft, x + 8, input_y + 4, small, draft_color)?;
+            let draft = fit_line(font, draft, small, content_w - 24);
+            font.draw(canvas, &draft, x + 10, input_y + 4, small, draft_color)?;
+            if content_focus {
+                // Blinking caret after the current text.
+                let caret_x = x + 10 + font.text_width_exact(&draft, small) + 2;
+                let blink = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.subsec_millis() < 500)
+                    .unwrap_or(true);
+                if blink {
+                    canvas.set_draw_color(HUB_ACCENT);
+                    canvas.fill_rect(Rect::new(caret_x, input_y + 4, 2, (12 * small) as u32))?;
+                }
+            }
 
             // On-screen keyboard for controller players.
-            if content_focus {
+            if show_osk {
                 draw_osk(
                     canvas,
                     font,
@@ -2358,7 +2494,13 @@ fn draw_online_hub(
         match focus {
             HubFocus::Rail => "UP/DOWN Section    RIGHT/ENTER Open    ESC Back",
             HubFocus::Content => match tab {
-                OnlineTab::Chat => "D-pad keys   A press key   ENTER send   ESC back",
+                OnlineTab::Chat => {
+                    if osk_visible {
+                        "D-pad keys   A press key   ENTER send   ESC back"
+                    } else {
+                        "Type a message    ENTER Send    ESC Back"
+                    }
+                }
                 OnlineTab::Play => "UP/DOWN Move    ENTER Select/Change    LEFT Back",
                 OnlineTab::Players => "UP/DOWN Player    ENTER Challenge    LEFT Back",
                 _ => "UP/DOWN Move    ENTER Select    LEFT Back",
