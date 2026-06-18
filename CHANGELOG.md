@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.18 - 2026-06-18
+
+### Added
+
+- Private king-of-the-hill lobbies. The Lobbies tab now offers "Create Public
+  Lobby", "Create Private Lobby", and "Join by Invite Code". A private lobby is
+  hidden from the public browser and shows a short invite code; share the code
+  and others join with "Join by Invite Code".
+
 ## 0.7.17 - 2026-06-18
 
 ### Added
