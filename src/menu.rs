@@ -605,6 +605,13 @@ pub fn test_state(name: &str) -> Option<AppState> {
             }))
         }
         "main" => return Some(AppState::Menu(MenuScreen::Main { cursor: 0 })),
+        "name" => {
+            return Some(AppState::Menu(MenuScreen::MatchUsername {
+                value: crate::config::default_username(),
+                status: "This is your name — edit it or press Enter to claim it".into(),
+                checking: false,
+            }))
+        }
         "lobby" => {
             return Some(AppState::Menu(MenuScreen::Lobby {
                 id: "demo".into(),
@@ -2286,7 +2293,15 @@ fn draw_main(
     discord_user: Option<&str>,
     leaderboard: &LeaderboardState,
 ) -> Result<(), String> {
-    draw_title(canvas, font, "Freeplay", w, h)?;
+    // Left-aligned, oversized wordmark (bigger than the shared centered
+    // draw_title used elsewhere) to anchor the home screen.
+    let pad = (w / 24).clamp(16, 40);
+    let title_sc = (title_scale(h) + 1).min(5);
+    let title_y = 22;
+    font.draw(canvas, "FREEPLAY", pad, title_y, title_sc, Color::RGB(255, 200, 0))?;
+    let line_y = title_y + 24 * title_sc as i32;
+    canvas.set_draw_color(Color::RGB(100, 50, 0));
+    canvas.fill_rect(Rect::new(pad, line_y, (w - pad * 2) as u32, 2))?;
 
     let item_scale = body_scale(h).max(2);
     let line_h = (44 * item_scale as i32) / 2;
@@ -3756,7 +3771,7 @@ fn draw_match_username(
     w: i32,
     h: i32,
 ) -> Result<(), String> {
-    draw_title(canvas, font, "FIND MATCH", w, h)?;
+    draw_title(canvas, font, "CHOOSE YOUR NAME", w, h)?;
     let scale = body_scale(h);
     let small = small_scale(h);
     let panel_w = (w - 72).clamp(260, 520);
@@ -3845,7 +3860,7 @@ fn draw_match_username(
     let footer = if checking {
         "Checking...   ESC Back"
     } else {
-        "ENTER Queue   ESC Back"
+        "ENTER Claim name   ESC Back"
     };
     let fw = font.text_width_exact(footer, small);
     font.draw(

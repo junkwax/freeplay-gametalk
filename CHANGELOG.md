@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.7.20 - 2026-06-18
+
+### Added
+
+- First-run name claim. The auto-generated Wu-style name is your identity, but
+  the first time you go online you now get a "Choose your name" screen to keep
+  or change it — and it's checked for availability before it's claimed. After
+  you claim a name once, going online never re-prompts.
+
+### Changed
+
+- The home-screen "FREEPLAY" wordmark is larger and left-aligned.
+
+### Fixed
+
+- Online features (username availability, leaderboards, profiles) now work out
+  of the box without a hand-written `.env`: config falls back to the bundled
+  `.env.public`, per key, so `FREEPLAY_STATS_URL`/`FREEPLAY_SIGNALING_URL` are
+  always resolved. Previously a missing `.env` left the stats service
+  unconfigured and the name check couldn't run.
+
 ## 0.7.19 - 2026-06-18
 
 ### Added

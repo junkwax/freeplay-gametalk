@@ -3229,11 +3229,11 @@ mod tests {
 
     #[test]
     fn match_result_body_includes_match_index_and_escapes_session_id() {
-        let body = match_result_body("room\"\\\nend", 12, 2, 1);
+        let body = match_result_body("room\"\\\nend", 12, 2, 1, true);
 
         assert_eq!(
             body,
-            r#"{"session_id":"room\"\\\nend","match_index":12,"p1_score":2,"p2_score":1}"#
+            r#"{"session_id":"room\"\\\nend","match_index":12,"p1_score":2,"p2_score":1,"set_over":true}"#
         );
     }
 

@@ -564,41 +564,54 @@ pub fn normalize_email(raw: &str) -> Option<String> {
 }
 
 fn load_dotenv() {
-    let Some(path) = find_dotenv() else {
-        return;
-    };
-    let Ok(s) = std::fs::read_to_string(&path) else {
-        return;
-    };
-    for line in s.lines().filter_map(parse_env_line) {
-        if std::env::var_os(&line.0).is_none() {
-            std::env::set_var(line.0, line.1);
+    // Load candidates in precedence order (`.env` before `.env.public`); each
+    // key is only set if not already present, so a real environment variable
+    // wins over `.env`, which wins over `.env.public`.
+    for path in dotenv_candidates() {
+        let Ok(s) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        for line in s.lines().filter_map(parse_env_line) {
+            if std::env::var_os(&line.0).is_none() {
+                std::env::set_var(line.0, line.1);
+            }
         }
     }
 }
 
 fn dotenv_value(key: &str) -> Option<String> {
-    let path = find_dotenv()?;
-    let s = std::fs::read_to_string(&path).ok()?;
-    for (k, v) in s.lines().filter_map(parse_env_line) {
-        if k == key && !v.trim().is_empty() {
-            return Some(v);
+    // Scan candidate env files in precedence order and return the first that
+    // defines `key`. A user-written `.env` (gitignored) overrides per-key, and
+    // the bundled `.env.public` (checked in / shipped in the release) supplies
+    // the defaults for anything the user didn't set. The `.env.public` fallback
+    // is what makes stats + signaling "just work" in a dev checkout or a release
+    // archive with no local `.env` — without it FREEPLAY_STATS_URL/
+    // FREEPLAY_SIGNALING_URL come up unconfigured and online features (e.g. the
+    // username availability check) can't reach the service.
+    for path in dotenv_candidates() {
+        if let Ok(s) = std::fs::read_to_string(&path) {
+            for (k, v) in s.lines().filter_map(parse_env_line) {
+                if k == key && !v.trim().is_empty() {
+                    return Some(v);
+                }
+            }
         }
     }
     None
 }
 
-fn find_dotenv() -> Option<PathBuf> {
-    let cwd = PathBuf::from(".env");
-    if cwd.exists() {
-        return Some(cwd);
+fn dotenv_candidates() -> Vec<PathBuf> {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+    let mut out = Vec::new();
+    for name in [".env", ".env.public"] {
+        out.push(PathBuf::from(name));
+        if let Some(dir) = &exe_dir {
+            out.push(dir.join(name));
+        }
     }
-    let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
-    let beside_exe = exe_dir.join(".env");
-    if beside_exe.exists() {
-        return Some(beside_exe);
-    }
-    None
+    out
 }
 
 fn parse_env_line(line: &str) -> Option<(String, String)> {
