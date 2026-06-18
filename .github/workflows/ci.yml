@@ -7,10 +7,6 @@ on:
 permissions:
   contents: read
 
-env:
-  # Run JavaScript actions on Node 24 (Node 20 is deprecated on runners).
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   cargo-check:
     name: cargo check
@@ -68,7 +64,7 @@ jobs:
         run: .\package.ps1
 
       - name: Upload package artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: freeplay-gametalk-windows-${{ github.sha }}
           path: dist/freeplay-gametalk-v*.zip

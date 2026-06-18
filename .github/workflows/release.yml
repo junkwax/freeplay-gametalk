@@ -24,10 +24,6 @@ permissions:
 # this when you've validated a newer FBNeo locally.
 env:
   FBNEO_REF: master
-  # Force JavaScript actions onto Node 24. actions/cache has no major past v4,
-  # so this opt-in (rather than a version bump) is what silences the Node 20
-  # deprecation for it; checkout/upload-artifact are also bumped below.
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   version:
@@ -93,7 +89,7 @@ jobs:
 
       - name: Cache FBNeo libretro core
         id: fbneo-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             cores/fbneo_libretro.dll
@@ -123,7 +119,7 @@ jobs:
         run: .\package.ps1
 
       - name: Upload package artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: freeplay-gametalk-windows
           path: dist/freeplay-gametalk-v*.zip
@@ -209,7 +205,7 @@ jobs:
 
       - name: Cache FBNeo libretro core
         id: fbneo-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             cores/fbneo_libretro.so
@@ -227,7 +223,7 @@ jobs:
         run: ./package-linux.sh
 
       - name: Upload package artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: freeplay-gametalk-linux
           path: dist/freeplay-gametalk-v*-linux.tar.gz
@@ -322,7 +318,7 @@ jobs:
 
       - name: Cache FBNeo libretro core
         id: fbneo-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             cores/fbneo_libretro.dylib
@@ -342,7 +338,7 @@ jobs:
         run: ./package-macos.sh
 
       - name: Upload package artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: freeplay-gametalk-macos-${{ matrix.arch }}
           path: |
