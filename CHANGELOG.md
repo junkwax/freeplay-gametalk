@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.7.22 - 2026-06-19
+
+### Fixed
+
+- Replays, ghosts, and shared drones failed to download with a "gzip header"
+  error. The stats service serves these binary files with chunked transfer
+  encoding, which the client wasn't decoding — it fed the chunk framing
+  straight into the gzip decoder. The downloader now de-chunks first.
+
+### Changed
+
+- King-of-the-hill lobby matches are now FT1 (first to one game). The winner of
+  a single game stays and the queue rotates every game, instead of playing a
+  best-of set before rotating.
+
 ## 0.7.21 - 2026-06-19
 
 ### Changed

@@ -2957,11 +2957,13 @@ pub(crate) fn http_get_bytes(url: &str) -> Result<Vec<u8>, String> {
         return Err(format!("HTTP {}", status_line.trim()));
     }
 
-    // Skip headers, capturing Content-Length/Encoding if present. Stop at the blank
-    // line. We don't support chunked encoding here — the stats service
-    // returns a finite Content-Length for binary payloads.
+    // Skip headers, capturing Content-Length/Encoding/Transfer-Encoding. Stop
+    // at the blank line. Cloud Run serves these binary downloads with
+    // `Transfer-Encoding: chunked` and no Content-Length, so we must de-chunk
+    // before doing anything with the body.
     let mut content_length: Option<usize> = None;
     let mut content_encoding = String::new();
+    let mut chunked = false;
     loop {
         let mut line = String::new();
         reader.read_line(&mut line).map_err(|e| e.to_string())?;
@@ -2969,23 +2971,28 @@ pub(crate) fn http_get_bytes(url: &str) -> Result<Vec<u8>, String> {
         if trimmed.is_empty() {
             break;
         }
-        if trimmed.to_lowercase().starts_with("content-length:") {
+        let lower = trimmed.to_lowercase();
+        if lower.starts_with("content-length:") {
             content_length = trimmed
                 .split(':')
                 .nth(1)
                 .and_then(|s| s.trim().parse().ok());
-        } else if trimmed.to_lowercase().starts_with("content-encoding:") {
+        } else if lower.starts_with("content-encoding:") {
             content_encoding = trimmed
                 .split(':')
                 .nth(1)
                 .unwrap_or_default()
                 .trim()
                 .to_ascii_lowercase();
+        } else if lower.starts_with("transfer-encoding:") && lower.contains("chunked") {
+            chunked = true;
         }
     }
 
     let mut bytes = Vec::new();
-    if let Some(len) = content_length {
+    if chunked {
+        read_chunked_body(&mut reader, &mut bytes)?;
+    } else if let Some(len) = content_length {
         bytes.resize(len, 0);
         reader.read_exact(&mut bytes).map_err(|e| e.to_string())?;
     } else {
@@ -3001,6 +3008,42 @@ pub(crate) fn http_get_bytes(url: &str) -> Result<Vec<u8>, String> {
     } else {
         Ok(bytes)
     }
+}
+
+/// Decode an HTTP/1.1 `Transfer-Encoding: chunked` body into `out`. Each chunk
+/// is `<hex-size>[;ext]\r\n<data>\r\n`, terminated by a zero-size chunk followed
+/// by optional trailers and a final blank line.
+fn read_chunked_body<R: std::io::BufRead>(reader: &mut R, out: &mut Vec<u8>) -> Result<(), String> {
+    loop {
+        let mut size_line = String::new();
+        reader.read_line(&mut size_line).map_err(|e| e.to_string())?;
+        let size_hex = size_line.trim().split(';').next().unwrap_or("").trim();
+        if size_hex.is_empty() {
+            return Err("malformed chunk size".into());
+        }
+        let size = usize::from_str_radix(size_hex, 16)
+            .map_err(|e| format!("bad chunk size '{size_hex}': {e}"))?;
+        if size == 0 {
+            // Consume trailers (if any) up to the terminating blank line.
+            loop {
+                let mut trailer = String::new();
+                reader.read_line(&mut trailer).map_err(|e| e.to_string())?;
+                if trailer.trim().is_empty() {
+                    break;
+                }
+            }
+            break;
+        }
+        let start = out.len();
+        out.resize(start + size, 0);
+        reader
+            .read_exact(&mut out[start..])
+            .map_err(|e| e.to_string())?;
+        // Each chunk's data is followed by a CRLF separator.
+        let mut crlf = [0u8; 2];
+        reader.read_exact(&mut crlf).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 pub fn post_match_result(
@@ -3211,8 +3254,19 @@ fn json_f64(json: &str, key: &str) -> Option<f64> {
 mod tests {
     use super::{
         match_result_body, parse_live_matches, parse_lobbies, parse_lobby_snapshot,
-        parse_spectate_state, sha256_hex, LobbyMatchFormat,
+        parse_spectate_state, read_chunked_body, sha256_hex, LobbyMatchFormat,
     };
+
+    #[test]
+    fn read_chunked_body_reassembles_chunks() {
+        // "Wiki" + "pedia" + " in\r\n\r\nchunks." classic example, plus an
+        // empty terminating chunk with a trailer line.
+        let raw = b"4\r\nWiki\r\n5\r\npedia\r\nE\r\n in\r\n\r\nchunks.\r\n0\r\nX-Trailer: 1\r\n\r\n";
+        let mut out = Vec::new();
+        let mut reader = std::io::BufReader::new(&raw[..]);
+        read_chunked_body(&mut reader, &mut out).unwrap();
+        assert_eq!(out, b"Wikipedia in\r\n\r\nchunks.");
+    }
 
     #[test]
     fn sha256_hex_matches_known_vector() {

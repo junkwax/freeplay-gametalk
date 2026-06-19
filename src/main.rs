@@ -1547,6 +1547,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     const NETPLAY_MATCH_LIMIT: u32 = 3;
     const NETPLAY_SET_COMPLETE_GRACE_FRAMES: u32 = 55 * 25;
     let mut net_match_count: u32 = 0;
+    // Games needed to complete the current set. Default best-of for find-match /
+    // challenges; king-of-the-hill lobbies override this to 1 (FT1 — winner of a
+    // single game stays) so the queue rotates after every game.
+    let mut net_match_limit: u32 = NETPLAY_MATCH_LIMIT;
     let mut ranked_match_index: u32 = 0;
     let mut net_in_fight: bool = false;
     let mut net_set_complete_pending_frame: Option<u32> = None;
@@ -2769,6 +2773,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             }
                                             net_runtime = NetRuntime::default();
                                             net_match_count = 0;
+                                            // Non-lobby session (direct IP / join
+                                            // room) — always the default best-of.
+                                            net_match_limit = NETPLAY_MATCH_LIMIT;
                                             ranked_match_index = 0;
                                             net_in_fight = false;
                                             net_set_complete_pending_frame = None;
@@ -4931,14 +4938,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 ) && log_completed_net_match(
                                     net_match_count,
                                     &mut net_log,
-                                    NETPLAY_MATCH_LIMIT,
+                                    net_match_limit,
                                 ) {
                                     set_over = true;
                                     mark_net_set_complete_pending(
                                         &mut net_set_complete_pending_frame,
                                         net_frame_counter,
                                         &mut net_log,
-                                        NETPLAY_MATCH_LIMIT,
+                                        net_match_limit,
                                     );
                                 }
                             } else if ev == score::ScoreEvent::NewMatch
@@ -4946,7 +4953,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 && net_teardown_reason.is_none()
                             {
                                 net_teardown_reason = Some(format!(
-                                    "game limit reached ({NETPLAY_MATCH_LIMIT} games)"
+                                    "game limit reached ({net_match_limit} games)"
                                 ));
                             }
                             handle_score_event(
@@ -4980,14 +4987,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     ) && log_completed_net_match(
                                         net_match_count,
                                         &mut net_log,
-                                        NETPLAY_MATCH_LIMIT,
+                                        net_match_limit,
                                     ) {
                                         set_over = true;
                                         mark_net_set_complete_pending(
                                             &mut net_set_complete_pending_frame,
                                             net_frame_counter,
                                             &mut net_log,
-                                            NETPLAY_MATCH_LIMIT,
+                                            net_match_limit,
                                         );
                                     }
                                 }
@@ -5079,7 +5086,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ) && net_teardown_reason.is_none()
                         {
                             net_teardown_reason =
-                                Some(format!("game limit reached ({NETPLAY_MATCH_LIMIT} games)"));
+                                Some(format!("game limit reached ({net_match_limit} games)"));
                         }
 
                         net_frame_counter = net_frame_counter.wrapping_add(1);
@@ -5912,6 +5919,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 );
                                 net_runtime = NetRuntime::default();
                                 net_match_count = 0;
+                                // King-of-the-hill lobby matches are FT1 (winner
+                                // of one game stays); everything else uses the
+                                // default best-of. lobby_return is set before we
+                                // route into this Connected handler.
+                                net_match_limit = if lobby_return.is_some() {
+                                    1
+                                } else {
+                                    NETPLAY_MATCH_LIMIT
+                                };
                                 ranked_match_index = 0;
                                 net_in_fight = false;
                                 net_set_complete_pending_frame = None;
