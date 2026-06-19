@@ -1191,11 +1191,11 @@ pub fn draw_lab_assist_overlay(
         format!("F5  DUMMY {dummy_status}"),
         format!("F6  LOAD {reset_slot_status}"),
         format!("F7  SAVE {reset_slot_status}"),
-        "F8  LOAD GHOST".to_string(),
-        "F9  SAVE GHOST".to_string(),
+        "F8  LOAD DRONE".to_string(),
+        "F9  SAVE DRONE".to_string(),
         format!("F10 PUNISH {punish_status}"),
         "F11 HIDE HELP".to_string(),
-        "F12 VS GHOST".to_string(),
+        "F12 VS DRONE".to_string(),
     ];
     let hotkey_h = pad * 2 + header_gap + line_h * hotkeys.len() as i32;
     let rows: Vec<(String, String)> = history

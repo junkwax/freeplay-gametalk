@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.23 - 2026-06-19
+
+### Fixed
+
+- The Lab on-screen control overlay said "F8 LOAD GHOST / F9 SAVE GHOST /
+  F12 VS GHOST". Renamed to DRONE to match the rest of the Lab UI (the menu,
+  hints, and toasts all already say "drone").
+
 ## 0.7.22 - 2026-06-19
 
 ### Fixed
