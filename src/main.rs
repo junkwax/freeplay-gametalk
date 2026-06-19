@@ -2962,9 +2962,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             )
                                         });
                                     if let Some(did) = profile_id {
+                                        let display_name = discord_user
+                                            .clone()
+                                            .unwrap_or_else(|| cfg.player_username.clone());
                                         let (tx, rx) = std::sync::mpsc::channel();
                                         profile_rx = Some(rx);
-                                        matchmaking::fetch_profile(cfg.stats_url.clone(), did, tx);
+                                        matchmaking::fetch_profile(
+                                            cfg.stats_url.clone(),
+                                            did,
+                                            display_name,
+                                            tx,
+                                        );
                                     } else {
                                         state = AppState::Menu(MenuScreen::Profile {
                                             state: menu::ProfileScreenState::NotLoggedIn,
@@ -6606,6 +6614,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     history,
                                     avatar_rgba: None,
                                 };
+                                profile_rx = None;
+                            }
+                            Ok(matchmaking::ProfileUpdate::Empty { username }) => {
+                                *state = menu::ProfileScreenState::Empty { username };
                                 profile_rx = None;
                             }
                             Ok(matchmaking::ProfileUpdate::Error(msg)) => {

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.24 - 2026-06-19
+
+### Fixed
+
+- The Profile screen was effectively blank before your first match. It now
+  shows a proper empty profile — your claimed name, "Unranked 0 - 0", and a
+  note that your rating, record, and recent games appear after your first
+  online match — instead of a bare error line.
+
 ## 0.7.23 - 2026-06-19
 
 ### Fixed

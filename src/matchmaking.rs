@@ -1820,6 +1820,12 @@ pub enum ProfileUpdate {
         profile: ProfileData,
         history: Vec<HistoryRow>,
     },
+    /// No `players` row yet (404) — the identity exists but hasn't played a
+    /// ranked match. Carries the claimed name so the screen can show a proper
+    /// empty profile rather than a bare error line.
+    Empty {
+        username: String,
+    },
     Error(String),
 }
 
@@ -1860,7 +1866,12 @@ pub enum PublicReplayUpdate {
 /// Fire-and-forget profile fetcher. Spawns a thread, GETs both
 /// `/player/:id` and `/player/:id/history`, and pushes a `ProfileUpdate`
 /// down `tx`. The main loop polls `tx` like it does for matchmaking.
-pub fn fetch_profile(stats_url: String, discord_id: String, tx: Sender<ProfileUpdate>) {
+pub fn fetch_profile(
+    stats_url: String,
+    discord_id: String,
+    username: String,
+    tx: Sender<ProfileUpdate>,
+) {
     std::thread::spawn(move || {
         if stats_url.is_empty() {
             let _ = tx.send(ProfileUpdate::Error("stats_url not configured".into()));
@@ -1880,14 +1891,13 @@ pub fn fetch_profile(stats_url: String, discord_id: String, tx: Sender<ProfileUp
                 }
             },
             Err(e) => {
-                // 404 is the common case — a freshly-OAuth'd user with no matches.
-                // Server returns 404 with no body; we surface a friendlier message.
-                let msg = if e.contains("404") {
-                    "No matches recorded yet — play one to appear here.".to_string()
+                // 404 is the common case — a freshly-named user with no matches.
+                // Server returns 404 with no body; show a proper empty profile.
+                if e.contains("404") {
+                    let _ = tx.send(ProfileUpdate::Empty { username });
                 } else {
-                    format!("Profile fetch failed: {e}")
-                };
-                let _ = tx.send(ProfileUpdate::Error(msg));
+                    let _ = tx.send(ProfileUpdate::Error(format!("Profile fetch failed: {e}")));
+                }
                 return;
             }
         };

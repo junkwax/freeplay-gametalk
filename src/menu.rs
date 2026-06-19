@@ -359,7 +359,10 @@ pub enum ProfileScreenState {
     NotLoggedIn,
     /// Background fetch in flight.
     Loading,
-    /// `/player/:id` returned 404 (no matches yet) or the network failed.
+    /// Identity exists but no ranked matches yet (404). Shows an empty profile
+    /// for `username` instead of a bare error line.
+    Empty { username: String },
+    /// The network failed (non-404).
     Error(String),
     /// Profile + (possibly empty) recent-matches list.
     Loaded {
@@ -605,6 +608,13 @@ pub fn test_state(name: &str) -> Option<AppState> {
             }))
         }
         "main" => return Some(AppState::Menu(MenuScreen::Main { cursor: 0 })),
+        "profile" => {
+            return Some(AppState::Menu(MenuScreen::Profile {
+                state: ProfileScreenState::Empty {
+                    username: crate::config::default_username(),
+                },
+            }))
+        }
         "name" => {
             return Some(AppState::Menu(MenuScreen::MatchUsername {
                 value: crate::config::default_username(),
@@ -4315,6 +4325,39 @@ fn draw_profile(
                 body,
                 Color::RGB(255, 220, 120),
             )?;
+        }
+        ProfileScreenState::Empty { username } => {
+            let content_x = (w / 12).max(42);
+            let content_w = w - content_x * 2;
+            let top_h = 84.max(60 * small as i32);
+            draw_panel(canvas, content_x, y, content_w, top_h, HUB_PANEL)?;
+            font.draw(
+                canvas,
+                username,
+                content_x + 18,
+                y + 14,
+                body,
+                Color::RGB(255, 230, 120),
+            )?;
+            font.draw(
+                canvas,
+                "Unranked  ·  0 - 0",
+                content_x + 18,
+                y + 16 + 18 * body as i32,
+                small,
+                Color::RGB(170, 176, 196),
+            )?;
+            y += top_h + 26;
+            let lines = [
+                "No ranked matches yet.",
+                "Play your first online match and your rating,",
+                "record, and recent games show up here.",
+            ];
+            for line in lines {
+                let tw = font.text_width_exact(line, small);
+                font.draw(canvas, line, cx - tw / 2, y, small, Color::RGB(200, 205, 220))?;
+                y += 22 * small as i32;
+            }
         }
         ProfileScreenState::Error(e) => {
             let tw = font.text_width_exact(e, small);
