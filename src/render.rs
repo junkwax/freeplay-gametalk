@@ -1405,11 +1405,13 @@ pub fn draw_replay_review_overlay(
     let controls_1 = "SPACE/START PAUSE   . / A STEP   F/GUIDE FILTER";
     let controls_2 = "UP/DOWN SPEED   M/RS BOOKMARK   DEL/LS REMOVE";
     let controls_3 = "LEFT/RIGHT +/-5S   PGUP/PGDN/LB/RB EVENT   I/O X/Y CLIP";
+    let controls_4 = "1 TAKE OVER P1     2 TAKE OVER P2";
     let input_line = fit_text_exact(font, &input_line, scale, timeline_w);
     let clip_line = fit_text_exact(font, &clip_line, scale, timeline_w);
     let controls_1 = fit_text_exact(font, controls_1, scale, timeline_w);
     let controls_2 = fit_text_exact(font, controls_2, scale, timeline_w);
     let controls_3 = fit_text_exact(font, controls_3, scale, timeline_w);
+    let controls_4 = fit_text_exact(font, controls_4, scale, timeline_w);
     font.draw(
         canvas,
         &input_line,
@@ -1449,6 +1451,14 @@ pub fn draw_replay_review_overlay(
         y + 128,
         scale,
         Color::RGBA(150, 165, 195, 190),
+    )?;
+    font.draw(
+        canvas,
+        &controls_4,
+        x + pad,
+        y + 146,
+        scale,
+        Color::RGBA(255, 210, 120, 210),
     )?;
 
     Ok(())
@@ -2012,4 +2022,61 @@ pub fn capture_frame_thumbnail() -> Option<Vec<u8>> {
         }
         Some(out)
     }
+}
+
+/// Overlay for replay takeover: a 3-2-1 countdown, the active control banner +
+/// timer, or the "time's up" prompt. Drawn over the live emulator frame.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_takeover_overlay(
+    canvas: &mut Canvas<Window>,
+    font: &mut Font,
+    w: i32,
+    h: i32,
+    human_p1: bool,
+    countdown_num: Option<u32>,
+    secs_left: Option<u32>,
+    done: bool,
+) -> Result<(), String> {
+    let side = if human_p1 { "P1" } else { "P2" };
+    let big = (h / 130).max(4) as u32;
+    let mid = (h / 320).max(2) as u32;
+    let small = (h / 540).max(1) as u32;
+
+    if let Some(n) = countdown_num {
+        // Dim the frame and show a big centered count.
+        canvas.set_draw_color(Color::RGBA(0, 0, 0, 120));
+        let _ = canvas.fill_rect(Rect::new(0, 0, w as u32, h as u32));
+        let label = format!("TAKING OVER {side}");
+        let lw = font.text_width_exact(&label, mid);
+        font.draw(canvas, &label, (w - lw) / 2, h / 2 - 60, mid, Color::RGB(255, 210, 90))?;
+        let num = n.to_string();
+        let nw = font.text_width_exact(&num, big);
+        font.draw(canvas, &num, (w - nw) / 2, h / 2 - 10, big, Color::RGB(255, 255, 255))?;
+        return Ok(());
+    }
+
+    if done {
+        canvas.set_draw_color(Color::RGBA(0, 0, 0, 140));
+        let _ = canvas.fill_rect(Rect::new(0, 0, w as u32, h as u32));
+        let msg = "TIME!";
+        let mw = font.text_width_exact(msg, big);
+        font.draw(canvas, msg, (w - mw) / 2, h / 2 - 30, big, Color::RGB(255, 230, 120))?;
+        let hint = "R Retry     ESC Back to replay";
+        let hw = font.text_width_exact(hint, small);
+        font.draw(canvas, hint, (w - hw) / 2, h / 2 + 30, small, Color::RGB(220, 225, 240))?;
+        return Ok(());
+    }
+
+    // Active: compact banner top-center + timer, hint along the bottom.
+    let secs = secs_left.unwrap_or(0);
+    let banner = format!("TAKEOVER  {side}   {secs}s");
+    let bw = font.text_width_exact(&banner, mid);
+    let bx = (w - bw) / 2;
+    canvas.set_draw_color(Color::RGBA(10, 12, 20, 200));
+    let _ = canvas.fill_rect(Rect::new(bx - 12, 8, (bw + 24) as u32, (20 * mid as i32 + 8) as u32));
+    font.draw(canvas, &banner, bx, 12, mid, Color::RGB(255, 210, 90))?;
+    let hint = "R Retry     ESC Back to replay";
+    let hw = font.text_width_exact(hint, small);
+    font.draw(canvas, hint, (w - hw) / 2, h - 30, small, Color::RGB(190, 196, 216))?;
+    Ok(())
 }

@@ -83,6 +83,35 @@ use std::time::{Duration, Instant};
 
 const CHAT_MAX_LINES: usize = 8;
 
+/// Replay "takeover": from the replay viewer, bookmark the current frame and
+/// take control of one fighter while the other plays back its recorded inputs,
+/// modern-fighting-game style. Retry reloads the moment to try something else.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TakeoverPhase {
+    /// 3-2-1 intro, frozen on the moment.
+    Countdown,
+    /// Human drives their side; the opponent replays recorded inputs.
+    Active,
+    /// Window elapsed (or recording ran out) — frozen, waiting for retry/exit.
+    Done,
+}
+
+struct Takeover {
+    /// Savestate captured at the takeover frame; reloaded on retry/exit.
+    save: Vec<u8>,
+    /// Port the human controls.
+    human: input::Player,
+    /// Replay cursor at the takeover frame, to rewind on retry.
+    start_cursor: usize,
+    phase: TakeoverPhase,
+    countdown: u32,
+    frames_left: u32,
+}
+
+/// ~3s of 3-2-1 at MK2's ~55 Hz, then a ~20s control window.
+const TAKEOVER_COUNTDOWN_FRAMES: u32 = 165;
+const TAKEOVER_ACTIVE_FRAMES: u32 = 20 * 55;
+
 fn adopt_packaged_working_dir() {
     let Ok(exe) = std::env::current_exe() else {
         return;
@@ -489,6 +518,54 @@ fn replay_names(
         (local, peer)
     } else {
         (peer, local)
+    }
+}
+
+/// Enter replay takeover at the current review frame: snapshot the emulator
+/// state and arm the 3-2-1 countdown for `human`'s side.
+fn start_replay_takeover(
+    core: &Option<retro::Core>,
+    playback: &Option<match_replay::Playback>,
+    takeover: &mut Option<Takeover>,
+    paused: &mut bool,
+    human: input::Player,
+    toast: &mut Option<(String, Instant)>,
+) {
+    if let (Some(c), Some(pb)) = (core.as_ref(), playback.as_ref()) {
+        let Some(save) = c.save_state() else {
+            *toast = Some((
+                "Couldn't snapshot this moment".into(),
+                Instant::now() + Duration::from_millis(1600),
+            ));
+            return;
+        };
+        *takeover = Some(Takeover {
+            save,
+            human,
+            start_cursor: pb.current_frame(),
+            phase: TakeoverPhase::Countdown,
+            countdown: TAKEOVER_COUNTDOWN_FRAMES,
+            frames_left: TAKEOVER_ACTIVE_FRAMES,
+        });
+        *paused = true;
+        let side = if human == input::Player::P1 { "P1" } else { "P2" };
+        *toast = Some((
+            format!("Taking over {side}"),
+            Instant::now() + Duration::from_millis(1400),
+        ));
+    }
+}
+
+/// Reload the takeover moment (retry or exit): restore the savestate and rewind
+/// the replay cursor to the takeover frame.
+fn reload_takeover_moment(
+    core: &Option<retro::Core>,
+    playback: &mut Option<match_replay::Playback>,
+    tk: &Takeover,
+) {
+    if let (Some(c), Some(pb)) = (core.as_ref(), playback.as_mut()) {
+        c.load_state(&tk.save);
+        pb.set_cursor(tk.start_cursor);
     }
 }
 
@@ -1481,6 +1558,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut match_replay_recording: Option<match_replay::Recording> = None;
     let mut match_replay_playback: Option<match_replay::Playback> = None;
     let mut replay_review_paused = false;
+    let mut replay_takeover: Option<Takeover> = None;
     let mut replay_review_speed = REPLAY_DEFAULT_SPEED;
     let mut replay_review_tick: u64 = 0;
     let mut replay_event_filter = match_replay::ReplayEventFilter::All;
@@ -3854,6 +3932,92 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 _ if state == AppState::Playing => match event {
+                    // ── Replay takeover ─────────────────────────────────────
+                    // Exit takeover → back to the paused replay at the moment.
+                    Event::KeyDown {
+                        keycode: Some(Keycode::Escape),
+                        repeat: false,
+                        ..
+                    } if replay_takeover.is_some() => {
+                        if let Some(tk) = replay_takeover.take() {
+                            reload_takeover_moment(&core, &mut match_replay_playback, &tk);
+                        }
+                        replay_review_paused = true;
+                        input::clear_all_inputs();
+                        toast = Some((
+                            "Exited takeover".into(),
+                            Instant::now() + Duration::from_millis(1400),
+                        ));
+                    }
+                    Event::ControllerButtonDown {
+                        button: sdl2::controller::Button::B | sdl2::controller::Button::Back,
+                        ..
+                    } if replay_takeover.is_some() => {
+                        if let Some(tk) = replay_takeover.take() {
+                            reload_takeover_moment(&core, &mut match_replay_playback, &tk);
+                        }
+                        replay_review_paused = true;
+                        input::clear_all_inputs();
+                    }
+                    // Retry the same moment.
+                    Event::KeyDown {
+                        keycode: Some(Keycode::R),
+                        repeat: false,
+                        ..
+                    } if replay_takeover.is_some() => {
+                        if let Some(tk) = replay_takeover.as_ref() {
+                            reload_takeover_moment(&core, &mut match_replay_playback, tk);
+                        }
+                        if let Some(tk) = replay_takeover.as_mut() {
+                            tk.phase = TakeoverPhase::Countdown;
+                            tk.countdown = TAKEOVER_COUNTDOWN_FRAMES;
+                            tk.frames_left = TAKEOVER_ACTIVE_FRAMES;
+                        }
+                        input::clear_all_inputs();
+                    }
+                    Event::ControllerButtonDown {
+                        button: sdl2::controller::Button::Start | sdl2::controller::Button::A,
+                        ..
+                    } if replay_takeover.is_some() => {
+                        if let Some(tk) = replay_takeover.as_ref() {
+                            reload_takeover_moment(&core, &mut match_replay_playback, tk);
+                        }
+                        if let Some(tk) = replay_takeover.as_mut() {
+                            tk.phase = TakeoverPhase::Countdown;
+                            tk.countdown = TAKEOVER_COUNTDOWN_FRAMES;
+                            tk.frames_left = TAKEOVER_ACTIVE_FRAMES;
+                        }
+                        input::clear_all_inputs();
+                    }
+                    // Enter takeover from the replay viewer: 1 = P1, 2 = P2.
+                    Event::KeyDown {
+                        keycode: Some(Keycode::Num1 | Keycode::Kp1),
+                        repeat: false,
+                        ..
+                    } if match_replay_playback.is_some() && replay_takeover.is_none() => {
+                        start_replay_takeover(
+                            &core,
+                            &match_replay_playback,
+                            &mut replay_takeover,
+                            &mut replay_review_paused,
+                            input::Player::P1,
+                            &mut toast,
+                        );
+                    }
+                    Event::KeyDown {
+                        keycode: Some(Keycode::Num2 | Keycode::Kp2),
+                        repeat: false,
+                        ..
+                    } if match_replay_playback.is_some() && replay_takeover.is_none() => {
+                        start_replay_takeover(
+                            &core,
+                            &match_replay_playback,
+                            &mut replay_takeover,
+                            &mut replay_review_paused,
+                            input::Player::P2,
+                            &mut toast,
+                        );
+                    }
                     Event::KeyDown {
                         keycode: Some(Keycode::Escape),
                         repeat: false,
@@ -5158,6 +5322,52 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                             }
                         }
+                    } else if replay_takeover.is_some() {
+                        if match_replay_playback.is_none() {
+                            // The underlying replay went away — bail out cleanly.
+                            replay_takeover = None;
+                            input::clear_all_inputs();
+                        } else if let (Some(tk), Some(pb)) =
+                            (replay_takeover.as_mut(), match_replay_playback.as_mut())
+                        {
+                            match tk.phase {
+                                TakeoverPhase::Countdown => {
+                                    // Frozen on the moment — neutral inputs, no
+                                    // core advance — while 3-2-1 counts down.
+                                    input::apply_snapshot(input::Player::P1, 0);
+                                    input::apply_snapshot(input::Player::P2, 0);
+                                    if tk.countdown > 0 {
+                                        tk.countdown -= 1;
+                                    } else {
+                                        tk.phase = TakeoverPhase::Active;
+                                    }
+                                }
+                                TakeoverPhase::Active => {
+                                    // Human drives their port from live input;
+                                    // the opponent replays its recorded inputs.
+                                    let human_bits = input::snapshot_player(input::Player::P1);
+                                    input::apply_snapshot(tk.human, human_bits);
+                                    if pb.inject_ai_side(tk.human) {
+                                        unsafe {
+                                            (c.run)();
+                                        }
+                                        if tk.frames_left > 0 {
+                                            tk.frames_left -= 1;
+                                        }
+                                        if tk.frames_left == 0 {
+                                            tk.phase = TakeoverPhase::Done;
+                                        }
+                                    } else {
+                                        tk.phase = TakeoverPhase::Done;
+                                    }
+                                }
+                                TakeoverPhase::Done => {
+                                    input::apply_snapshot(input::Player::P1, 0);
+                                    input::apply_snapshot(input::Player::P2, 0);
+                                    // Frozen — waiting for R (retry) or Esc.
+                                }
+                            }
+                        }
                     } else if let Some(pb) = match_replay_playback.as_mut() {
                         if replay_review_paused {
                             input::clear_all_inputs();
@@ -5744,7 +5954,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     canvas.set_logical_size(LOGICAL_W as u32, LOGICAL_H as u32)?;
                 }
-                if let Some(pb) = match_replay_playback.as_ref() {
+                if let Some(tk) = replay_takeover.as_ref() {
+                    canvas.set_logical_size(0, 0)?;
+                    let (win_w, win_h) = canvas.output_size().unwrap_or((1200, 762));
+                    let countdown_num = if tk.phase == TakeoverPhase::Countdown {
+                        Some(tk.countdown / 55 + 1)
+                    } else {
+                        None
+                    };
+                    let secs_left = if tk.phase == TakeoverPhase::Active {
+                        Some((tk.frames_left + 54) / 55)
+                    } else {
+                        None
+                    };
+                    render::draw_takeover_overlay(
+                        &mut canvas,
+                        &mut font,
+                        win_w as i32,
+                        win_h as i32,
+                        tk.human == input::Player::P1,
+                        countdown_num,
+                        secs_left,
+                        tk.phase == TakeoverPhase::Done,
+                    )
+                    .map_err(|e| format!("takeover overlay: {e}"))?;
+                    canvas.set_logical_size(LOGICAL_W as u32, LOGICAL_H as u32)?;
+                } else if let Some(pb) = match_replay_playback.as_ref() {
                     canvas.set_logical_size(0, 0)?;
                     let (win_w, win_h) = canvas.output_size().unwrap_or((1200, 762));
                     draw_replay_review_overlay(

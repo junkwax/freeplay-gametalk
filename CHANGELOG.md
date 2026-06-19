@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.26 - 2026-06-19
+
+### Added
+
+- Replay takeover. While reviewing a replay, press **1** to take over P1 or
+  **2** to take over P2 from the current moment. The game reloads that exact
+  frame, counts down 3-2-1, then hands you that fighter for ~20 seconds while
+  the opponent replays its recorded inputs — so you can practice a situation,
+  try a different response, and retry. **R** reloads the moment to try again;
+  **ESC** returns to the replay. (Controller: B back, Start/A retry.)
+
 ## 0.7.25 - 2026-06-19
 
 ### Added

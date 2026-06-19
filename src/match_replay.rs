@@ -502,6 +502,28 @@ impl Playback {
         }
     }
 
+    /// Move the playback cursor without touching the core. Used by takeover to
+    /// rewind the recording to the takeover frame on retry.
+    pub fn set_cursor(&mut self, frame: usize) {
+        self.cursor = frame.min(self.inputs.len());
+    }
+
+    /// Takeover helper: apply the recorded input for the port the human is NOT
+    /// controlling (so the opponent plays back exactly as recorded), advance the
+    /// cursor, and return false when the recording is exhausted. The human-
+    /// controlled port is left for the caller to drive from live input.
+    pub fn inject_ai_side(&mut self, human: Player) -> bool {
+        let Some(frame) = self.inputs.get(self.cursor).copied() else {
+            return false;
+        };
+        match human {
+            Player::P1 => input::apply_snapshot(Player::P2, frame[1]),
+            Player::P2 => input::apply_snapshot(Player::P1, frame[0]),
+        }
+        self.cursor += 1;
+        true
+    }
+
     pub fn markers(&self) -> &[ReplayMarker] {
         &self.markers
     }
