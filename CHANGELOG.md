@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.7.21 - 2026-06-19
+
+### Changed
+
+- Name claiming is now a real reservation. When you claim a name it's
+  atomically reserved to you in a global registry (case-insensitive), so two
+  new players can no longer end up with the same name. Re-claiming your own
+  name just re-affirms it, and changing your name frees the old one.
+
+### Fixed
+
+- Crash and disconnect reports now upload even when you're not signed in.
+  Incidents are attributed to your Discord account when available and otherwise
+  to a stable per-install id, so problems get captured without depending on
+  players being logged in or shipping logs.
+
 ## 0.7.20 - 2026-06-18
 
 ### Added

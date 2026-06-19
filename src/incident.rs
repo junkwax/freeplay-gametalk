@@ -13,6 +13,23 @@
 
 use crate::matchmaking;
 use crate::version;
+use std::sync::Mutex;
+
+/// Stable per-install id, set once at startup from `cfg.guest_device_id`. We
+/// keep it here (rather than reading the live GUEST_PROFILE, which is only set
+/// once the player goes online) so a crash on the main menu — before any login
+/// or online action — still attributes the incident to an install.
+static GUEST_DEVICE_ID: Mutex<Option<String>> = Mutex::new(None);
+
+pub fn set_guest_device_id(id: String) {
+    if let Ok(mut g) = GUEST_DEVICE_ID.lock() {
+        *g = if id.trim().is_empty() { None } else { Some(id) };
+    }
+}
+
+fn guest_device_id() -> Option<String> {
+    GUEST_DEVICE_ID.lock().ok().and_then(|g| g.clone())
+}
 
 /// Cap each log payload at 256 KB. Matches the server-side MAX_LOG_BYTES.
 /// We keep the most recent slice — tails of logs are where the failure
@@ -74,18 +91,12 @@ impl Incident {
 /// to menu". If the upload fails (or there's no JWT cached because the
 /// failure happened pre-login), we log it to the console and move on.
 pub fn submit(incident: Incident) {
-    let token = match matchmaking::current_token() {
-        Some(t) => t,
-        None => {
-            println!(
-                "[incident] not signed in, skipping upload of {:?}",
-                incident.kind
-            );
-            return;
-        }
-    };
+    // Upload signed-in when we can (the server attributes to a Discord id), but
+    // fall back to an anonymous report keyed by guest_device_id otherwise — we
+    // can't count on players being logged in when something breaks.
+    let token = matchmaking::current_token();
     std::thread::spawn(move || {
-        if let Err(e) = submit_blocking(&incident, &token) {
+        if let Err(e) = submit_blocking(&incident, token.as_deref()) {
             println!("[incident] upload failed for kind={}: {e}", incident.kind);
         } else {
             println!("[incident] uploaded kind={}", incident.kind);
@@ -97,18 +108,15 @@ pub fn submit(incident: Incident) {
 /// process immediately after the hook returns, so the normal background
 /// thread path may not get CPU time to finish.
 pub fn submit_now(incident: &Incident) {
-    let Some(token) = matchmaking::current_token() else {
-        println!("[incident] not signed in, skipping panic upload");
-        return;
-    };
-    if let Err(e) = submit_blocking(incident, &token) {
+    let token = matchmaking::current_token();
+    if let Err(e) = submit_blocking(incident, token.as_deref()) {
         println!("[incident] panic upload failed: {e}");
     } else {
         println!("[incident] uploaded panic");
     }
 }
 
-fn submit_blocking(incident: &Incident, token: &str) -> Result<(), String> {
+fn submit_blocking(incident: &Incident, token: Option<&str>) -> Result<(), String> {
     let base_url = match crate::config::env_value("FREEPLAY_SIGNALING_URL")
         .or_else(crate::config::signaling_url)
     {
@@ -140,6 +148,7 @@ fn build_body(i: &Incident) -> String {
     push_str_field(&mut s, "app_version", version::VERSION, false);
     push_str_field(&mut s, "build_date", version::BUILD_DATE, false);
     push_str_field(&mut s, "git_hash", version::GIT_HASH, false);
+    push_opt_str(&mut s, "guest_device_id", guest_device_id().as_deref());
     push_opt_str(&mut s, "rom_hash", i.rom_hash.as_deref());
     if let Some(p1) = i.p1_score {
         s.push_str(&format!(",\"p1_score\":{}", p1));
@@ -271,7 +280,7 @@ mod tests {
     }
 }
 
-fn http_post_json_with_auth(url: &str, body: &str, token: &str) -> Result<(), String> {
+fn http_post_json_with_auth(url: &str, body: &str, token: Option<&str>) -> Result<(), String> {
     use std::io::{BufRead, BufReader, Write};
     let parsed = url.strip_prefix("https://").ok_or("only HTTPS")?;
     let slash = parsed.find('/').unwrap_or(parsed.len());
@@ -288,8 +297,12 @@ fn http_post_json_with_auth(url: &str, body: &str, token: &str) -> Result<(), St
         .connect(host, tcp)
         .map_err(|e| format!("TLS: {e}"))?;
 
+    let auth_line = match token {
+        Some(t) => format!("Authorization: Bearer {t}\r\n"),
+        None => String::new(),
+    };
     let req = format!(
-        "POST {path} HTTP/1.1\r\nHost: {host}\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "POST {path} HTTP/1.1\r\nHost: {host}\r\n{auth_line}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     );
     tls.write_all(req.as_bytes())

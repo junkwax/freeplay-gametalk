@@ -1433,6 +1433,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     config::set_signaling_url(cfg.signaling_url.clone());
     crate::rpc::set_discord_client_id(cfg.discord_client_id.clone());
+    incident::set_guest_device_id(cfg.guest_device_id.clone());
     install_panic_incident_hook();
     let mut state = AppState::default();
     // Debug: `--test-screen online:chat` (or :players/:lobbies/:watch/:play)
@@ -2845,9 +2846,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             username_check_rx = Some(rx);
                                             username_check_silent = false;
                                             username_check_started_at = Some(Instant::now());
+                                            // Reserve under the player's stable
+                                            // identity: their Discord id if
+                                            // signed in, otherwise the per-
+                                            // install guest_device_id.
+                                            let owner_id = discord_id
+                                                .clone()
+                                                .unwrap_or_else(|| cfg.guest_device_id.clone());
                                             matchmaking::check_username_available(
                                                 cfg.stats_url.clone(),
                                                 username.clone(),
+                                                owner_id,
                                                 tx,
                                             );
                                             state = AppState::Menu(MenuScreen::MatchUsername {

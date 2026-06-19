@@ -287,10 +287,11 @@ pub fn start_guest(tx: Sender<Update>) {
 pub fn check_username_available(
     stats_url: String,
     username: String,
+    owner_id: String,
     tx: Sender<UsernameCheckUpdate>,
 ) {
     std::thread::spawn(move || {
-        let result = check_username_available_inner(&stats_url, &username);
+        let result = claim_username_inner(&stats_url, &username, &owner_id);
         let update = match result {
             Ok(true) => UsernameCheckUpdate::Available(username),
             Ok(false) => UsernameCheckUpdate::Taken(username),
@@ -1060,7 +1061,11 @@ fn guest_login() -> Result<String, String> {
     json_str(&resp, "token").ok_or_else(|| format!("guest auth missing token: {resp}"))
 }
 
-fn check_username_available_inner(stats_url: &str, username: &str) -> Result<bool, String> {
+/// Atomically claim `username` for `owner_id` via the stats name registry.
+/// Returns Ok(true) when the name is now ours (newly claimed or already owned)
+/// and Ok(false) when it's held by someone else. This both checks AND reserves,
+/// so two clients racing for the same fresh name can't both win.
+fn claim_username_inner(stats_url: &str, username: &str, owner_id: &str) -> Result<bool, String> {
     let username = crate::config::sanitize_username(username).ok_or_else(|| {
         format!(
             "Username must be 2-{} letters/numbers",
@@ -1071,23 +1076,20 @@ fn check_username_available_inner(stats_url: &str, username: &str) -> Result<boo
     if stats_url.is_empty() {
         return Err("Stats service is not configured; cannot verify username".into());
     }
-    let guest_id = format!("guest-name:{}", sha256_hex(username.as_bytes()));
-    let url = format!("{stats_url}/player/{guest_id}");
-    let (status, body) = http_get_no_auth_status(&url)?;
-    match status {
-        200 => Ok(false),
-        404 => Ok(true),
-        0 => Err("Stats service returned an invalid response".into()),
-        500..=599 => Err(format!(
-            "Stats service unavailable while checking username: {status}"
-        )),
-        _ => {
-            if body.trim().is_empty() {
-                Err(format!("Username check failed with HTTP {status}"))
-            } else {
-                Err(format!("Username check failed with HTTP {status}: {body}"))
-            }
-        }
+    if owner_id.trim().is_empty() {
+        return Err("No player identity available to claim a name".into());
+    }
+    let url = format!("{stats_url}/name/claim");
+    let body = format!(
+        r#"{{"name":"{}","owner_id":"{}"}}"#,
+        json_escape(&username),
+        json_escape(owner_id)
+    );
+    let resp = http_post_json_no_auth(&url, &body)?;
+    match json_str(&resp, "status").as_deref() {
+        Some("claimed") | Some("owned") => Ok(true),
+        Some("taken") => Ok(false),
+        _ => Err(format!("Unexpected name-claim response: {resp}")),
     }
 }
 
@@ -1554,13 +1556,6 @@ fn http_get_no_auth(url: &str) -> Result<String, String> {
     let stream = tls_connect(&host)?;
     let req = format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
     send_recv_https(stream, &req)
-}
-
-fn http_get_no_auth_status(url: &str) -> Result<(u16, String), String> {
-    let (host, path) = parse_url(url)?;
-    let stream = tls_connect(&host)?;
-    let req = format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
-    send_recv_https_status(stream, &req)
 }
 
 fn parse_url(url: &str) -> Result<(String, String), String> {
