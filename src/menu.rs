@@ -5,7 +5,7 @@ use crate::config::{
 use crate::font::Font;
 use crate::input::{is_action_active, Action, Binding, Bindings, Player, PlayerBindings};
 use crate::matchmaking::{
-    HistoryRow, IncomingChallenge, LeaderboardRow, LiveMatch, LobbyChatMessage,
+    HistoryRow, IncomingChallenge, LeaderboardRow, LiveMatch, LobbyChatMessage, LobbyCurrent,
     LobbyMemberInfo, LobbyUser, LobbyView, ProfileData, RemoteGhostMeta,
 };
 use crate::version;
@@ -181,6 +181,9 @@ pub enum MenuScreen {
         id: String,
         view: Option<LobbyView>,
         status: String,
+        /// Latest match thumbnail (RGBA, width, height), streamed from the two
+        /// active players. `None` until the first frame arrives.
+        thumb: Option<(Vec<u8>, u32, u32)>,
     },
 }
 
@@ -639,18 +642,32 @@ pub fn test_state(name: &str) -> Option<AppState> {
                         LobbyMemberInfo { username: "kunglao".into(), rating: None, queued: false, in_match: false },
                     ],
                     queue: vec!["Reptile99".into(), "You".into()],
-                    current: None,
-                    ready_check: Some(crate::matchmaking::LobbyReadyCheck {
-                        champion_username: "ScorpionKiller".into(),
-                        challenger_username: "You".into(),
-                        seconds_left: 7,
-                        you_are_challenger: true,
+                    current: Some(LobbyCurrent {
+                        host_username: "ScorpionKiller".into(),
+                        join_username: "SubZeroFan".into(),
+                        host_session: "s1".into(),
+                        join_session: "s2".into(),
                     }),
+                    ready_check: None,
                     your_position: Some(0),
                     your_queued: true,
                     your_session: None,
                     your_turn: false,
                 }),
+                thumb: {
+                    // Gradient stand-in so the thumbnail panel can be checked.
+                    let (tw, th) = (crate::render::LOBBY_THUMB_W, crate::render::LOBBY_THUMB_H);
+                    let mut rgba = Vec::with_capacity((tw * th * 4) as usize);
+                    for yy in 0..th {
+                        for xx in 0..tw {
+                            rgba.push((xx * 255 / tw) as u8);
+                            rgba.push((yy * 255 / th) as u8);
+                            rgba.push(150);
+                            rgba.push(255);
+                        }
+                    }
+                    Some((rgba, tw, th))
+                },
             }));
         }
         _ => {}
@@ -1787,9 +1804,9 @@ pub fn draw(
         AppState::Menu(MenuScreen::Spectate { session_id, status }) => {
             draw_spectate(canvas, font, session_id, status, w, h)?
         }
-        AppState::Menu(MenuScreen::Lobby { view, status, .. }) => {
-            draw_lobby(canvas, font, view.as_ref(), status, w, h)?
-        }
+        AppState::Menu(MenuScreen::Lobby {
+            view, status, thumb, ..
+        }) => draw_lobby(canvas, font, view.as_ref(), status, thumb.as_ref(), w, h)?,
         AppState::Rebinding {
             action,
             player,
@@ -1899,6 +1916,7 @@ fn draw_lobby(
     font: &mut Font,
     view: Option<&LobbyView>,
     status: &str,
+    thumb: Option<&(Vec<u8>, u32, u32)>,
     w: i32,
     h: i32,
 ) -> Result<(), String> {
@@ -1958,24 +1976,67 @@ fn draw_lobby(
         font.draw(canvas, &head, pad + 12, y + 8, small, HUB_ACCENT)?;
         let line = format!("{}  vs  {}", rc.champion_username, rc.challenger_username);
         font.draw(canvas, &line, pad + 12, y + 10 + 14 * small as i32, body, HUB_TEXT)?;
-    } else {
-        draw_panel(canvas, pad, y, panel_w, mp_h, HUB_PANEL)?;
-        if let Some(c) = &v.current {
-            font.draw(canvas, "NOW PLAYING", pad + 12, y + 8, small, HUB_ACCENT)?;
-            let line = format!("{}  vs  {}", c.host_username, c.join_username);
-            font.draw(canvas, &line, pad + 12, y + 10 + 14 * small as i32, body, HUB_TEXT)?;
+        y += mp_h + 14;
+    } else if let Some(c) = &v.current {
+        // NOW PLAYING — the panel grows to fit a live match thumbnail on the
+        // right (a periodic screenshot streamed from the two active players).
+        let thumb_h = (h / 6).clamp(72, 132);
+        let thumb_w =
+            thumb_h * crate::render::LOBBY_THUMB_W as i32 / crate::render::LOBBY_THUMB_H as i32;
+        let panel_h = mp_h.max(thumb_h + 16);
+        draw_panel(canvas, pad, y, panel_w, panel_h, HUB_PANEL)?;
+        font.draw(canvas, "NOW PLAYING", pad + 12, y + 8, small, HUB_ACCENT)?;
+        let line = format!("{}  vs  {}", c.host_username, c.join_username);
+        font.draw(canvas, &line, pad + 12, y + 10 + 14 * small as i32, body, HUB_TEXT)?;
+
+        let tx_x = pad + panel_w - thumb_w - 12;
+        let tx_y = y + (panel_h - thumb_h) / 2;
+        canvas.set_draw_color(Color::RGB(60, 66, 90));
+        canvas.fill_rect(Rect::new(
+            tx_x - 2,
+            tx_y - 2,
+            (thumb_w + 4) as u32,
+            (thumb_h + 4) as u32,
+        ))?;
+        if let Some((rgba, tw, th)) = thumb {
+            let tc = canvas.texture_creator();
+            let made = tc.create_texture_static(sdl2::pixels::PixelFormatEnum::RGBA32, *tw, *th);
+            if let Ok(mut tex) = made {
+                if tex.update(None, rgba, *tw as usize * 4).is_ok() {
+                    canvas.copy(
+                        &tex,
+                        None,
+                        Rect::new(tx_x, tx_y, thumb_w as u32, thumb_h as u32),
+                    )?;
+                }
+            }
         } else {
+            canvas.set_draw_color(Color::RGB(20, 22, 32));
+            canvas.fill_rect(Rect::new(tx_x, tx_y, thumb_w as u32, thumb_h as u32))?;
+            let wait = "live…";
+            let ww = font.text_width_exact(wait, small);
             font.draw(
                 canvas,
-                "Waiting for two players to queue up…",
-                pad + 12,
-                y + mp_h / 2 - 6,
+                wait,
+                tx_x + (thumb_w - ww) / 2,
+                tx_y + thumb_h / 2 - 6,
                 small,
-                HUB_DIM,
+                HUB_FAINT,
             )?;
         }
+        y += panel_h + 14;
+    } else {
+        draw_panel(canvas, pad, y, panel_w, mp_h, HUB_PANEL)?;
+        font.draw(
+            canvas,
+            "Waiting for two players to queue up…",
+            pad + 12,
+            y + mp_h / 2 - 6,
+            small,
+            HUB_DIM,
+        )?;
+        y += mp_h + 14;
     }
-    y += mp_h + 14;
 
     // Up-next queue.
     font.draw(canvas, "UP NEXT", pad, y, small, HUB_ACCENT)?;

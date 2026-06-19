@@ -1628,6 +1628,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut challenge_next_refresh = Instant::now();
     let mut lobby_view_rx: Option<std::sync::mpsc::Receiver<matchmaking::LobbyViewUpdate>> = None;
     let mut lobby_view_next_refresh = Instant::now();
+    // King-of-the-hill match thumbnail: active players push a screenshot every
+    // ~25s; lobby viewers fetch the latest every ~12s.
+    let mut lobby_thumb_rx: Option<std::sync::mpsc::Receiver<Vec<u8>>> = None;
+    let mut lobby_thumb_next_fetch = Instant::now();
+    let mut lobby_thumb_next_push = Instant::now() + Duration::from_secs(8);
     // Tracks whether the player is driving menus with a controller, so the chat
     // on-screen keyboard only appears for pad users (keyboard users just type).
     let mut menu_input_pad = test_force_pad;
@@ -3106,6 +3111,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 id: code,
                                                 view: None,
                                                 status: "Joining lobby...".into(),
+                                                thumb: None,
                                             });
                                         }
                                     }
@@ -3289,6 +3295,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         id: lobby_id,
                                         view: None,
                                         status: "Joining lobby...".into(),
+                                        thumb: None,
                                     });
                                 }
                                 NavResult::CreateLobby(format, private) => {
@@ -3321,6 +3328,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         } else {
                                             "Creating lobby...".into()
                                         },
+                                        thumb: None,
                                     });
                                 }
                                 NavResult::OpenJoinCode => {
@@ -5043,6 +5051,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
 
+                        // King-of-the-hill: stream a periodic screenshot to the
+                        // lobby so spectators see the live match. Capture here on
+                        // the main thread (the core just advanced FRAME_BUFFER);
+                        // compression + upload happen off-thread.
+                        if let Some(lobby_id) = lobby_return.as_ref() {
+                            if Instant::now() >= lobby_thumb_next_push {
+                                lobby_thumb_next_push =
+                                    Instant::now() + Duration::from_secs(25);
+                                if let Some(rgba) = render::capture_frame_thumbnail() {
+                                    matchmaking::push_lobby_thumbnail(lobby_id.clone(), rgba);
+                                }
+                            }
+                        }
+
                         if net_frame_counter < 10 {
                             if let Some(f) = net_log.as_mut() {
                                 use std::io::Write;
@@ -5586,6 +5608,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 id: lobby_id,
                                 view: None,
                                 status: "Returning to lobby...".into(),
+                                thumb: None,
                             });
                         } else {
                             state = AppState::Menu(MenuScreen::SessionEnded {
@@ -6505,6 +6528,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 mm_rx = Some(rx);
                                 matchmaking::start_lobby_match(tx, lobby_id.clone());
                                 lobby_return = Some(lobby_id);
+                                // First thumbnail a few seconds in (past the
+                                // round intro), then every ~25s.
+                                lobby_thumb_next_push = Instant::now() + Duration::from_secs(8);
                                 state = AppState::Menu(MenuScreen::Matchmaking {
                                     status: "Match starting — connecting...".into(),
                                 });
@@ -6512,10 +6538,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 id,
                                 view,
                                 status,
+                                thumb,
                                 ..
                             }) = &mut state
                             {
                                 *id = v.id.clone();
+                                // No live match → drop any stale thumbnail.
+                                if v.current.is_none() {
+                                    *thumb = None;
+                                }
                                 *view = Some(v);
                                 *status = String::new();
                             }
@@ -6532,6 +6563,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Err(std::sync::mpsc::TryRecvError::Empty) => {}
                         Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                             lobby_view_rx = None;
+                        }
+                    }
+                }
+
+                // King-of-the-hill: fetch the live match thumbnail while a match
+                // is in progress in the lobby we're viewing.
+                if let AppState::Menu(menu::MenuScreen::Lobby { id, view, .. }) = &state {
+                    let has_match = view.as_ref().map_or(false, |v| v.current.is_some());
+                    if has_match
+                        && !id.is_empty()
+                        && lobby_thumb_rx.is_none()
+                        && Instant::now() >= lobby_thumb_next_fetch
+                    {
+                        let (tx, rx) = std::sync::mpsc::channel();
+                        lobby_thumb_rx = Some(rx);
+                        matchmaking::fetch_lobby_thumbnail(tx, id.clone());
+                        lobby_thumb_next_fetch = Instant::now() + Duration::from_millis(12000);
+                    }
+                }
+                if let Some(rx) = &lobby_thumb_rx {
+                    match rx.try_recv() {
+                        Ok(rgba) => {
+                            let expected =
+                                (render::LOBBY_THUMB_W * render::LOBBY_THUMB_H * 4) as usize;
+                            if rgba.len() == expected {
+                                if let AppState::Menu(menu::MenuScreen::Lobby { thumb, .. }) =
+                                    &mut state
+                                {
+                                    *thumb = Some((
+                                        rgba,
+                                        render::LOBBY_THUMB_W,
+                                        render::LOBBY_THUMB_H,
+                                    ));
+                                }
+                            }
+                            lobby_thumb_rx = None;
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                            lobby_thumb_rx = None;
                         }
                     }
                 }

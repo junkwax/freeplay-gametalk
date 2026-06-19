@@ -1948,3 +1948,68 @@ fn fit_text_exact(font: &mut Font, text: &str, scale: u32, max_w: i32) -> String
         out
     }
 }
+
+/// King-of-the-hill lobby thumbnail size. Keeps the emu's 400×254 aspect.
+pub const LOBBY_THUMB_W: u32 = 192;
+pub const LOBBY_THUMB_H: u32 = 122;
+
+/// Capture the current emulator frame as a small RGBA thumbnail
+/// (`LOBBY_THUMB_W`×`LOBBY_THUMB_H`, alpha forced opaque), nearest-neighbor
+/// downscaled. Returns `None` if no frame is available yet.
+///
+/// MUST be called on the main thread — it reads the same FRAME_BUFFER the core's
+/// video callback writes during `core.run()`. Hand the returned bytes to a
+/// background thread for compression/upload.
+#[allow(static_mut_refs)] // single-threaded main-thread read, same as the blitter
+pub fn capture_frame_thumbnail() -> Option<Vec<u8>> {
+    unsafe {
+        let (fw, fh, pitch, fmt) = (FRAME_WIDTH, FRAME_HEIGHT, FRAME_PITCH, PIXEL_FORMAT);
+        if fw == 0 || fh == 0 || FRAME_BUFFER.is_empty() {
+            return None;
+        }
+        let src: &[u8] = &FRAME_BUFFER;
+        let (tw, th) = (LOBBY_THUMB_W, LOBBY_THUMB_H);
+        let mut out = vec![0u8; (tw * th * 4) as usize];
+        for ty in 0..th {
+            let sy = (ty * fh / th).min(fh - 1) as usize;
+            for tx in 0..tw {
+                let sx = (tx * fw / tw).min(fw - 1) as usize;
+                let (r, g, b) = match fmt {
+                    RETRO_PIXEL_FORMAT_XRGB8888 => {
+                        // XRGB8888 0x00RRGGBB; little-endian memory is B,G,R,X.
+                        let off = sy * pitch + sx * 4;
+                        if off + 3 < src.len() {
+                            (src[off + 2], src[off + 1], src[off])
+                        } else {
+                            (0, 0, 0)
+                        }
+                    }
+                    RETRO_PIXEL_FORMAT_RGB565 => {
+                        let off = sy * pitch + sx * 2;
+                        if off + 1 < src.len() {
+                            let px = u16::from_le_bytes([src[off], src[off + 1]]);
+                            let r5 = ((px >> 11) & 0x1f) as u8;
+                            let g6 = ((px >> 5) & 0x3f) as u8;
+                            let b5 = (px & 0x1f) as u8;
+                            // Expand to 8-bit, replicating high bits into the low.
+                            (
+                                (r5 << 3) | (r5 >> 2),
+                                (g6 << 2) | (g6 >> 4),
+                                (b5 << 3) | (b5 >> 2),
+                            )
+                        } else {
+                            (0, 0, 0)
+                        }
+                    }
+                    _ => (0, 0, 0),
+                };
+                let o = ((ty * tw + tx) * 4) as usize;
+                out[o] = r;
+                out[o + 1] = g;
+                out[o + 2] = b;
+                out[o + 3] = 255;
+            }
+        }
+        Some(out)
+    }
+}

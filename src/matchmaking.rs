@@ -1531,6 +1531,37 @@ fn http_post_json_no_auth(url: &str, body: &str) -> Result<String, String> {
     send_recv_https(stream, &req)
 }
 
+/// POST a raw binary body with bearer auth. Writes the header then the bytes
+/// directly to the TLS stream (the string-based helper can't carry binary).
+fn http_post_bytes_auth(url: &str, token: &str, body: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+    let (host, path) = parse_url(url)?;
+    let mut stream = tls_connect(&host)?;
+    let header = format!(
+        "POST {path} HTTP/1.1\r\nHost: {host}\r\nAuthorization: Bearer {token}\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    stream
+        .write_all(header.as_bytes())
+        .map_err(|e| e.to_string())?;
+    stream.write_all(body).map_err(|e| e.to_string())?;
+    // We've already written the full request; pass an empty req so the reader
+    // just consumes the response.
+    let (status, resp) = send_recv_https_status(stream, "")?;
+    if status == 200 {
+        Ok(())
+    } else {
+        Err(format!("HTTP {status}: {resp}"))
+    }
+}
+
+fn gzip_bytes(data: &[u8]) -> Result<Vec<u8>, String> {
+    use std::io::Write;
+    let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    enc.write_all(data).map_err(|e| e.to_string())?;
+    enc.finish().map_err(|e| e.to_string())
+}
+
 fn http_get(url: &str, token: &str) -> Result<String, String> {
     let (host, path) = parse_url(url)?;
     let stream = tls_connect(&host)?;
@@ -2479,6 +2510,40 @@ fn run_lobby_match(tx: &Sender<Update>, lobby_id: &str) -> Result<(), String> {
     };
     let is_host = role == "host";
     connect_match(tx, &mi, &session_id, is_host)
+}
+
+/// Upload a periodic king-of-the-hill match thumbnail (raw RGBA bytes). Gzips
+/// and POSTs to the lobby thumb endpoint. Fire-and-forget — a dropped frame is
+/// harmless. Only works if signed in (the server checks you're an active player).
+pub fn push_lobby_thumbnail(lobby_id: String, rgba: Vec<u8>) {
+    std::thread::spawn(move || {
+        let Some(token) = current_token() else { return };
+        let gz = match gzip_bytes(&rgba) {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        if let Ok(url) = signaling_url().map(|u| format!("{u}/koh/{lobby_id}/thumb")) {
+            let _ = http_post_bytes_auth(&url, &token, &gz);
+        }
+    });
+}
+
+/// Fetch the lobby's latest match thumbnail and gunzip to raw RGBA. Sends the
+/// RGBA bytes on success; silent when there's no thumbnail yet (404) or on error.
+pub fn fetch_lobby_thumbnail(tx: Sender<Vec<u8>>, lobby_id: String) {
+    std::thread::spawn(move || {
+        let result = (|| -> Result<Vec<u8>, String> {
+            let url = format!("{}/koh/{lobby_id}/thumb", signaling_url()?);
+            let gz = http_get_bytes(&url)?;
+            let mut dec = flate2::read::GzDecoder::new(gz.as_slice());
+            let mut rgba = Vec::new();
+            std::io::Read::read_to_end(&mut dec, &mut rgba).map_err(|e| e.to_string())?;
+            Ok(rgba)
+        })();
+        if let Ok(rgba) = result {
+            let _ = tx.send(rgba);
+        }
+    });
 }
 
 /// POST /koh/:id/leave — fire-and-forget.

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.25 - 2026-06-19
+
+### Added
+
+- King-of-the-hill lobbies now show a live thumbnail of the current match. The
+  two active players stream a small screenshot every ~25s; everyone in the
+  lobby sees it in the "Now Playing" panel (updating every ~15s). It's a
+  periodic screenshot, not a video feed — a few KB at a time.
+
 ## 0.7.24 - 2026-06-19
 
 ### Fixed
