@@ -1646,6 +1646,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut render_debug_visible = false;
     let mut net_spectate_next: u32 = 165; // ~3s
     let mut net_frame_counter: u32 = 0;
+    // One-shot per netplay session: logs the RAM values the score-bar overlay
+    // depends on, so a missing bar can be traced to gstate/hp/RAM availability.
+    let mut net_overlay_diagnosed = false;
     const GS_FIGHTING: u16 = 0x02;
     const GS_GAMEOVER: u16 = 0x0b;
     const MATCH_WIN_TARGET: u16 = 2;
@@ -2877,6 +2880,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     net_stats.reset();
                                                     audio_tail_sample = None;
                                                     net_frame_counter = 0;
+                                                    net_overlay_diagnosed = false;
                                                     net_recording = maybe_start_net_recording(
                                                         &ghost_library,
                                                         *peer,
@@ -5770,6 +5774,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ranked_match_index = 0;
                         net_spectate_next = 165;
                         net_frame_counter = 0;
+                        net_overlay_diagnosed = false;
                         net_runtime = NetRuntime::default();
                         net_log = None;
                         net_stats.reset();
@@ -5859,6 +5864,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         !match_decided && fighters_spawned
                     })
                     .unwrap_or(false);
+                // Diagnostic: log the score-bar inputs the first time fighters
+                // spawn in a netplay match (or a forced late log if they never
+                // seem to), so a missing bar can be traced to gstate/hp/RAM.
+                if net_session.is_some()
+                    && !net_overlay_diagnosed
+                    && (overlay_screen || net_frame_counter > 900)
+                {
+                    net_overlay_diagnosed = true;
+                    if let Some(c) = core.as_ref() {
+                        let gstate =
+                            memory::peek_u16(c, GSTATE_ADDR, memory::Endian::Little);
+                        let p1_hp = memory::peek_u16(c, P1_HP_ADDR, memory::Endian::Little);
+                        let sram = c
+                            .memory(retro::RETRO_MEMORY_SYSTEM_RAM)
+                            .map(|r| r.len())
+                            .unwrap_or(0);
+                        let s = score::Score::read(c);
+                        let line = format!(
+                            "[net/overlay] sysram={sram} gstate={gstate:?} p1_hp={p1_hp:?} match_wins={}/{} overlay_screen={overlay_screen} scorebar={:?}",
+                            s.p1_match_wins, s.p2_match_wins, cfg.scorebar_style
+                        );
+                        println!("{line}");
+                        if let Some(f) = net_log.as_mut() {
+                            use std::io::Write;
+                            let _ = writeln!(f, "{line}");
+                        }
+                    }
+                }
                 if overlay_screen
                     && (net_session.is_some()
                         || local_play_mode.is_lab()
@@ -6306,6 +6339,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         net_stats.reset();
                                         audio_tail_sample = None;
                                         net_frame_counter = 0;
+                                        net_overlay_diagnosed = false;
                                         let who = discord_user.as_deref().unwrap_or("Anonymous");
                                         let role = if local_handle == 0 { "P1" } else { "P2" };
                                         discord_webhook::post(

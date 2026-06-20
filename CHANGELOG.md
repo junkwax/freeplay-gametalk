@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.28 - 2026-06-20
+
+### Diagnostics
+
+- Netplay log now records the score-bar inputs (work-RAM size, game state,
+  health, match score) the first time fighters spawn in an online match, to
+  pin down why the score bar isn't drawing for some matches.
+
 ## 0.7.27 - 2026-06-19
 
 ### Fixed
