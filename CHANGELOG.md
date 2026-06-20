@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.29 - 2026-06-20
+
+### Changed
+
+- King-of-the-hill lobbies now correctly show as FT1 everywhere (create
+  buttons, the lobby browser, and the lobby screen) instead of FT3/FT5/FT10.
+  KOH is always first-to-one (winner stays); the format chooser only picks
+  ranked vs unranked for a lobby. (Player-to-player challenges still use
+  FT3/FT5/FT10.)
+
 ## 0.7.28 - 2026-06-20
 
 ### Diagnostics

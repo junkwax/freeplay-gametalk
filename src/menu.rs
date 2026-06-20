@@ -1950,9 +1950,8 @@ fn draw_lobby(
     };
 
     let sub = format!(
-        "{} · {} · {} player{}",
+        "{} · FT1 · {} player{}",
         if v.ranked { "Ranked" } else { "Unranked" },
-        crate::matchmaking::lobby_format_label(v.format),
         v.members.len(),
         if v.members.len() == 1 { "" } else { "s" },
     );
@@ -2718,9 +2717,12 @@ fn draw_online_hub(
         }
         OnlineTab::Lobbies => {
             let act_gap = 26;
-            let pub_label = format!("+  Create Public Lobby  ({})", challenge_format.label());
+            // King-of-the-hill lobbies are always FT1 (winner stays). The shared
+            // format chooser only decides ranked vs unranked here.
+            let rank = if challenge_format.ranked() { "Ranked" } else { "Unranked" };
+            let pub_label = format!("+  Create Public Lobby  ({rank} · FT1)");
             draw_online_row(canvas, font, &pub_label, content_focus && cursor == 0, x, y, content_w, body)?;
-            let priv_label = format!("+  Create Private Lobby  ({})", challenge_format.label());
+            let priv_label = format!("+  Create Private Lobby  ({rank} · FT1)");
             draw_online_row(canvas, font, &priv_label, content_focus && cursor == 1, x, y + act_gap, content_w, body)?;
             draw_online_row(canvas, font, "Join by Invite Code", content_focus && cursor == 2, x, y + act_gap * 2, content_w, body)?;
             let list_y = y + act_gap * 3 + 12;
@@ -2739,7 +2741,7 @@ fn draw_online_hub(
                 for (i, lobby) in lobbies.iter().take(max_rows).enumerate() {
                     let row_y = list_y + i as i32 * row_gap;
                     let sel = content_focus && cursor == i + 3;
-                    let label = format!("{}   {}   {}P", lobby.name, lobby.format.label(), lobby.players);
+                    let label = format!("{}   FT1   {}P", lobby.name, lobby.players);
                     draw_online_row(canvas, font, &label, sel, x, row_y, content_w, body)?;
                     let meta = format!("{} · {}", lobby.host, lobby.status);
                     let mw = font.text_width_exact(&meta, small);
