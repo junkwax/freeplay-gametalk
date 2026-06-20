@@ -17,7 +17,24 @@ use crate::memory;
 use crate::mk2_addrs;
 use crate::netplay;
 use crate::retro::{self, SILENT_MODE};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
+
+/// A pristine just-booted savestate captured once at core load, before any
+/// local play. Netplay sessions reload it so every match starts from an
+/// identical, canonical state — `retro_reset` alone left a prior Lab/Arcade
+/// session bleeding into the match (and broke peer determinism).
+static CLEAN_BOOT_STATE: Mutex<Option<Vec<u8>>> = Mutex::new(None);
+
+pub fn set_clean_boot_state(state: Vec<u8>) {
+    if let Ok(mut g) = CLEAN_BOOT_STATE.lock() {
+        *g = Some(state);
+    }
+}
+
+pub fn clean_boot_state() -> Option<Vec<u8>> {
+    CLEAN_BOOT_STATE.lock().ok().and_then(|g| g.clone())
+}
 
 #[derive(Default, Clone, Copy)]
 pub struct NetStepStats {

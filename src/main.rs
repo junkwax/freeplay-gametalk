@@ -148,28 +148,24 @@ fn adopt_packaged_working_dir() {
     }
 }
 
-#[cfg(target_os = "windows")]
+/// Run the diagnostics ("doctor") and show the report. The previous approach
+/// shelled out to `cmd /C start ... cmd /K "<exe>" --doctor`, whose nested
+/// quoting around the exe path never ran (and freeplay is a GUI-subsystem app
+/// with no console, so its stdout wasn't visible anyway). Instead we run the
+/// doctor in a child process that writes a report file, then open the file in
+/// the default text viewer. Done on a background thread so the menu doesn't
+/// freeze while diagnostics run.
 fn launch_debugger() -> std::io::Result<()> {
     let exe = std::env::current_exe()?;
-    let title = format!("FREEPLAY DOCTOR v{}", version::VERSION);
-    std::process::Command::new("cmd")
-        .arg("/C")
-        .arg("start")
-        .arg(title)
-        .arg("cmd")
-        .arg("/K")
-        .arg(format!("\"{}\" --doctor", exe.display()))
-        .spawn()
-        .map(|_| ())
-}
-
-#[cfg(not(target_os = "windows"))]
-fn launch_debugger() -> std::io::Result<()> {
-    let exe = std::env::current_exe()?;
-    std::process::Command::new(exe)
-        .arg("--doctor")
-        .spawn()
-        .map(|_| ())
+    let report_path = std::env::temp_dir().join("freeplay-doctor.txt");
+    std::thread::spawn(move || {
+        let _ = std::process::Command::new(&exe)
+            .arg("--doctor-report")
+            .arg(&report_path)
+            .status();
+        let _ = open::that(&report_path);
+    });
+    Ok(())
 }
 
 fn app_window_title() -> String {
@@ -923,12 +919,24 @@ fn shutdown_local_runtime_for_netplay(
     *audio_tail_sample = None;
 
     if let Some(c) = core {
-        c.reset();
+        // Prefer reloading the pristine boot savestate over retro_reset: a soft
+        // reset leaves a prior Lab/Arcade session bleeding into the match (and
+        // desynced the two peers, since each started from different leftover
+        // state). The boot state is the same canonical attract-mode frame on
+        // both clients. Fall back to reset if it was never captured.
+        let how = match netcore::clean_boot_state() {
+            Some(boot) if c.load_state(&boot) => "loaded clean boot state",
+            _ => {
+                c.reset();
+                "reset (no boot state)"
+            }
+        };
         reset_for_netplay(c, trainer, lab_reset_slots, ghost_playback, ghost_recording);
         if let Some(f) = net_log.as_mut() {
             use std::io::Write;
-            let _ = writeln!(f, "[net] core reset for canonical online start");
+            let _ = writeln!(f, "[net] core {how} for canonical online start");
         }
+        println!("[net] core {how} for canonical online start");
     }
 }
 
@@ -2631,8 +2639,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } if matches!(state, AppState::Menu(_))
                     && keymod.intersects(Mod::LSHIFTMOD | Mod::RSHIFTMOD) =>
                 {
-                    if let Err(e) = launch_debugger() {
-                        println!("[doctor] failed to launch: {e}");
+                    match launch_debugger() {
+                        Ok(()) => {
+                            toast = Some((
+                                "Running diagnostics — report will open shortly…".into(),
+                                Instant::now() + Duration::from_millis(3000),
+                            ));
+                        }
+                        Err(e) => {
+                            println!("[doctor] failed to launch: {e}");
+                            toast = Some((
+                                format!("Diagnostics failed to launch: {e}"),
+                                Instant::now() + Duration::from_millis(3000),
+                            ));
+                        }
                     }
                 }
 

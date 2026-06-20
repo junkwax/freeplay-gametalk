@@ -190,6 +190,24 @@ pub fn ensure_core_loaded(
             }
             Err(e) => println!("Audio init failed: {e}"),
         }
+        // Boot the machine a little and capture a pristine savestate. Netplay
+        // reloads this so every online match starts from the same canonical
+        // state regardless of any Lab/Arcade session beforehand. Run silently so
+        // the boot frames don't flash on screen or play audio.
+        let was_silent = retro::SILENT_MODE;
+        retro::SILENT_MODE = true;
+        for _ in 0..90 {
+            (c.run)();
+        }
+        if let Some(state) = c.save_state() {
+            let len = state.len();
+            crate::netcore::set_clean_boot_state(state);
+            println!("[retro] captured clean boot state ({len} bytes)");
+        } else {
+            println!("[retro] WARNING: could not capture clean boot state");
+        }
+        retro::SILENT_MODE = was_silent;
+        retro::clear_audio_buffer();
         *core = Some(c);
     }
     Ok(())

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.7.30 - 2026-06-20
+
+### Fixed
+
+- Online matches now always start from a clean, identical state on both
+  clients. Previously a `retro_reset` left a prior Lab or Arcade session
+  bleeding into the netplay match — the game "picked up from there," the two
+  peers started from different leftover state (desyncing), and the match never
+  reached a clean fight (so the player-name bar above the life bars never
+  showed). The client now captures a pristine boot savestate at startup and
+  reloads it for every online match.
+- Shift+D (Doctor) works again. It previously shelled out with broken nested
+  quoting (and freeplay has no console to print to). It now writes a diagnostics
+  report and opens it in your default text viewer.
+
 ## 0.7.29 - 2026-06-20
 
 ### Changed
