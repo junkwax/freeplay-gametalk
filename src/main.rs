@@ -5867,11 +5867,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if discord_user.is_none() {
                         discord_user = matchmaking::username_from_cached_token();
                     }
-                    let local_name = discord_user.as_deref().unwrap_or("You");
+                    // Local display name: Discord name when signed in, otherwise
+                    // the claimed guest name from config (most online players are
+                    // guests now). Without this fallback the namebar showed
+                    // "P1"/"P2" for guests instead of their name.
+                    let local_name = discord_user
+                        .as_deref()
+                        .filter(|s| !s.trim().is_empty())
+                        .or_else(|| {
+                            let n = cfg.player_username.trim();
+                            (!n.is_empty()).then_some(n)
+                        })
+                        .unwrap_or("You");
                     let ghost_name = "Drone";
                     let p1 = if net_session.is_some() {
                         if local_handle == 0 {
-                            discord_user.as_deref()
+                            Some(local_name)
                         } else {
                             peer_name.as_deref()
                         }
@@ -5887,7 +5898,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     };
                     let p2 = if net_session.is_some() {
                         if local_handle == 1 {
-                            discord_user.as_deref()
+                            Some(local_name)
                         } else {
                             peer_name.as_deref()
                         }

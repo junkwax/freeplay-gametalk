@@ -95,6 +95,32 @@ pub fn detect_rtc_offset(blob: &[u8]) -> Option<usize> {
     best
 }
 
+/// All offsets whose 4-byte LE u32 looks like a wall clock (within ~1 day of
+/// now). Diagnostic only: if more than one exists, the single-slot mask in
+/// `detect_rtc_offset` may be leaving the *real* RTC in the cksum — the most
+/// likely cause of a recurring frame-30 desync. Logged at session start so a
+/// 2-PC capture shows whether both peers see the same candidate set.
+pub fn detect_rtc_candidates(blob: &[u8]) -> Vec<usize> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let Ok(dur) = SystemTime::now().duration_since(UNIX_EPOCH) else {
+        return Vec::new();
+    };
+    let now = dur.as_secs() as u32;
+    let window: i64 = 24 * 60 * 60;
+    let mut offs = Vec::new();
+    let mut i = 0usize;
+    while i + 4 <= blob.len() {
+        let v = u32::from_le_bytes([blob[i], blob[i + 1], blob[i + 2], blob[i + 3]]);
+        if ((v as i64) - (now as i64)).abs() < window {
+            offs.push(i);
+            i += 4;
+        } else {
+            i += 1;
+        }
+    }
+    offs
+}
+
 const HASH_LANE_INIT: [u64; 4] = [
     0x243f_6a88_85a3_08d3,
     0x1319_8a2e_0370_7344,
@@ -405,14 +431,36 @@ pub fn step_netplay_frame(
                 if runtime.rtc_mask_offset.is_none() {
                     if let Some(off) = detect_rtc_offset(&blob) {
                         runtime.rtc_mask_offset = Some(off);
-                        let m = format!("[net] FBNeo RTC slot at savestate offset 0x{off:x} — masking from cksum");
+                        // Log every wall-clock-like slot, not just the masked one.
+                        // If a 2-PC capture shows >1 candidate (or differing sets
+                        // between peers), the single-slot mask is the desync cause.
+                        let candidates = detect_rtc_candidates(&blob);
+                        let cand_str: Vec<String> =
+                            candidates.iter().map(|o| format!("0x{o:x}")).collect();
+                        let m = format!(
+                            "[net] FBNeo RTC slot at savestate offset 0x{off:x} — masking from cksum (candidates: [{}])",
+                            cand_str.join(", ")
+                        );
                         println!("{m}");
                         if let Some(f) = net_log.as_mut() {
                             let _ = writeln!(f, "{m}");
                         }
                     }
                 }
-                let mut cksum = cksum_with_mask(&blob, runtime.rtc_mask_offset);
+                // Desync checksum is computed over the game's SYSTEM_RAM (the
+                // 68000 work RAM that drives gameplay), NOT the full emulator
+                // savestate. The savestate also serializes the sound CPU RAM,
+                // the audio chips (YM2151/OKI), and the host RTC — all of which
+                // differ between two peers even when gameplay is in perfect
+                // lockstep. Hashing the whole blob made every such difference a
+                // "desync"; a 2-PC capture showed only ~0.1% of the savestate
+                // differing, none of it in gameplay RAM. If SYSTEM_RAM is
+                // unavailable for some reason, fall back to the old whole-blob
+                // hash with the RTC slot masked.
+                let mut cksum = match memory::snapshot(core) {
+                    Some(ram) => cksum_with_mask(&ram, None),
+                    None => cksum_with_mask(&blob, runtime.rtc_mask_offset),
+                };
                 if let Some(sync) =
                     memory::peek_u16(core, mk2_addrs::NETPLAY_SYNC_ADDR, memory::Endian::Little)
                 {

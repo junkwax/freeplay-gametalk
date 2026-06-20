@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.7.27 - 2026-06-19
+
+### Fixed
+
+- Netplay desync checksum is now computed over the game's work RAM, not the
+  full emulator savestate. A 2-PC capture showed the recurring "desync detected
+  at frame 30" was a false positive: only ~0.1% of the savestate differed
+  between perfectly-synced peers, all of it in non-gameplay state (the sound
+  CPU RAM, audio chips, and host clock) — none in gameplay RAM. Hashing only the
+  work RAM removes those false desyncs that were ending matches almost as soon
+  as they started. (Falls back to the old whole-savestate hash if work RAM
+  isn't available.)
+- The in-match name bar showed "P1"/"P2" for guest players instead of their
+  name. It now uses the claimed guest name when you're not signed in with
+  Discord.
+
+### Diagnostics
+
+- The netplay log now lists every wall-clock-like savestate slot, not just the
+  one masked, to make any remaining false-desync source easy to spot.
+
 ## 0.7.26 - 2026-06-19
 
 ### Added
