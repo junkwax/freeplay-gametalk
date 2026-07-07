@@ -89,12 +89,20 @@ impl Recording {
             return;
         }
         if self.initial_state.is_some() {
-            let index = (frame - base_frame) as usize;
-            if self.inputs.len() <= index {
-                self.inputs.resize(index + 1, [0, 0]);
-            }
-            self.inputs[index] = [p1_bits, p2_bits];
+            self.record_input(base_frame, frame, p1_bits, p2_bits);
         }
+    }
+
+    /// Store inputs indexed by absolute frame. Rollback resims re-call this
+    /// for frames already recorded; indexing (rather than appending) means
+    /// the corrected inputs overwrite the mispredicted ones, so the final
+    /// replay contains a single confirmed timeline.
+    fn record_input(&mut self, base_frame: i32, frame: i32, p1_bits: u16, p2_bits: u16) {
+        let index = (frame - base_frame) as usize;
+        if self.inputs.len() <= index {
+            self.inputs.resize(index + 1, [0, 0]);
+        }
+        self.inputs[index] = [p1_bits, p2_bits];
     }
 
     pub fn set_confirmed_frame(&mut self, frame: i32) {
@@ -931,6 +939,27 @@ mod tests {
         assert_eq!(header.state_size, 456);
         assert_eq!(header.p1_name, "P1");
         assert_eq!(header.p2_name, "Opponent");
+    }
+
+    #[test]
+    fn record_input_overwrites_rollback_resims() {
+        // Simulate: frames 10..13 advance with a misprediction at 11-12,
+        // then a rollback re-simulates 11-12 with corrected inputs. The
+        // recording must hold exactly the corrected timeline.
+        let mut rec = Recording::new("P1", "P2");
+        rec.initial_state = Some(vec![0]);
+        rec.base_frame = Some(10);
+        rec.record_input(10, 10, 0x0001, 0x0000);
+        rec.record_input(10, 11, 0x0002, 0x0000); // predicted (wrong)
+        rec.record_input(10, 12, 0x0004, 0x0000); // predicted (wrong)
+        // rollback: resim 11 and 12 with confirmed remote inputs
+        rec.record_input(10, 11, 0x0002, 0x0100);
+        rec.record_input(10, 12, 0x0004, 0x0200);
+        rec.record_input(10, 13, 0x0008, 0x0400);
+        rec.set_confirmed_frame(13);
+        assert_eq!(rec.frame_count(), 4);
+        assert_eq!(rec.inputs[1], [0x0002, 0x0100]);
+        assert_eq!(rec.inputs[2], [0x0004, 0x0200]);
     }
 
     #[test]

@@ -7,9 +7,8 @@
 //! If this test passes for a given ROM, the core is deterministic under
 //! save/load/replay — the essential property for rollback netcode.
 //! If it fails, rollback would desync on that ROM.
-#![allow(static_mut_refs)]
 
-use crate::retro::{Core, INPUT_STATE, SILENT_MODE};
+use crate::retro::{self, Core};
 
 /// How many frames of history the test captures before rewinding.
 pub const REWIND_FRAMES: usize = 60;
@@ -49,7 +48,7 @@ impl RewindTest {
             return true; // abort the test
         }
         // Capture the input that will drive the step.
-        let inputs = unsafe { INPUT_STATE };
+        let inputs = retro::input_state_snapshot();
         self.inputs.push(inputs);
         self.frames_recorded += 1;
         if self.frames_recorded % 20 == 0 {
@@ -83,13 +82,11 @@ impl RewindTest {
         }
 
         // Replay frames 1..=N under silent mode using recorded inputs.
-        unsafe {
-            SILENT_MODE = true;
-        }
+        retro::set_silent(true);
         for i in 0..REWIND_FRAMES {
             // Drive the step with the input that was live at frame i.
-            unsafe {
-                INPUT_STATE = self.inputs[i];
+            {
+                retro::set_input_all(self.inputs[i]);
             }
             unsafe {
                 (core.run)();
@@ -98,9 +95,7 @@ impl RewindTest {
             // Check this frame's state against the recording (catches
             // early divergences).
             let Some(actual) = core.save_state() else {
-                unsafe {
-                    SILENT_MODE = false;
-                }
+                retro::set_silent(false);
                 println!(
                     "[rewind] FAIL: save_state failed during replay at frame {}",
                     i + 1
@@ -109,9 +104,7 @@ impl RewindTest {
             };
             let recorded = &self.snapshots[i + 1];
             if actual.len() != recorded.len() {
-                unsafe {
-                    SILENT_MODE = false;
-                }
+                retro::set_silent(false);
                 println!(
                     "[rewind] FAIL: size mismatch at frame {} ({} vs {})",
                     i + 1,
@@ -126,9 +119,7 @@ impl RewindTest {
                     .zip(recorded.iter())
                     .position(|(a, b)| a != b)
                     .unwrap_or(0);
-                unsafe {
-                    SILENT_MODE = false;
-                }
+                retro::set_silent(false);
                 println!(
                     "[rewind] FAIL: divergence at frame {} (first byte differs at offset 0x{:x})",
                     i + 1,
@@ -141,9 +132,7 @@ impl RewindTest {
                 return;
             }
         }
-        unsafe {
-            SILENT_MODE = false;
-        }
+        retro::set_silent(false);
 
         // Final sanity check
         let Some(final_state) = core.save_state() else {

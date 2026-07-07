@@ -5,7 +5,7 @@
 //! disk so the clip is not lost.
 
 use crate::retro::{
-    FRAME_BUFFER, FRAME_HEIGHT, FRAME_PITCH, FRAME_WIDTH, PIXEL_FORMAT, RETRO_PIXEL_FORMAT_RGB565,
+    FrameState, RETRO_PIXEL_FORMAT_RGB565,
     RETRO_PIXEL_FORMAT_XRGB8888,
 };
 use std::fs::{self, File};
@@ -57,11 +57,10 @@ impl ClipRecorder {
         self.audio.extend_from_slice(samples);
     }
 
-    #[allow(static_mut_refs)]
     pub fn record_frame(&mut self) -> Result<(), String> {
-        unsafe {
-            if FRAME_WIDTH == 0 || FRAME_HEIGHT == 0 || FRAME_BUFFER.is_empty() {
-                return Ok(());
+        let wrote = crate::retro::with_frame(|frame| -> Result<bool, String> {
+            if frame.width == 0 || frame.height == 0 || frame.buf.is_empty() {
+                return Ok(false);
             }
             let path = self
                 .raw_dir
@@ -69,15 +68,18 @@ impl ClipRecorder {
             let mut file = BufWriter::new(
                 File::create(&path).map_err(|e| format!("create {}: {e}", path.display()))?,
             );
-            write!(file, "P6\n{} {}\n255\n", FRAME_WIDTH, FRAME_HEIGHT)
+            write!(file, "P6\n{} {}\n255\n", frame.width, frame.height)
                 .map_err(|e| e.to_string())?;
-            for y in 0..FRAME_HEIGHT as usize {
-                let row = y * FRAME_PITCH;
-                for x in 0..FRAME_WIDTH as usize {
-                    let rgb = pixel_rgb(row, x);
+            for y in 0..frame.height as usize {
+                let row = y * frame.pitch;
+                for x in 0..frame.width as usize {
+                    let rgb = pixel_rgb(frame, row, x);
                     file.write_all(&rgb).map_err(|e| e.to_string())?;
                 }
             }
+            Ok(true)
+        })?;
+        if wrote {
             self.frame_count = self.frame_count.saturating_add(1);
         }
         Ok(())
@@ -189,16 +191,15 @@ pub(crate) fn find_ffmpeg() -> Option<PathBuf> {
     })
 }
 
-#[allow(static_mut_refs)]
-unsafe fn pixel_rgb(row: usize, x: usize) -> [u8; 3] {
-    match PIXEL_FORMAT {
+fn pixel_rgb(frame: &FrameState, row: usize, x: usize) -> [u8; 3] {
+    match frame.pixel_format {
         RETRO_PIXEL_FORMAT_XRGB8888 => {
             let i = row + x * 4;
             let px = u32::from_ne_bytes([
-                FRAME_BUFFER[i],
-                FRAME_BUFFER[i + 1],
-                FRAME_BUFFER[i + 2],
-                FRAME_BUFFER[i + 3],
+                frame.buf[i],
+                frame.buf[i + 1],
+                frame.buf[i + 2],
+                frame.buf[i + 3],
             ]);
             [
                 ((px >> 16) & 0xff) as u8,
@@ -208,7 +209,7 @@ unsafe fn pixel_rgb(row: usize, x: usize) -> [u8; 3] {
         }
         RETRO_PIXEL_FORMAT_RGB565 => {
             let i = row + x * 2;
-            let px = u16::from_ne_bytes([FRAME_BUFFER[i], FRAME_BUFFER[i + 1]]);
+            let px = u16::from_ne_bytes([frame.buf[i], frame.buf[i + 1]]);
             let r = ((px >> 11) & 0x1f) as u8;
             let g = ((px >> 5) & 0x3f) as u8;
             let b = (px & 0x1f) as u8;
@@ -220,7 +221,7 @@ unsafe fn pixel_rgb(row: usize, x: usize) -> [u8; 3] {
         }
         _ => {
             let i = row + x * 2;
-            let px = u16::from_ne_bytes([FRAME_BUFFER[i], FRAME_BUFFER[i + 1]]);
+            let px = u16::from_ne_bytes([frame.buf[i], frame.buf[i + 1]]);
             let r = ((px >> 10) & 0x1f) as u8;
             let g = ((px >> 5) & 0x1f) as u8;
             let b = (px & 0x1f) as u8;

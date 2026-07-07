@@ -12,8 +12,7 @@ use crate::font::Font;
 use crate::input;
 use crate::netplay;
 use crate::retro::{
-    self, FRAME_BUFFER, FRAME_HEIGHT, FRAME_PITCH, FRAME_WIDTH, PIXEL_FORMAT,
-    RETRO_PIXEL_FORMAT_RGB565, RETRO_PIXEL_FORMAT_XRGB8888,
+    self, RETRO_PIXEL_FORMAT_RGB565, RETRO_PIXEL_FORMAT_XRGB8888,
 };
 use crate::version;
 
@@ -194,8 +193,8 @@ pub fn ensure_core_loaded(
         // reloads this so every online match starts from the same canonical
         // state regardless of any Lab/Arcade session beforehand. Run silently so
         // the boot frames don't flash on screen or play audio.
-        let was_silent = retro::SILENT_MODE;
-        retro::SILENT_MODE = true;
+        let was_silent = retro::silent();
+        retro::set_silent(true);
         for _ in 0..90 {
             (c.run)();
         }
@@ -206,7 +205,7 @@ pub fn ensure_core_loaded(
         } else {
             println!("[retro] WARNING: could not capture clean boot state");
         }
-        retro::SILENT_MODE = was_silent;
+        retro::set_silent(was_silent);
         retro::clear_audio_buffer();
         *core = Some(c);
     }
@@ -214,42 +213,43 @@ pub fn ensure_core_loaded(
 }
 
 pub(crate) fn fbneo_core_path() -> Option<String> {
-    let name = platform_core_name();
-    let mut candidates = vec![name.to_string(), format!("cores/{name}")];
-    if let Some(exe_dir) = std::env::current_exe()
+    let exe_dir = std::env::current_exe()
         .ok()
-        .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
-    {
-        candidates.push(exe_dir.join(name).to_string_lossy().into_owned());
-        candidates.push(
-            exe_dir
-                .join("cores")
-                .join(name)
-                .to_string_lossy()
-                .into_owned(),
-        );
+        .and_then(|p| p.parent().map(std::path::Path::to_path_buf));
+    let mut candidates = Vec::new();
+    for name in platform_core_names() {
+        candidates.push(name.to_string());
+        candidates.push(format!("cores/{name}"));
+        if let Some(dir) = &exe_dir {
+            candidates.push(dir.join(name).to_string_lossy().into_owned());
+            candidates.push(dir.join("cores").join(name).to_string_lossy().into_owned());
+        }
     }
     candidates
         .into_iter()
         .find(|p| std::path::Path::new(p).exists())
 }
 
-fn platform_core_name() -> &'static str {
+/// Core filenames to look for, in preference order. The mk2 subset core
+/// (built via tools/build-fbneo-*.sh with SUBSET=mk2) is preferred; the
+/// stock full core remains a fallback so dev setups with an existing
+/// fbneo_libretro.* keep working.
+fn platform_core_names() -> [&'static str; 2] {
     #[cfg(target_os = "windows")]
     {
-        "fbneo_libretro.dll"
+        ["fbneo_mk2_libretro.dll", "fbneo_libretro.dll"]
     }
     #[cfg(target_os = "linux")]
     {
-        "fbneo_libretro.so"
+        ["fbneo_mk2_libretro.so", "fbneo_libretro.so"]
     }
     #[cfg(target_os = "macos")]
     {
-        "fbneo_libretro.dylib"
+        ["fbneo_mk2_libretro.dylib", "fbneo_libretro.dylib"]
     }
     #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
     {
-        "fbneo_libretro"
+        ["fbneo_mk2_libretro", "fbneo_libretro"]
     }
 }
 
@@ -446,7 +446,6 @@ pub type OverlayCache<'a> = Option<(OverlayKey, sdl2::render::Texture<'a>)>;
 
 /// Blit the current emulator frame into the canvas. Does NOT call `present()` —
 /// callers that want to overlay a HUD on top should draw, then present themselves.
-#[allow(static_mut_refs)]
 pub fn draw_emu_frame<'a>(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     texture: &mut sdl2::render::Texture<'a>,
@@ -457,25 +456,39 @@ pub fn draw_emu_frame<'a>(
     aspect: crate::config::AspectMode,
     crt_corner_bend: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    unsafe {
-        if FRAME_WIDTH == 0 || FRAME_HEIGHT == 0 || FRAME_BUFFER.is_empty() {
-            return Ok(());
+    // Copy the frame geometry and upload the pixels under the frame lock,
+    // then do all SDL drawing outside it. Never hold the lock across canvas
+    // work — nothing here re-enters the core, but keeping the critical
+    // section to "read the buffer" is both faster and future-proof.
+    let uploaded = retro::with_frame(|frame| -> Result<Option<(u32, u32)>, Box<dyn std::error::Error>> {
+        if frame.width == 0 || frame.height == 0 || frame.buf.is_empty() {
+            return Ok(None);
         }
-        let sdl_format = match PIXEL_FORMAT {
+        let sdl_format = match frame.pixel_format {
             RETRO_PIXEL_FORMAT_XRGB8888 => PixelFormatEnum::ARGB8888,
             RETRO_PIXEL_FORMAT_RGB565 => PixelFormatEnum::RGB565,
             _ => PixelFormatEnum::ARGB1555,
         };
         let q = texture.query();
-        if q.width != FRAME_WIDTH || q.height != FRAME_HEIGHT || q.format != sdl_format {
-            *texture = tc.create_texture_streaming(sdl_format, FRAME_WIDTH, FRAME_HEIGHT)?;
+        if q.width != frame.width || q.height != frame.height || q.format != sdl_format {
+            *texture = tc.create_texture_streaming(sdl_format, frame.width, frame.height)?;
         }
-        let size = (FRAME_HEIGHT as usize) * FRAME_PITCH;
-        if FRAME_BUFFER.len() >= size {
-            texture.update(None, &FRAME_BUFFER[..size], FRAME_PITCH)?;
+        let size = (frame.height as usize) * frame.pitch;
+        if frame.buf.len() >= size {
+            texture.update(None, &frame.buf[..size], frame.pitch)?;
+            Ok(Some((frame.width, frame.height)))
+        } else {
+            Ok(None)
+        }
+    })?;
+    let Some((frame_w, frame_h)) = uploaded else {
+        return Ok(());
+    };
+    {
+        {
             apply_scale_quality(filter);
             let (out_w, out_h) = canvas.output_size()?;
-            let dst = frame_destination(out_w, out_h, FRAME_WIDTH, FRAME_HEIGHT, aspect);
+            let dst = frame_destination(out_w, out_h, frame_w, frame_h, aspect);
             if filter.uses_opengl_shader() {
                 if let (Some(shader), Some(dst)) = (shader, dst) {
                     let shader_mode = filter.opengl_shader_mode().unwrap_or(0);
@@ -484,7 +497,7 @@ pub fn draw_emu_frame<'a>(
                             canvas,
                             texture,
                             dst,
-                            (FRAME_WIDTH, FRAME_HEIGHT),
+                            (frame_w, frame_h),
                             (out_w, out_h),
                             shader_mode,
                         )
@@ -1985,17 +1998,15 @@ pub const LOBBY_THUMB_H: u32 = 122;
 /// (`LOBBY_THUMB_W`×`LOBBY_THUMB_H`, alpha forced opaque), nearest-neighbor
 /// downscaled. Returns `None` if no frame is available yet.
 ///
-/// MUST be called on the main thread — it reads the same FRAME_BUFFER the core's
-/// video callback writes during `core.run()`. Hand the returned bytes to a
-/// background thread for compression/upload.
-#[allow(static_mut_refs)] // single-threaded main-thread read, same as the blitter
+/// Reads the shared frame under its lock, so it is safe from any thread.
+/// Hand the returned bytes to a background thread for compression/upload.
 pub fn capture_frame_thumbnail() -> Option<Vec<u8>> {
-    unsafe {
-        let (fw, fh, pitch, fmt) = (FRAME_WIDTH, FRAME_HEIGHT, FRAME_PITCH, PIXEL_FORMAT);
-        if fw == 0 || fh == 0 || FRAME_BUFFER.is_empty() {
+    retro::with_frame(|frame| {
+        let (fw, fh, pitch, fmt) = (frame.width, frame.height, frame.pitch, frame.pixel_format);
+        if fw == 0 || fh == 0 || frame.buf.is_empty() {
             return None;
         }
-        let src: &[u8] = &FRAME_BUFFER;
+        let src: &[u8] = &frame.buf;
         let (tw, th) = (LOBBY_THUMB_W, LOBBY_THUMB_H);
         let mut out = vec![0u8; (tw * th * 4) as usize];
         for ty in 0..th {
@@ -2039,7 +2050,7 @@ pub fn capture_frame_thumbnail() -> Option<Vec<u8>> {
             }
         }
         Some(out)
-    }
+    })
 }
 
 /// Overlay for replay takeover: a 3-2-1 countdown, the active control banner +

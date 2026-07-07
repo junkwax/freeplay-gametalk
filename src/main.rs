@@ -38,6 +38,7 @@ mod protocol;
 mod relay_socket;
 mod render;
 mod replay;
+mod runahead;
 mod replay_upload;
 mod retro;
 mod rom;
@@ -589,12 +590,10 @@ fn seek_replay_to(
         if !step_replay_frame(core, playback) {
             break;
         }
-        unsafe {
-            clear_audio_buffer();
-        }
+        clear_audio_buffer();
     }
     input::clear_all_inputs();
-    unsafe {
+    {
         clear_audio_buffer();
     }
     true
@@ -666,9 +665,7 @@ fn prepare_replay_review(core: &retro::Core, path: &str) -> Result<match_replay:
         return Err("replay state rejected".into());
     }
     input::clear_all_inputs();
-    unsafe {
-        clear_audio_buffer();
-    }
+    clear_audio_buffer();
     println!(
         "[replay] Reviewing {} frames: {} vs {} (markers build during playback, {} bookmarks)",
         pb.frame_count(),
@@ -913,9 +910,7 @@ fn shutdown_local_runtime_for_netplay(
     if let Some(q) = audio_queue {
         q.clear();
     }
-    unsafe {
-        retro::clear_audio_buffer();
-    }
+    retro::clear_audio_buffer();
     *audio_tail_sample = None;
 
     if let Some(c) = core {
@@ -1246,7 +1241,7 @@ fn export_replay_clip(
         if !step_replay_frame(core, playback) {
             break;
         }
-        let samples = unsafe { drain_audio_buffer() };
+        let samples = drain_audio_buffer();
         if !samples.is_empty() {
             recorder.record_audio(&samples);
         }
@@ -1358,25 +1353,22 @@ fn run_core_probe() -> Result<(), Box<dyn std::error::Error>> {
     dlog!("retro", "core_probe resolved rom zip={rom_path}");
     dlog!("retro", "core_probe resolved fbneo core={core_path}");
 
-    unsafe {
-        SILENT_MODE = true;
-        let core = retro::load(&core_path, &rom_path)?;
-        if !core.load_ok {
-            SILENT_MODE = false;
-            return Err("retro_load_game returned false".into());
-        }
+    retro::set_silent(true);
+    let probe = (|| -> Result<(), Box<dyn std::error::Error>> {
+        let core = unsafe { retro::load(&core_path, &rom_path)? };
         for _ in 0..12 {
-            (core.run)();
+            unsafe { (core.run)() };
         }
-        SILENT_MODE = false;
-    }
+        Ok(())
+    })();
+    retro::set_silent(false);
+    probe?;
 
     println!("[core-probe] ok");
     dlog!("retro", "core_probe ok");
     Ok(())
 }
 
-#[allow(static_mut_refs)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     adopt_packaged_working_dir();
 
@@ -1549,6 +1541,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut discord_user: Option<String> = matchmaking::username_from_cached_token();
     let mut discord_id: Option<String> = matchmaking::discord_id_from_cached_token();
     let mut score_tracker = score::ScoreTracker::new();
+    let mut local_runahead = runahead::Runahead::new();
 
     let mut core: Option<retro::Core> = None;
     let mut audio_queue: Option<AudioQueue<i16>> = None;
@@ -5226,6 +5219,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let step_stats = step_netplay_frame(
                             c,
                             sess,
+                            cfg.runahead_online,
                             local_handle,
                             &mut net_recording,
                             &mut match_replay_recording,
@@ -5407,9 +5401,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                             }
                             if replay_review_speed != REPLAY_DEFAULT_SPEED {
-                                unsafe {
-                                    clear_audio_buffer();
-                                }
+                                clear_audio_buffer();
                             }
                             if complete {
                                 println!(
@@ -5440,14 +5432,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .unwrap_or(0);
                             if gstate == GS_AMODE {
                                 let pulse = (auto_start_frame % 24) < 4;
-                                unsafe {
-                                    INPUT_STATE[0][RETRO_DEVICE_ID_JOYPAD_START as usize] = pulse;
-                                }
+                                retro::set_input(0, RETRO_DEVICE_ID_JOYPAD_START as usize, pulse);
                                 auto_start_frame = auto_start_frame.wrapping_add(1);
                             } else if gstate != 0 {
-                                unsafe {
-                                    INPUT_STATE[0][RETRO_DEVICE_ID_JOYPAD_START as usize] = false;
-                                }
+                                retro::set_input(0, RETRO_DEVICE_ID_JOYPAD_START as usize, false);
                                 auto_start_done = true;
                             }
                         }
@@ -5481,12 +5469,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     let gs = drone::GameState::read(c);
                                     let ghost_input = drone.next_input(&gs);
                                     let target_port = ghost_target_port(ghost_port_mask);
-                                    unsafe {
-                                        for b in 0..16 {
-                                            INPUT_STATE[target_port][b] =
-                                                (ghost_input >> b) & 1 != 0;
-                                        }
+                                    let mut row = [false; 16];
+                                    for (b, slot) in row.iter_mut().enumerate() {
+                                        *slot = (ghost_input >> b) & 1 != 0;
                                     }
+                                    retro::set_input_port(target_port, row);
                                 } else if !pb.inject_next(ghost_port_mask) {
                                     pb.rewind_inputs();
                                     let _ = pb.inject_next(ghost_port_mask);
@@ -5534,8 +5521,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if local_play_mode.is_lab() {
                             trainer.apply(c);
                         }
-                        unsafe {
-                            (c.run)();
+                        // Offline interactive play gets one-frame runahead:
+                        // the screen shows a frame further into MK2's input
+                        // pipeline while all logic below still reads the
+                        // canonical state the runahead step restores.
+                        if cfg.runahead && net_session.is_none() && match_replay_playback.is_none()
+                        {
+                            local_runahead.step(c);
+                        } else {
+                            unsafe {
+                                (c.run)();
+                            }
                         }
                         if net_session.is_none()
                             && match_replay_playback.is_none()
@@ -5595,27 +5591,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         trainer.apply(c);
                     }
                     if let Some(q) = &audio_queue {
-                        unsafe {
-                            if !AUDIO_BUFFER.is_empty() {
-                                let rollback_recovery_audio =
-                                    net_session.is_some() && net_stats.rollback_frames > 0;
-                                prepare_game_audio(
-                                    &mut AUDIO_BUFFER,
-                                    rollback_recovery_audio,
-                                    &mut audio_tail_sample,
-                                );
-                                if let Some(recorder) = clip_recorder.as_mut() {
-                                    recorder.record_audio(&AUDIO_BUFFER);
-                                }
-                                queue_game_audio(
-                                    q,
-                                    &mut AUDIO_BUFFER,
-                                    cfg.volume_percent,
-                                    cfg.audio_buffer,
-                                );
-                                AUDIO_BUFFER.clear();
+                        let rollback_recovery_audio =
+                            net_session.is_some() && net_stats.rollback_frames > 0;
+                        retro::with_audio_mut(|audio| {
+                            if audio.is_empty() {
+                                return;
                             }
-                        }
+                            prepare_game_audio(
+                                audio,
+                                rollback_recovery_audio,
+                                &mut audio_tail_sample,
+                            );
+                            if let Some(recorder) = clip_recorder.as_mut() {
+                                recorder.record_audio(audio);
+                            }
+                            queue_game_audio(q, audio, cfg.volume_percent, cfg.audio_buffer);
+                            audio.clear();
+                        });
                     }
                     if let Some(recorder) = clip_recorder.as_mut() {
                         match recorder.record_frame() {

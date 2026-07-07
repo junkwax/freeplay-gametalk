@@ -4,14 +4,13 @@
 //! loopback processes don't clobber each other). Synchronous append,
 //! auto-flushed. Negligible overhead — only called from already-expensive
 //! frame/input paths, not from hot loops like callbacks.
-#![allow(static_mut_refs)]
 
 use std::fs::File;
 use std::io::Write;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
-static mut LOGGER: Option<Mutex<Logger>> = None;
+static LOGGER: OnceLock<Mutex<Logger>> = OnceLock::new();
 
 struct Logger {
     file: File,
@@ -30,12 +29,10 @@ pub fn init(tag: &str) {
                 std::time::SystemTime::now()
             );
             let _ = f.flush();
-            unsafe {
-                LOGGER = Some(Mutex::new(Logger {
-                    file: f,
-                    start: Instant::now(),
-                }));
-            }
+            let _ = LOGGER.set(Mutex::new(Logger {
+                file: f,
+                start: Instant::now(),
+            }));
             println!("[log] writing to {filename}");
         }
         Err(e) => eprintln!("[log] failed to open {filename}: {e}"),
@@ -43,8 +40,8 @@ pub fn init(tag: &str) {
 }
 
 pub fn write(category: &str, msg: &str) {
-    unsafe {
-        if let Some(lock) = LOGGER.as_ref() {
+    {
+        if let Some(lock) = LOGGER.get() {
             if let Ok(mut l) = lock.lock() {
                 let t = l.start.elapsed();
                 let _ = writeln!(

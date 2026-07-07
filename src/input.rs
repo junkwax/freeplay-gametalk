@@ -3,7 +3,6 @@
 //! The frontend thinks in terms of **MK2 actions** (HighPunch, Block, Coin…).
 //! Raw SDL events are translated into actions via a `Bindings` table that the
 //! user can edit in the Controls menu and persist to config.toml.
-#![allow(static_mut_refs)]
 
 use crate::retro::*;
 use sdl2::controller::{Axis, Button};
@@ -427,13 +426,11 @@ fn live_input_sources() -> &'static Mutex<LiveInputSources> {
 }
 
 /// Record an action press/release from the live input layer (SDL events).
-/// This does NOT write directly to the libretro-visible INPUT_STATE; the
-/// main loop decides when to commit LIVE_INPUT into INPUT_STATE (every
-/// frame for local play; never for netplay — ggrs owns INPUT_STATE there).
+/// This does NOT write directly to the libretro-visible input state; the
+/// main loop decides when to commit live input into it (every frame for
+/// local play; never for netplay — ggrs owns the visible state there).
 pub fn set_action(player: Player, action: Action, pressed: bool) {
-    unsafe {
-        LIVE_INPUT[player.port()][action.retro_id()] = pressed;
-    }
+    crate::retro::set_live_input(player.port(), action.retro_id(), pressed);
 }
 
 /// Record one physical source for an action and resolve the action as the OR
@@ -451,40 +448,39 @@ pub fn set_action_source(player: Player, action: Action, source: InputSource, pr
 /// Whether the user is currently holding this action (live pad state).
 /// Used by the menu's live-press indicator and by snapshot_player().
 pub fn is_action_active(player: Player, action: Action) -> bool {
-    unsafe { LIVE_INPUT[player.port()][action.retro_id()] }
+    crate::retro::live_input(player.port(), action.retro_id())
 }
 
 /// Serialize one player's live pad state into a compact 16-bit packet for
 /// network transmission. Bit index = position in Action::ALL.
 pub fn snapshot_player(player: Player) -> u16 {
+    // One lock for the whole row instead of one per action.
+    let row = crate::retro::live_input_port(player.port());
     let mut bits: u16 = 0;
     for (i, a) in Action::ALL.iter().enumerate() {
-        if is_action_active(player, *a) {
+        if row[a.retro_id()] {
             bits |= 1 << i;
         }
     }
     bits
 }
 
-/// Apply a compact packet to the libretro-visible INPUT_STATE for `player`.
+/// Apply a compact packet to the libretro-visible input state for `player`.
 /// Called by netplay during AdvanceFrame, or by the local-play path each
 /// frame via `commit_live_to_state`.
 pub fn apply_snapshot(player: Player, bits: u16) {
+    let mut row = [false; 16];
     for (i, a) in Action::ALL.iter().enumerate() {
-        let pressed = (bits >> i) & 1 == 1;
-        unsafe {
-            INPUT_STATE[player.port()][a.retro_id()] = pressed;
-        }
+        row[a.retro_id()] = (bits >> i) & 1 == 1;
     }
+    crate::retro::set_input_port(player.port(), row);
 }
 
-/// Copy LIVE_INPUT directly into INPUT_STATE for both players. Used by the
-/// local-play path each frame so the emulator sees the user's current pad
-/// state without going through ggrs.
+/// Copy live input directly into the libretro-visible state for both
+/// players. Used by the local-play path each frame so the emulator sees
+/// the user's current pad state without going through ggrs.
 pub fn commit_live_to_state() {
-    unsafe {
-        INPUT_STATE = LIVE_INPUT;
-    }
+    crate::retro::commit_live_to_state();
 }
 
 pub fn clear_all_inputs() {
@@ -492,10 +488,7 @@ pub fn clear_all_inputs() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .clear();
-    unsafe {
-        INPUT_STATE = [[false; 16]; 2];
-        LIVE_INPUT = [[false; 16]; 2];
-    }
+    crate::retro::clear_all_inputs();
 }
 
 // --- SDL enum <-> string helpers ---

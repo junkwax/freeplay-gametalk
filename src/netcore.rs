@@ -16,7 +16,7 @@ use crate::match_replay;
 use crate::memory;
 use crate::mk2_addrs;
 use crate::netplay;
-use crate::retro::{self, SILENT_MODE};
+use crate::retro;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -58,6 +58,54 @@ pub struct NetRuntime {
     /// host/join clock skew never registers as a desync. See
     /// project_frame30_desync_root_cause memory note for full diagnosis.
     pub rtc_mask_offset: Option<usize>,
+    /// Scratch buffer for the online-runahead speculative frame (reused).
+    spec_scratch: Vec<u8>,
+    /// Savestate buffer pool. ggrs holds a clone of each saved state in its
+    /// ring (≤ prediction window + a couple); once it drops one, the Arc's
+    /// refcount returns to 1 and the buffer is reused for a later save. In
+    /// steady state this makes the per-frame save path allocation-free
+    /// (previously: a fresh ~2.4 MB zeroed Vec every frame, ~130 MB/s churn).
+    state_pool: Vec<std::sync::Arc<Vec<u8>>>,
+}
+
+/// Upper bound on pooled savestate buffers. ggrs's ring holds at most the
+/// prediction window (8) plus bookkeeping copies; 16 gives comfortable slack.
+const STATE_POOL_MAX: usize = 16;
+
+impl NetRuntime {
+    /// Serialize the core into a pooled buffer and return an Arc clone for
+    /// ggrs to own. The buffer is mutated *while the pool is its only owner*
+    /// (Arc::get_mut requires refcount 1), then cloned — so the pool keeps
+    /// one reference for reuse and ggrs gets the other. Falls back to a
+    /// transient allocation if the pool is saturated, which shouldn't happen
+    /// with a correctly-sized pool but must not stall the frame if it does.
+    /// Returns (state, serialize_ok).
+    fn save_into_pooled(&mut self, core: &retro::Core) -> (std::sync::Arc<Vec<u8>>, bool) {
+        use std::sync::Arc;
+        let idx = self
+            .state_pool
+            .iter()
+            .position(|a| Arc::strong_count(a) == 1)
+            .or_else(|| {
+                (self.state_pool.len() < STATE_POOL_MAX).then(|| {
+                    self.state_pool.push(Arc::new(Vec::new()));
+                    self.state_pool.len() - 1
+                })
+            });
+        match idx {
+            Some(i) => {
+                let arc = &mut self.state_pool[i];
+                let buf = Arc::get_mut(arc).expect("pool entry has refcount 1");
+                let ok = core.save_state_into(buf);
+                (Arc::clone(arc), ok)
+            }
+            None => {
+                let mut buf = Vec::new();
+                let ok = core.save_state_into(&mut buf);
+                (Arc::new(buf), ok)
+            }
+        }
+    }
 }
 
 /// Wipe trainer-flag RAM and drop all training-only state before a netplay
@@ -94,17 +142,26 @@ pub fn reset_for_netplay(
 /// Returns the byte offset of the matching word, or None if nothing in range
 /// looks like a wall clock (in which case we leave cksum unmodified — the
 /// caller will simply revert to whole-blob hashing).
+/// Seconds of clock skew we accept when hunting for the RTC word. The old
+/// ±24h window matched too much (any counter-ish u32 near unix time); the
+/// two peers' clocks are NTP-synced in practice, so ±10 minutes is plenty
+/// and sharply reduces the chance of masking 4 bytes of real gameplay state.
+const RTC_WINDOW_SECS: i64 = 10 * 60;
+/// FBNeo serializes its device state (including the RTC) at the tail of the
+/// blob; only scan the last chunk so a gameplay word can't be mistaken for it.
+const RTC_SCAN_TAIL_BYTES: usize = 256 * 1024;
+
 pub fn detect_rtc_offset(blob: &[u8]) -> Option<usize> {
     use std::time::{SystemTime, UNIX_EPOCH};
     let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs() as u32;
     // Search from the END of the blob: FBNeo's RTC device is serialized late,
     // and starting at the back avoids matching random byte patterns elsewhere.
-    let window: i64 = 24 * 60 * 60; // accept clocks within 1 day of ours
+    let scan_start = blob.len().saturating_sub(RTC_SCAN_TAIL_BYTES);
     let mut best: Option<usize> = None;
-    for off in (0..blob.len().saturating_sub(4)).rev() {
+    for off in (scan_start..blob.len().saturating_sub(4)).rev() {
         let v = u32::from_le_bytes([blob[off], blob[off + 1], blob[off + 2], blob[off + 3]]);
         let delta = (v as i64) - (now as i64);
-        if delta.abs() < window {
+        if delta.abs() < RTC_WINDOW_SECS {
             best = Some(off);
             break;
         }
@@ -123,7 +180,7 @@ pub fn detect_rtc_candidates(blob: &[u8]) -> Vec<usize> {
         return Vec::new();
     };
     let now = dur.as_secs() as u32;
-    let window: i64 = 24 * 60 * 60;
+    let window: i64 = RTC_WINDOW_SECS;
     let mut offs = Vec::new();
     let mut i = 0usize;
     while i + 4 <= blob.len() {
@@ -275,10 +332,10 @@ fn duration_micros(duration: Duration) -> u64 {
     duration.as_micros().min(u64::MAX as u128) as u64
 }
 
-#[allow(static_mut_refs)]
 pub fn step_netplay_frame(
     core: &retro::Core,
     sess: &mut netplay::Session,
+    speculate: bool,
     local_handle: usize,
     net_recording: &mut Option<ghost::NetRecording>,
     replay_recording: &mut Option<match_replay::Recording>,
@@ -441,65 +498,90 @@ pub fn step_netplay_frame(
         match req {
             GgrsRequest::SaveGameState { cell, frame } => {
                 let save_started = Instant::now();
-                let blob = core.save_state().unwrap_or_default();
+                let (blob, save_ok) = runtime.save_into_pooled(core);
                 save_state_time += save_started.elapsed();
-
-                let checksum_started = Instant::now();
-                if runtime.rtc_mask_offset.is_none() {
-                    if let Some(off) = detect_rtc_offset(&blob) {
-                        runtime.rtc_mask_offset = Some(off);
-                        // Log every wall-clock-like slot, not just the masked one.
-                        // If a 2-PC capture shows >1 candidate (or differing sets
-                        // between peers), the single-slot mask is the desync cause.
-                        let candidates = detect_rtc_candidates(&blob);
-                        let cand_str: Vec<String> =
-                            candidates.iter().map(|o| format!("0x{o:x}")).collect();
-                        let m = format!(
-                            "[net] FBNeo RTC slot at savestate offset 0x{off:x} — masking from cksum (candidates: [{}])",
-                            cand_str.join(", ")
-                        );
-                        println!("{m}");
-                        if let Some(f) = net_log.as_mut() {
-                            let _ = writeln!(f, "{m}");
-                        }
+                if !save_ok {
+                    dlog!("net", "SaveGameState frame={frame} serialize FAILED");
+                    if let Some(f) = net_log.as_mut() {
+                        let _ = writeln!(f, "[net/err] serialize failed at frame={frame}");
                     }
                 }
-                // Desync checksum is computed over the game's SYSTEM_RAM (the
-                // 68000 work RAM that drives gameplay), NOT the full emulator
-                // savestate. The savestate also serializes the sound CPU RAM,
-                // the audio chips (YM2151/OKI), and the host RTC — all of which
-                // differ between two peers even when gameplay is in perfect
-                // lockstep. Hashing the whole blob made every such difference a
-                // "desync"; a 2-PC capture showed only ~0.1% of the savestate
-                // differing, none of it in gameplay RAM. If SYSTEM_RAM is
-                // unavailable for some reason, fall back to the old whole-blob
-                // hash with the RTC slot masked.
-                let mut cksum = match memory::snapshot(core) {
-                    Some(ram) => cksum_with_mask(&ram, None),
-                    None => cksum_with_mask(&blob, runtime.rtc_mask_offset),
+
+                // The checksum only exists for ggrs desync detection, which
+                // compares once every DESYNC_INTERVAL frames — computing it on
+                // the other frames is pure waste, so gate it to the frames
+                // ggrs will actually look at.
+                let checksum_frame = frame >= 0 && (frame as u32) % netplay::DESYNC_INTERVAL == 0;
+                let cksum = if checksum_frame {
+                    let checksum_started = Instant::now();
+                    if runtime.rtc_mask_offset.is_none() {
+                        if let Some(off) = detect_rtc_offset(&blob) {
+                            runtime.rtc_mask_offset = Some(off);
+                            // Log every wall-clock-like slot, not just the masked one.
+                            // If a 2-PC capture shows >1 candidate (or differing sets
+                            // between peers), the single-slot mask is the desync cause.
+                            let candidates = detect_rtc_candidates(&blob);
+                            let cand_str: Vec<String> =
+                                candidates.iter().map(|o| format!("0x{o:x}")).collect();
+                            let m = format!(
+                                "[net] FBNeo RTC slot at savestate offset 0x{off:x} — masking from cksum (candidates: [{}])",
+                                cand_str.join(", ")
+                            );
+                            println!("{m}");
+                            if let Some(f) = net_log.as_mut() {
+                                let _ = writeln!(f, "{m}");
+                            }
+                        }
+                    }
+                    // Desync checksum is computed over the game's SYSTEM_RAM (the
+                    // 68000 work RAM that drives gameplay), NOT the full emulator
+                    // savestate. The savestate also serializes the sound CPU RAM,
+                    // the audio chips (YM2151/OKI), and the host RTC — all of which
+                    // differ between two peers even when gameplay is in perfect
+                    // lockstep. Hashing the whole blob made every such difference a
+                    // "desync"; a 2-PC capture showed only ~0.1% of the savestate
+                    // differing, none of it in gameplay RAM. If SYSTEM_RAM is
+                    // unavailable for some reason, fall back to the old whole-blob
+                    // hash with the RTC slot masked.
+                    let mut cksum = match memory::snapshot(core) {
+                        Some(ram) => cksum_with_mask(&ram, None),
+                        None => cksum_with_mask(&blob, runtime.rtc_mask_offset),
+                    };
+                    if let Some(sync) = memory::peek_u16(
+                        core,
+                        mk2_addrs::NETPLAY_SYNC_ADDR,
+                        memory::Endian::Little,
+                    ) {
+                        cksum ^= u128::from(sync) << 112;
+                    }
+                    checksum_time += checksum_started.elapsed();
+                    Some(cksum)
+                } else {
+                    None
                 };
-                if let Some(sync) =
-                    memory::peek_u16(core, mk2_addrs::NETPLAY_SYNC_ADDR, memory::Endian::Little)
-                {
-                    cksum ^= u128::from(sync) << 112;
-                }
-                checksum_time += checksum_started.elapsed();
                 dlog!(
                     "net",
-                    "SaveGameState frame={frame} bytes={} cksum=0x{:032x}",
+                    "SaveGameState frame={frame} bytes={} cksum={}",
                     blob.len(),
                     cksum
+                        .map(|c| format!("0x{c:032x}"))
+                        .unwrap_or_else(|| "-".into())
                 );
+                // Diagnostic pre-sync dump: a synchronous multi-MB write mid-
+                // match, so it is opt-in (set FREEPLAY_DUMP_PRESYNC=1) rather
+                // than firing on frame 30 of every session as it used to.
                 const DUMP_FRAME: i32 = 30;
-                if frame == DUMP_FRAME && !runtime.desync_dumped {
+                if frame == DUMP_FRAME
+                    && !runtime.desync_dumped
+                    && crate::config::env_value("FREEPLAY_DUMP_PRESYNC").is_some()
+                {
                     runtime.desync_dumped = true;
                     let tag = if local_handle == 0 { "host" } else { "join" };
                     let path = format!("presync_{}_frame{}.state", tag, frame);
-                    let _ = std::fs::write(&path, &blob);
+                    let _ = std::fs::write(&path, blob.as_slice());
                     let m = format!(
-                        "[net/err] dumped pre-sync savestate ({} bytes, cksum=0x{:032x}) to {}",
+                        "[net] dumped pre-sync savestate ({} bytes) to {}",
                         blob.len(),
-                        cksum,
                         path
                     );
                     println!("{m}");
@@ -507,7 +589,7 @@ pub fn step_netplay_frame(
                         let _ = writeln!(f, "{m}");
                     }
                 }
-                cell.save(frame, Some(blob), Some(cksum));
+                cell.save(frame, Some(blob), cksum);
             }
             GgrsRequest::LoadGameState { cell, frame } => {
                 if let Some(blob) = cell.load() {
@@ -538,9 +620,7 @@ pub fn step_netplay_frame(
             GgrsRequest::AdvanceFrame { inputs } => {
                 advances_seen += 1;
                 let is_last = advances_seen == advance_count;
-                unsafe {
-                    SILENT_MODE = !is_last;
-                }
+                retro::set_silent(!is_last);
                 let p1_bits = inputs[0].0.bits;
                 let p2_bits = inputs[1].0.bits;
                 dlog!(
@@ -573,9 +653,31 @@ pub fn step_netplay_frame(
     if let Some(rec) = replay_recording.as_mut() {
         rec.set_confirmed_frame(confirmed_frame);
     }
-    unsafe {
-        SILENT_MODE = false;
+    retro::set_silent(false);
+
+    // Online video-only runahead: show one frame beyond the ggrs frontier.
+    // Runs the core once more from canonical state with the freshest LOCAL
+    // input (the remote port keeps its last ggrs-applied input, i.e. the
+    // same prediction ggrs itself would make), presents only its VIDEO,
+    // then restores canonical. It never enters ggrs state or the desync
+    // checksum path, so it cannot cause desyncs — it only deepens the
+    // displayed prediction by one frame. Audio stays canonical: presenting
+    // speculative audio would enqueue duplicate samples every tick.
+    if speculate && advance_count > 0 && !peer_disconnected_this_frame {
+        if core.save_state_into(&mut runtime.spec_scratch) {
+            apply_snapshot(local_player, snapshot_player(local_player));
+            retro::set_av_mode(retro::AvMode::VideoOnly);
+            unsafe { (core.run)() };
+            retro::set_av_mode(retro::AvMode::Normal);
+            if !core.load_state(&runtime.spec_scratch) {
+                dlog!("net", "speculative frame: canonical restore FAILED");
+                if let Some(f) = net_log.as_mut() {
+                    let _ = writeln!(f, "[net/err] speculative restore failed");
+                }
+            }
+        }
     }
+
     NetStepStats {
         advance_count,
         save_count,

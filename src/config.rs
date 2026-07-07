@@ -57,6 +57,25 @@ pub struct Config {
     /// Optional email used to make the guest stats identity portable.
     #[serde(default)]
     pub stats_email: String,
+    /// One-frame runahead for offline interactive play (local versus, Lab,
+    /// drones): each tick the core runs one hidden canonical frame plus one
+    /// visible speculative frame, cutting perceived input latency by a frame
+    /// of MK2's internal input pipeline. Netplay and replay playback ignore
+    /// this (ggrs owns prediction online; replays aren't interactive).
+    /// Costs one extra core run + savestate save/load per frame; disable on
+    /// very weak hardware if frame pacing suffers.
+    #[serde(default = "default_true")]
+    pub runahead: bool,
+    /// Video-only runahead during netplay: each tick, after ggrs advances,
+    /// one extra speculative frame is shown (freshest local input, remote
+    /// input predicted) and canonical state is restored. Cannot desync —
+    /// the speculative frame never enters ggrs — but it deepens the visual
+    /// prediction by one frame, so rollback corrections are one frame
+    /// larger, and it costs an extra core run + save/load per tick in the
+    /// most timing-critical path. Off by default; feel-focused players on
+    /// decent hardware can enable it.
+    #[serde(default)]
+    pub runahead_online: bool,
     /// Start in desktop fullscreen and keep that preference when toggled.
     #[serde(default)]
     pub fullscreen: bool,

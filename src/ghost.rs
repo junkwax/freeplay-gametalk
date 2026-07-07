@@ -16,14 +16,13 @@
 //!
 //! Each frame's input is two u16s, one per port, bit N = button N pressed
 //! (matching RETRO_DEVICE_ID_JOYPAD_* slot numbers).
-#![allow(static_mut_refs)]
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use crate::retro::{
-    Core, INPUT_STATE, RETRO_DEVICE_ID_JOYPAD_SELECT, RETRO_DEVICE_ID_JOYPAD_START,
+    Core, RETRO_DEVICE_ID_JOYPAD_SELECT, RETRO_DEVICE_ID_JOYPAD_START,
 };
 
 /// Persistent counter of how many times we've recorded vs each peer.
@@ -206,7 +205,7 @@ impl Recording {
     /// Call once per frame BEFORE core.run, after INPUT_STATE has been
     /// populated. Captures what the core is about to see.
     pub fn record_frame(&mut self) {
-        let s = unsafe { INPUT_STATE };
+        let s = crate::retro::input_state_snapshot();
         self.inputs.push(pack(&s));
     }
 
@@ -377,13 +376,11 @@ impl Playback {
         }
         let frame = self.inputs[self.cursor];
         let s = unpack([without_coin(frame[0]), without_coin(frame[1])]);
-        unsafe {
-            if ports & 0b01 != 0 {
-                INPUT_STATE[0] = s[0];
-            }
-            if ports & 0b10 != 0 {
-                INPUT_STATE[1] = s[1];
-            }
+        if ports & 0b01 != 0 {
+            crate::retro::set_input_port(0, s[0]);
+        }
+        if ports & 0b10 != 0 {
+            crate::retro::set_input_port(1, s[1]);
         }
         self.cursor += 1;
         true

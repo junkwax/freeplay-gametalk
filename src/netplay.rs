@@ -28,14 +28,56 @@ pub struct NetInput {
 }
 
 /// ggrs configuration: what types the session operates on.
+///
+/// State is `Arc<Vec<u8>>` (a retro_serialize blob) rather than `Vec<u8>`:
+/// ggrs clones the state into its ring every frame, and cloning an Arc is a
+/// refcount bump instead of a ~2.4 MB copy. netcore keeps a small pool of
+/// Arcs and reuses any whose refcount has dropped back to 1 (ggrs released
+/// it), so steady-state netplay does zero savestate allocations.
 pub struct GgrsConfig;
 impl Config for GgrsConfig {
     type Input = NetInput;
-    type State = Vec<u8>; // retro_serialize blob
+    type State = std::sync::Arc<Vec<u8>>; // retro_serialize blob
     type Address = SocketAddr;
 }
 
 pub type Session = P2PSession<GgrsConfig>;
+
+/// Frames between GGRS desync-detection checksum comparisons. Shared with
+/// netcore so the (comparatively costly) checksum is only computed on frames
+/// ggrs will actually compare, instead of every frame.
+pub const DESYNC_INTERVAL: u32 = 30;
+
+/// Shared session-builder config for both transports. MK2 runs ~54.7 Hz;
+/// ggrs wants the logical tick rate so its timing calculations (timesync,
+/// drift detection) are correct — 55 is the closest integer. Only the
+/// disconnect timers differ between the direct and relay paths (see the
+/// call sites for why).
+fn configured_builder<F: FnMut(&str)>(
+    input_delay: u32,
+    notify_delay: Duration,
+    disconnect_timeout: Duration,
+    log_fn: &mut F,
+) -> Result<SessionBuilder<GgrsConfig>, ggrs::GgrsError> {
+    Ok(SessionBuilder::<GgrsConfig>::new()
+        .with_num_players(2)
+        .with_fps(55)
+        .map_err(|e| {
+            log_fn(&format!("[session] with_fps err: {e}"));
+            e
+        })?
+        .with_input_delay(input_delay as usize)
+        .with_max_prediction_window(8)
+        .map_err(|e| {
+            log_fn(&format!("[session] with_max_prediction_window err: {e}"));
+            e
+        })?
+        .with_disconnect_notify_delay(notify_delay)
+        .with_disconnect_timeout(disconnect_timeout)
+        .with_desync_detection_mode(ggrs::DesyncDetection::On {
+            interval: DESYNC_INTERVAL,
+        }))
+}
 
 /// Build a 2-player session.
 ///   `local_port` — UDP port to bind locally (any free port works for the
@@ -70,28 +112,16 @@ pub fn start_session_verbose<F: FnMut(&str)>(
         local_handle, local_port, remote_addr
     ));
 
-    // MK2 runs ~54.7 Hz. ggrs wants the logical tick rate so its timing
-    // calculations (timesync, drift detection) are correct.
-    // Tighter disconnect timers. Defaults are 500ms notify / 2000ms hard-kill.
-    // We additionally tear the session down on the Disconnected event in
-    // main.rs, so the ggrs-side timeout mostly serves as a backstop. 1500ms
-    // feels snappy to users but still survives a normal LAN hiccup.
-    let mut builder = SessionBuilder::<GgrsConfig>::new()
-        .with_num_players(2)
-        .with_fps(55)
-        .map_err(|e| {
-            log_fn(&format!("[session] with_fps err: {e}"));
-            e
-        })?
-        .with_input_delay(input_delay as usize)
-        .with_max_prediction_window(8)
-        .map_err(|e| {
-            log_fn(&format!("[session] with_max_prediction_window err: {e}"));
-            e
-        })?
-        .with_disconnect_notify_delay(std::time::Duration::from_millis(400))
-        .with_disconnect_timeout(std::time::Duration::from_millis(1500))
-        .with_desync_detection_mode(ggrs::DesyncDetection::On { interval: 30 });
+    // Direct-P2P timers are tight: defaults are 500ms notify / 2000ms
+    // hard-kill; we additionally tear the session down on the Disconnected
+    // event in main.rs, so the ggrs-side timeout mostly serves as a backstop.
+    // 1500ms feels snappy to users but still survives a normal LAN hiccup.
+    let mut builder = configured_builder(
+        input_delay,
+        Duration::from_millis(400),
+        Duration::from_millis(1500),
+        &mut log_fn,
+    )?;
     log_fn(&format!(
         "[session] builder configured (fps=55 delay={input_delay} window=8 desync=on, drop=1.5s)"
     ));
@@ -144,22 +174,16 @@ where
 {
     let remote_handle = 1 - local_handle;
 
-    let mut builder = SessionBuilder::<GgrsConfig>::new()
-        .with_num_players(2)
-        .with_fps(55)
-        .map_err(|e| {
-            log_fn(&format!("[session] with_fps err: {e}"));
-            e
-        })?
-        .with_input_delay(input_delay as usize)
-        .with_max_prediction_window(8)
-        .map_err(|e| {
-            log_fn(&format!("[session] with_max_prediction_window err: {e}"));
-            e
-        })?
-        .with_disconnect_notify_delay(std::time::Duration::from_millis(2000))
-        .with_disconnect_timeout(std::time::Duration::from_millis(10000))
-        .with_desync_detection_mode(ggrs::DesyncDetection::On { interval: 30 });
+    // Relay timers are deliberately looser than the direct-P2P path: TURN
+    // adds a middle hop whose brief stalls (allocation refresh, congestion)
+    // would trip the 1.5s direct-path timeout and kill an otherwise healthy
+    // match, so relayed sessions get 2s notify / 10s hard-kill.
+    let mut builder = configured_builder(
+        input_delay,
+        std::time::Duration::from_millis(2000),
+        std::time::Duration::from_millis(10000),
+        &mut log_fn,
+    )?;
     log_fn(&format!(
         "[session] (relay) builder configured (delay={input_delay} drop=10s)"
     ));

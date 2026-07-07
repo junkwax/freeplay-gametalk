@@ -1016,7 +1016,19 @@ fn read_cached_token() -> Option<String> {
 fn write_cached_token(token: &str) {
     if let Some(path) = token_cache_path() {
         match std::fs::write(&path, token) {
-            Ok(_) => println!("[mm] Discord token cached to {}", path.display()),
+            Ok(_) => {
+                // The token grants matchmaking identity; don't leave it
+                // world-readable (fs::write defaults to 0644 on Unix).
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(
+                        &path,
+                        std::fs::Permissions::from_mode(0o600),
+                    );
+                }
+                println!("[mm] Discord token cached to {}", path.display());
+            }
             Err(e) => println!("[mm] failed to cache token: {e}"),
         }
     }
@@ -1196,19 +1208,28 @@ fn base64_decode(s: &str) -> Option<Vec<u8>> {
 
 // ── ROM hash ──────────────────────────────────────────────────────────────────
 
+/// Compatibility hash sent to matchmaking: a short FNV of the ROM zip plus
+/// the core's git-ref tag, joined with '@'. Two clients can sync only if
+/// BOTH match — same ROM bytes and same FBNeo commit (savestate layout and
+/// simulation drift between commits). Server-side matching is plain string
+/// equality on this field, so folding the core tag in requires no server
+/// change; peers on mismatched cores simply never match, instead of
+/// desyncing at frame 30.
 fn rom_short_hash() -> String {
-    let bytes = match crate::rom::read_rom_zip() {
-        Some(b) => b,
-        None => return "0".to_string(),
+    let rom = match crate::rom::read_rom_zip() {
+        Some(bytes) => {
+            let mut h: u64 = 0xcbf29ce484222325;
+            for chunk in bytes.chunks(8) {
+                let mut w = [0u8; 8];
+                w[..chunk.len()].copy_from_slice(chunk);
+                h ^= u64::from_le_bytes(w);
+                h = h.wrapping_mul(0x100000001b3);
+            }
+            format!("{:08x}", (h >> 32) as u32)
+        }
+        None => "0".to_string(),
     };
-    let mut h: u64 = 0xcbf29ce484222325;
-    for chunk in bytes.chunks(8) {
-        let mut w = [0u8; 8];
-        w[..chunk.len()].copy_from_slice(chunk);
-        h ^= u64::from_le_bytes(w);
-        h = h.wrapping_mul(0x100000001b3);
-    }
-    format!("{:08x}", (h >> 32) as u32)
+    format!("{rom}@{}", crate::retro::core_compat_tag())
 }
 
 fn sha256_hex(input: &[u8]) -> String {
@@ -2869,36 +2890,117 @@ fn parse_ghost_list(json: &str) -> Option<Vec<RemoteGhostMeta>> {
     Some(out)
 }
 
-fn json_array_body<'a>(json: &'a str, key: &str) -> Option<&'a str> {
-    let arr_start = json.find(&format!("\"{key}\""))? + key.len() + 2;
-    let after_colon = json[arr_start..].find('[')? + arr_start + 1;
-    let mut depth = 1i32;
-    let mut in_string = false;
-    let mut escaped = false;
-    for (offset, c) in json[after_colon..].char_indices() {
-        if in_string {
-            if escaped {
-                escaped = false;
-            } else if c == '\\' {
-                escaped = true;
-            } else if c == '"' {
-                in_string = false;
-            }
-            continue;
+// ── Minimal JSON field extraction ────────────────────────────────────────────
+//
+// Deliberately not a full parser (lean-deps rule), but hardened against the
+// realities of this input: it comes from the network and includes strings
+// *other users* typed (usernames, chat, room names). The previous helpers
+// were exact-substring matchers that broke on `"key": "value"` whitespace and
+// mis-decoded escapes (a username containing `\"` truncated the scan and bled
+// into later fields). These versions tolerate whitespace, decode escapes per
+// the JSON spec, and treat quoted strings as opaque when matching brackets.
+
+/// Byte index of the first non-whitespace character of the value for `key`,
+/// searching from `from`. Matches `"key"` followed by optional whitespace and
+/// a colon; occurrences of the pattern inside string *values* can't match
+/// because their quotes are backslash-escaped on the wire.
+fn json_key_pos(json: &str, key: &str, from: usize) -> Option<usize> {
+    let pat = format!("\"{key}\"");
+    let bytes = json.as_bytes();
+    let mut search = from;
+    loop {
+        let hit = json.get(search..)?.find(&pat)? + search;
+        let mut i = hit + pat.len();
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
         }
+        if i < bytes.len() && bytes[i] == b':' {
+            i += 1;
+            while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            return Some(i);
+        }
+        search = hit + pat.len();
+    }
+}
+
+/// Decode the JSON string whose opening quote is at byte `start`.
+/// Returns (decoded value, index one past the closing quote), or None on
+/// malformed input (bad escape, unterminated, raw control character).
+fn json_decode_string(json: &str, start: usize) -> Option<(String, usize)> {
+    if json.as_bytes().get(start) != Some(&b'"') {
+        return None;
+    }
+    let mut out = String::new();
+    let mut chars = json[start + 1..].char_indices();
+    while let Some((i, c)) = chars.next() {
         match c {
-            '"' => in_string = true,
-            '[' => depth += 1,
-            ']' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(&json[after_colon..after_colon + offset]);
+            '"' => return Some((out, start + 1 + i + 1)),
+            '\\' => {
+                let (_, esc) = chars.next()?;
+                match esc {
+                    '"' => out.push('"'),
+                    '\\' => out.push('\\'),
+                    '/' => out.push('/'),
+                    'n' => out.push('\n'),
+                    'r' => out.push('\r'),
+                    't' => out.push('\t'),
+                    'b' => out.push('\u{0008}'),
+                    'f' => out.push('\u{000C}'),
+                    'u' => {
+                        let mut code = 0u32;
+                        for _ in 0..4 {
+                            let (_, h) = chars.next()?;
+                            code = code * 16 + h.to_digit(16)?;
+                        }
+                        // Lone surrogates (and unpaired halves of pairs) map
+                        // to U+FFFD rather than failing the whole message.
+                        out.push(char::from_u32(code).unwrap_or('\u{FFFD}'));
+                    }
+                    _ => return None,
                 }
             }
-            _ => {}
+            c if (c as u32) < 0x20 => return None,
+            c => out.push(c),
         }
     }
     None
+}
+
+/// Given `start` at an opening bracket (`{` or `[`), return the byte index of
+/// the matching closing bracket, skipping over string contents.
+fn json_matching_close(json: &str, start: usize, open: char, close: char) -> Option<usize> {
+    let mut depth = 0i32;
+    let mut i = start;
+    let bytes = json.as_bytes();
+    while i < bytes.len() {
+        let c = bytes[i] as char;
+        if c == '"' {
+            let (_, after) = json_decode_string(json, i)?;
+            i = after;
+            continue;
+        }
+        if c == open {
+            depth += 1;
+        } else if c == close {
+            depth -= 1;
+            if depth == 0 {
+                return Some(i);
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+fn json_array_body<'a>(json: &'a str, key: &str) -> Option<&'a str> {
+    let pos = json_key_pos(json, key, 0)?;
+    if json.as_bytes().get(pos) != Some(&b'[') {
+        return None;
+    }
+    let end = json_matching_close(json, pos, '[', ']')?;
+    Some(&json[pos + 1..end])
 }
 
 /// Collect the quoted strings in a JSON string array (e.g. `["a","b"]`).
@@ -2907,25 +3009,19 @@ fn json_string_array(json: &str, key: &str) -> Vec<String> {
         return Vec::new();
     };
     let mut out = Vec::new();
-    let mut chars = body.chars().peekable();
-    while let Some(&c) = chars.peek() {
-        if c == '"' {
-            chars.next();
-            let mut s = String::new();
-            while let Some(ch) = chars.next() {
-                match ch {
-                    '\\' => {
-                        if let Some(esc) = chars.next() {
-                            s.push(esc);
-                        }
-                    }
-                    '"' => break,
-                    _ => s.push(ch),
+    let bytes = body.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == b'"' {
+            match json_decode_string(body, i) {
+                Some((s, after)) => {
+                    out.push(s);
+                    i = after;
                 }
+                None => break, // malformed element: stop rather than misparse
             }
-            out.push(s);
         } else {
-            chars.next();
+            i += 1;
         }
     }
     out
@@ -2933,26 +3029,23 @@ fn json_string_array(json: &str, key: &str) -> Vec<String> {
 
 fn json_object_chunks(body: &str) -> Vec<&str> {
     let mut out = Vec::new();
-    let mut depth = 0i32;
-    let mut start: Option<usize> = None;
-    for (i, c) in body.char_indices() {
-        match c {
-            '{' => {
-                if depth == 0 {
-                    start = Some(i);
+    let bytes = body.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        match bytes[i] as char {
+            // Braces inside string values must not open/close chunks.
+            '"' => match json_decode_string(body, i) {
+                Some((_, after)) => i = after,
+                None => break,
+            },
+            '{' => match json_matching_close(body, i, '{', '}') {
+                Some(end) => {
+                    out.push(&body[i..=end]);
+                    i = end + 1;
                 }
-                depth += 1;
-            }
-            '}' => {
-                depth -= 1;
-                if depth == 0 {
-                    if let Some(s) = start {
-                        out.push(&body[s..=i]);
-                    }
-                    start = None;
-                }
-            }
-            _ => {}
+                None => break,
+            },
+            _ => i += 1,
         }
     }
     out
@@ -3214,10 +3307,8 @@ fn wait_until_ms(target_ms: i64) {
 // ── Minimal JSON parsing ──────────────────────────────────────────────────────
 
 fn json_str(json: &str, key: &str) -> Option<String> {
-    let pat = format!("\"{key}\":\"");
-    let start = json.find(&pat)? + pat.len();
-    let end = json[start..].find('"')?;
-    Some(json[start..start + end].to_string())
+    let pos = json_key_pos(json, key, 0)?;
+    json_decode_string(json, pos).map(|(s, _)| s)
 }
 
 fn json_escape(s: &str) -> String {
@@ -3229,7 +3320,11 @@ fn json_escape(s: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
-            c if c.is_control() => {}
+            // Escape (don't drop) remaining control chars so round-trips are
+            // lossless and the output is always valid JSON.
+            c if (c as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04x}", c as u32));
+            }
             c => out.push(c),
         }
     }
@@ -3237,63 +3332,63 @@ fn json_escape(s: &str) -> String {
 }
 
 fn json_last_str(json: &str, key: &str) -> Option<String> {
-    let pat = format!("\"{key}\":\"");
-    let start = json.rfind(&pat)? + pat.len();
-    let end = json[start..].find('"')?;
-    Some(json[start..start + end].to_string())
+    let mut from = 0usize;
+    let mut last = None;
+    while let Some(pos) = json_key_pos(json, key, from) {
+        if let Some((s, after)) = json_decode_string(json, pos) {
+            last = Some(s);
+            from = after;
+        } else {
+            from = pos + 1;
+        }
+    }
+    last
+}
+
+/// Slice of the object value (including braces) for `outer`, if present.
+fn json_nested_object<'a>(json: &'a str, outer: &str) -> Option<&'a str> {
+    let pos = json_key_pos(json, outer, 0)?;
+    if json.as_bytes().get(pos) != Some(&b'{') {
+        return None;
+    }
+    let end = json_matching_close(json, pos, '{', '}')?;
+    Some(&json[pos..=end])
 }
 
 fn json_nested_str(json: &str, outer: &str, inner: &str) -> Option<String> {
-    let pat = format!("\"{outer}\":{{");
-    let start = json.find(&pat)? + pat.len() - 1;
-    let sub = &json[start..];
-    json_str(sub, inner)
+    json_str(json_nested_object(json, outer)?, inner)
 }
 
 fn json_nested_i64(json: &str, outer: &str, inner: &str) -> Option<i64> {
-    let pat_outer = format!("\"{outer}\":{{");
-    let start = json.find(&pat_outer)? + pat_outer.len() - 1;
-    let sub = &json[start..];
-    let pat = format!("\"{inner}\":");
-    let val_start = sub.find(&pat)? + pat.len();
-    let val_sub = &sub[val_start..];
-    let val_end = val_sub
-        .find(|c: char| !c.is_ascii_digit() && c != '-')
-        .unwrap_or(val_sub.len());
-    val_sub[..val_end].parse().ok()
+    json_i64(json_nested_object(json, outer)?, inner)
 }
 
 fn json_nested_bool(json: &str, outer: &str, inner: &str) -> Option<bool> {
-    let pat_outer = format!("\"{outer}\":{{");
-    let start = json.find(&pat_outer)? + pat_outer.len() - 1;
-    let sub = &json[start..];
-    json_bool(sub, inner)
+    json_bool(json_nested_object(json, outer)?, inner)
+}
+
+fn json_number_slice<'a>(json: &'a str, key: &str) -> Option<&'a str> {
+    let start = json_key_pos(json, key, 0)?;
+    let rest = &json[start..];
+    let end = rest
+        .find(|c: char| {
+            !c.is_ascii_digit() && c != '-' && c != '+' && c != '.' && c != 'e' && c != 'E'
+        })
+        .unwrap_or(rest.len());
+    (end > 0).then(|| &rest[..end])
 }
 
 fn json_i64(json: &str, key: &str) -> Option<i64> {
-    let pat = format!("\"{key}\":");
-    let start = json.find(&pat)? + pat.len();
-    let rest = json[start..].trim_start();
-    let end = rest
-        .find(|c: char| !c.is_ascii_digit())
-        .unwrap_or(rest.len());
-    rest[..end].parse().ok()
+    json_number_slice(json, key)?.parse().ok()
 }
 
 fn json_u64(json: &str, key: &str) -> Option<u64> {
-    let pat = format!("\"{key}\":");
-    let start = json.find(&pat)? + pat.len();
-    let rest = json[start..].trim_start();
-    let end = rest
-        .find(|c: char| !c.is_ascii_digit())
-        .unwrap_or(rest.len());
-    rest[..end].parse().ok()
+    json_number_slice(json, key)?.parse().ok()
 }
 
 fn json_bool(json: &str, key: &str) -> Option<bool> {
-    let pat = format!("\"{key}\":");
-    let start = json.find(&pat)? + pat.len();
-    let rest = json[start..].trim_start();
+    let start = json_key_pos(json, key, 0)?;
+    let rest = &json[start..];
     if rest.starts_with("true") {
         Some(true)
     } else if rest.starts_with("false") {
@@ -3304,33 +3399,82 @@ fn json_bool(json: &str, key: &str) -> Option<bool> {
 }
 
 fn json_last_u64(json: &str, key: &str) -> Option<u64> {
-    let pat = format!("\"{key}\":");
-    let start = json.rfind(&pat)? + pat.len();
-    let rest = json[start..].trim_start();
-    let end = rest
-        .find(|c: char| !c.is_ascii_digit())
-        .unwrap_or(rest.len());
-    rest[..end].parse().ok()
+    let mut from = 0usize;
+    let mut last = None;
+    while let Some(start) = json_key_pos(json, key, from) {
+        let rest = &json[start..];
+        let end = rest
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(rest.len());
+        if end > 0 {
+            if let Ok(v) = rest[..end].parse() {
+                last = Some(v);
+            }
+        }
+        from = start + 1;
+    }
+    last
 }
 
 fn json_f64(json: &str, key: &str) -> Option<f64> {
-    let pat = format!("\"{key}\":");
-    let start = json.find(&pat)? + pat.len();
-    let rest = json[start..].trim_start();
-    let end = rest
-        .find(|c: char| {
-            !c.is_ascii_digit() && c != '.' && c != '-' && c != 'e' && c != 'E' && c != '+'
-        })
-        .unwrap_or(rest.len());
-    rest[..end].parse().ok()
+    json_number_slice(json, key)?.parse().ok()
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
+        json_bool, json_i64, json_nested_str, json_object_chunks, json_str, json_string_array,
         match_result_body, parse_live_matches, parse_lobbies, parse_lobby_snapshot,
         parse_spectate_state, read_chunked_body, sha256_hex, LobbyMatchFormat,
     };
+
+    #[test]
+    fn json_str_tolerates_whitespace_and_decodes_escapes() {
+        let j = r#"{ "name" : "a\"b\\c\nd" , "other": "x" }"#;
+        assert_eq!(json_str(j, "name").as_deref(), Some("a\"b\\c\nd"));
+        assert_eq!(json_str(j, "other").as_deref(), Some("x"));
+    }
+
+    #[test]
+    fn json_str_does_not_match_key_text_inside_string_values() {
+        // A chat message trying to smuggle a field. On the wire its quotes
+        // are escaped, so the scanner must not treat it as a real key.
+        let j = r#"{"message":"ha \"peer_endpoint\": \"6.6.6.6:1\"","peer_endpoint":"1.2.3.4:7000"}"#;
+        assert_eq!(
+            json_str(j, "peer_endpoint").as_deref(),
+            Some("1.2.3.4:7000")
+        );
+    }
+
+    #[test]
+    fn json_escape_round_trips_through_json_str() {
+        let evil = "a\"b\\c\nd\te\u{0001}f";
+        let j = format!(r#"{{"v":"{}"}}"#, super::json_escape(evil));
+        assert_eq!(json_str(&j, "v").as_deref(), Some(evil));
+    }
+
+    #[test]
+    fn json_string_array_decodes_escaped_elements() {
+        let j = r#"{"names": [ "a\"b" , "c\\d" ]}"#;
+        assert_eq!(json_string_array(j, "names"), vec!["a\"b", "c\\d"]);
+    }
+
+    #[test]
+    fn json_object_chunks_ignores_braces_inside_strings() {
+        let body = r#"{"msg":"hi } { there"},{"msg":"two"}"#;
+        let chunks = json_object_chunks(body);
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(json_str(chunks[0], "msg").as_deref(), Some("hi } { there"));
+        assert_eq!(json_str(chunks[1], "msg").as_deref(), Some("two"));
+    }
+
+    #[test]
+    fn json_scalars_tolerate_whitespace() {
+        let j = r#"{ "n" : -42 , "b" : true , "nested" : { "inner" : "v" } }"#;
+        assert_eq!(json_i64(j, "n"), Some(-42));
+        assert_eq!(json_bool(j, "b"), Some(true));
+        assert_eq!(json_nested_str(j, "nested", "inner").as_deref(), Some("v"));
+    }
 
     #[test]
     fn read_chunked_body_reassembles_chunks() {

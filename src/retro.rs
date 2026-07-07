@@ -1,16 +1,21 @@
-//! Libretro FFI layer: core loading, callbacks, and the shared static
-//! framebuffer/input state that the C callbacks write into.
+//! Libretro FFI layer: core loading, callbacks, and the shared
+//! framebuffer/input/audio state that the C callbacks write into.
 //!
-//! Static muts are used because libretro's C callbacks are plain function
-//! pointers with no user-data arg — they need somewhere global to put frame
-//! data and read input from. The whole thing is single-threaded.
-#![allow(static_mut_refs)]
+//! Libretro callbacks are plain C function pointers with no user-data arg,
+//! so the state they touch must be global. Each domain (frame, audio,
+//! input, silent flag) lives behind its own small lock so a callback only
+//! ever takes one lock and call sites can't deadlock by nesting domains.
+//! This also makes the layer safe if emulation later moves off the main
+//! thread. One rule for callers: never call `core.run` (or anything else
+//! that re-enters the core) from inside a `with_*` closure — the core's
+//! callbacks take these same locks.
 
 use libloading::{Library, Symbol};
 use std::ffi::{c_char, c_void, CString};
 use std::path::{Path, PathBuf};
 use std::ptr;
-use std::sync::OnceLock;
+use std::sync::atomic::Ordering;
+use std::sync::{Mutex, OnceLock};
 
 // --- Libretro environment command IDs ---
 pub const RETRO_ENVIRONMENT_SET_MESSAGE: u32 = 6;
@@ -22,6 +27,19 @@ pub const RETRO_ENVIRONMENT_GET_LIBRETRO_PATH: u32 = 19;
 pub const RETRO_ENVIRONMENT_GET_CONTENT_DIRECTORY: u32 = 30;
 pub const RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY: u32 = 31;
 pub const RETRO_ENVIRONMENT_GET_CORE_OPTIONS_VERSION: u32 = 52;
+pub const RETRO_ENVIRONMENT_EXPERIMENTAL: u32 = 0x10000;
+/// Core asks each frame whether it should bother producing video/audio.
+/// Answering this is how the frontend makes rollback resim frames cheap:
+/// with the video bit cleared FBNeo sets pBurnDraw=NULL and drivers skip
+/// rendering entirely; with the audio-enable bit cleared it still emulates
+/// sound (required for determinism) but skips mixing/presenting it.
+pub const RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE: u32 = 47 | RETRO_ENVIRONMENT_EXPERIMENTAL;
+/// Core asks what savestates will be used for. Answering ROLLBACK_NETPLAY
+/// makes FBNeo use its netplay-optimized scan (ACB_NET_OPT), keep hiscores
+/// disabled (hiscore.dat memory writes are a known netplay desync source),
+/// and set its internal kNetGame determinism flag.
+pub const RETRO_ENVIRONMENT_GET_SAVESTATE_CONTEXT: u32 = 72 | RETRO_ENVIRONMENT_EXPERIMENTAL;
+pub const RETRO_SAVESTATE_CONTEXT_ROLLBACK_NETPLAY: u32 = 3;
 
 // --- Memory region IDs for retro_get_memory_data/size ---
 #[allow(dead_code)]
@@ -57,48 +75,181 @@ pub const RETRO_DEVICE_ID_JOYPAD_L: u32 = 10; // FBNeo mk2: Low Kick
 pub const RETRO_DEVICE_ID_JOYPAD_R: u32 = 11; // (unused: Run in some MK titles)
 
 // --- Shared state populated by C callbacks ---
-pub static mut FRAME_BUFFER: Vec<u8> = Vec::new();
-pub static mut FRAME_WIDTH: u32 = 0;
-pub static mut FRAME_HEIGHT: u32 = 0;
-pub static mut FRAME_PITCH: usize = 0;
-pub static mut PIXEL_FORMAT: u32 = RETRO_PIXEL_FORMAT_0RGB1555;
-/// Per-port input state read by `input_state_cb` (what FBNeo sees).
-/// [0]=P1, [1]=P2. Bit slots mirror RETRO_DEVICE_ID_JOYPAD_*.
-///
-/// During netplay this holds whatever ggrs's AdvanceFrame supplied, NOT the
-/// live user input — see LIVE_INPUT for that. During local play main.rs
-/// copies LIVE_INPUT into INPUT_STATE each frame.
-pub static mut INPUT_STATE: [[bool; 16]; 2] = [[false; 16]; 2];
 
-/// Live pad/keyboard state, written by SDL event handlers as buttons are
-/// pressed/released. This is the source of truth for "what is the user
-/// currently holding". Netplay code takes a snapshot of this and sends it
-/// to ggrs; local-play code copies it into INPUT_STATE each frame.
-pub static mut LIVE_INPUT: [[bool; 16]; 2] = [[false; 16]; 2];
+/// Video frame most recently presented by the core, plus its geometry and
+/// the pixel format negotiated via `SET_PIXEL_FORMAT`.
+pub struct FrameState {
+    pub buf: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+    pub pitch: usize,
+    pub pixel_format: u32,
+}
+
+static FRAME: Mutex<FrameState> = Mutex::new(FrameState {
+    buf: Vec::new(),
+    width: 0,
+    height: 0,
+    pitch: 0,
+    pixel_format: RETRO_PIXEL_FORMAT_0RGB1555,
+});
+
+/// Run `f` with the current frame locked. Keep the closure short and never
+/// call back into the core from inside it.
+pub fn with_frame<R>(f: impl FnOnce(&FrameState) -> R) -> R {
+    f(&FRAME.lock().expect("frame lock poisoned"))
+}
+
+/// Per-port pad state.
+/// `state` is what FBNeo sees through `input_state_cb`: during netplay it
+/// holds whatever ggrs's AdvanceFrame supplied, NOT the live user input.
+/// `live` is the raw pad/keyboard state written by SDL event handlers — the
+/// source of truth for "what is the user currently holding". Netplay
+/// snapshots `live` and sends it to ggrs; local play commits `live` into
+/// `state` each frame.
+#[derive(Default)]
+struct Pads {
+    state: [[bool; 16]; 2],
+    live: [[bool; 16]; 2],
+}
+
+static PADS: Mutex<Pads> = Mutex::new(Pads {
+    state: [[false; 16]; 2],
+    live: [[false; 16]; 2],
+});
+
+/// Snapshot the libretro-visible input state (what FBNeo sees).
+pub fn input_state_snapshot() -> [[bool; 16]; 2] {
+    PADS.lock().expect("pads lock poisoned").state
+}
+
+/// Set one libretro-visible input slot.
+pub fn set_input(port: usize, id: usize, pressed: bool) {
+    if port < 2 && id < 16 {
+        PADS.lock().expect("pads lock poisoned").state[port][id] = pressed;
+    }
+}
+
+/// Overwrite one port's full libretro-visible input row.
+pub fn set_input_port(port: usize, row: [bool; 16]) {
+    if port < 2 {
+        PADS.lock().expect("pads lock poisoned").state[port] = row;
+    }
+}
+
+/// Overwrite the whole libretro-visible input state.
+pub fn set_input_all(state: [[bool; 16]; 2]) {
+    PADS.lock().expect("pads lock poisoned").state = state;
+}
+
+/// Set one live (user-held) input slot. Written by SDL event handlers.
+pub fn set_live_input(port: usize, id: usize, pressed: bool) {
+    if port < 2 && id < 16 {
+        PADS.lock().expect("pads lock poisoned").live[port][id] = pressed;
+    }
+}
+
+/// Read one live (user-held) input slot.
+pub fn live_input(port: usize, id: usize) -> bool {
+    port < 2 && id < 16 && PADS.lock().expect("pads lock poisoned").live[port][id]
+}
+
+/// Snapshot one port's live row.
+pub fn live_input_port(port: usize) -> [bool; 16] {
+    if port < 2 {
+        PADS.lock().expect("pads lock poisoned").live[port]
+    } else {
+        [false; 16]
+    }
+}
+
+/// Copy live input into the libretro-visible state for both players.
+/// Used by local (non-netplay) play each frame.
+pub fn commit_live_to_state() {
+    let mut pads = PADS.lock().expect("pads lock poisoned");
+    pads.state = pads.live;
+}
+
+/// Zero both live and libretro-visible input for both players.
+pub fn clear_all_inputs() {
+    let mut pads = PADS.lock().expect("pads lock poisoned");
+    pads.state = [[false; 16]; 2];
+    pads.live = [[false; 16]; 2];
+}
 
 /// Audio samples produced by the core during the most recent `retro_run`.
-/// Interleaved stereo s16. Main loop drains this into the SDL audio queue
-/// each frame and then clears it.
-pub static mut AUDIO_BUFFER: Vec<i16> = Vec::new();
+/// Interleaved stereo s16. The main loop drains this into the SDL audio
+/// queue each frame.
+static AUDIO: Mutex<Vec<i16>> = Mutex::new(Vec::new());
+
+pub fn clear_audio_buffer() {
+    AUDIO.lock().expect("audio lock poisoned").clear();
+}
+
+pub fn drain_audio_buffer() -> Vec<i16> {
+    std::mem::take(&mut *AUDIO.lock().expect("audio lock poisoned"))
+}
+
+/// Run `f` with the pending audio locked (e.g. to filter in place and hand
+/// it to a recorder before clearing). Never call `core.run` inside.
+pub fn with_audio_mut<R>(f: impl FnOnce(&mut Vec<i16>) -> R) -> R {
+    f(&mut AUDIO.lock().expect("audio lock poisoned"))
+}
+
+/// What the core should present this frame. Backed by an atomic u8.
+///
+/// - `Normal`: video and audio both emulated and presented.
+/// - `Silent`: neither presented (rollback resim frames, fast-forward);
+///   FBNeo also skips rendering entirely via the env answer.
+/// - `VideoOnly`: video presented, audio emulated but NOT presented. Used
+///   for speculative runahead frames layered on top of netplay: the shown
+///   frame is one ahead of canonical, but the audio timeline stays
+///   canonical so the SDL queue never receives duplicate samples.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AvMode {
+    Normal = 0,
+    Silent = 1,
+    VideoOnly = 2,
+}
+
+static AV_MODE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+pub fn set_av_mode(mode: AvMode) {
+    AV_MODE.store(mode as u8, Ordering::Relaxed);
+}
+
+fn av_mode() -> AvMode {
+    match AV_MODE.load(Ordering::Relaxed) {
+        1 => AvMode::Silent,
+        2 => AvMode::VideoOnly,
+        _ => AvMode::Normal,
+    }
+}
+
+/// True when video should be produced/presented this frame.
+pub fn video_enabled() -> bool {
+    av_mode() != AvMode::Silent
+}
+
+/// True when audio should be presented this frame (it is always emulated).
+pub fn audio_enabled() -> bool {
+    av_mode() == AvMode::Normal
+}
+
+/// Compatibility wrappers: most call sites only toggle between fully
+/// presenting and fully silent.
+pub fn set_silent(on: bool) {
+    set_av_mode(if on { AvMode::Silent } else { AvMode::Normal });
+}
+
+pub fn silent() -> bool {
+    av_mode() == AvMode::Silent
+}
 
 static LIBRETRO_PATH: OnceLock<CString> = OnceLock::new();
 static SYSTEM_DIRECTORY: OnceLock<CString> = OnceLock::new();
 static CONTENT_DIRECTORY: OnceLock<CString> = OnceLock::new();
 static SAVE_DIRECTORY: OnceLock<CString> = OnceLock::new();
-
-#[allow(static_mut_refs)]
-pub unsafe fn clear_audio_buffer() {
-    AUDIO_BUFFER.clear();
-}
-
-#[allow(static_mut_refs)]
-pub unsafe fn drain_audio_buffer() -> Vec<i16> {
-    std::mem::take(&mut AUDIO_BUFFER)
-}
-
-/// When true, video_refresh_cb / audio callbacks discard data. Used during
-/// rollback resim frames where we only want to advance state, not present it.
-pub static mut SILENT_MODE: bool = false;
 
 #[repr(C)]
 pub struct GameInfo {
@@ -201,13 +352,54 @@ extern "C" fn environment_cb(cmd: u32, data: *mut c_void) -> bool {
             RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY => {
                 write_env_path(&SYSTEM_DIRECTORY, data, "system_directory")
             }
+            RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE => {
+                // Bit 0: enable video. Cleared during silent (resim/fast-
+                //        forward) frames -> FBNeo sets pBurnDraw=NULL and the
+                //        driver skips all rendering for that frame.
+                // Bit 1: enable audio (present to frontend). Cleared during
+                //        silent frames; FBNeo still *emulates* sound, which
+                //        is required for determinism — the remote peer ran
+                //        this frame with sound emulated, so skipping the
+                //        sound CPU here would diverge the state.
+                // Bit 2: netplay context hint for FBNeo's fallback paths.
+                // Bit 3: hard-disable audio. NEVER set — it skips sound
+                //        emulation entirely, which is only safe for the
+                //        throwaway instance of 2-instance runahead.
+                if !data.is_null() {
+                    let mut flags: i32 = 0b100;
+                    if video_enabled() {
+                        flags |= 0b001;
+                    }
+                    if audio_enabled() {
+                        flags |= 0b010;
+                    }
+                    *(data as *mut i32) = flags;
+                }
+                true
+            }
+            RETRO_ENVIRONMENT_GET_SAVESTATE_CONTEXT => {
+                // Always report the rollback-netplay context, even for local
+                // play. Two reasons: (1) serialize and unserialize layouts
+                // must agree, and states cross the local/netplay boundary
+                // (clean-boot reload, replays), so the context must never
+                // change at runtime; (2) this exact layout (ACB_NET_OPT,
+                // hiscores off, kNetGame=1) is what the core already used
+                // when this query went unanswered — FBNeo's fallback reads
+                // an untouched -1 sentinel from GET_AUDIO_VIDEO_ENABLE and
+                // lands on the netplay path — so existing savestates and
+                // replays keep their layout.
+                if !data.is_null() {
+                    *(data as *mut u32) = RETRO_SAVESTATE_CONTEXT_ROLLBACK_NETPLAY;
+                }
+                true
+            }
             RETRO_ENVIRONMENT_SET_PIXEL_FORMAT => {
                 let format = *(data as *const u32);
                 match format {
                     RETRO_PIXEL_FORMAT_0RGB1555
                     | RETRO_PIXEL_FORMAT_XRGB8888
                     | RETRO_PIXEL_FORMAT_RGB565 => {
-                        PIXEL_FORMAT = format;
+                        FRAME.lock().expect("frame lock poisoned").pixel_format = format;
                         true
                     }
                     _ => false,
@@ -274,42 +466,40 @@ extern "C" fn environment_cb(cmd: u32, data: *mut c_void) -> bool {
 }
 
 extern "C" fn video_refresh_cb(data: *const c_void, width: u32, height: u32, pitch: usize) {
-    unsafe {
-        if SILENT_MODE {
-            return;
-        }
-        if !data.is_null() {
-            let size = (height as usize) * pitch;
-            if FRAME_BUFFER.len() < size {
-                FRAME_BUFFER.resize(size, 0);
-            }
-            let src = std::slice::from_raw_parts(data as *const u8, size);
-            FRAME_BUFFER[..size].copy_from_slice(src);
-            FRAME_WIDTH = width;
-            FRAME_HEIGHT = height;
-            FRAME_PITCH = pitch;
-        }
+    if !video_enabled() || data.is_null() {
+        return;
     }
+    let size = (height as usize) * pitch;
+    // SAFETY: libretro guarantees `data` points at `height * pitch` readable
+    // bytes for the duration of this callback.
+    let src = unsafe { std::slice::from_raw_parts(data as *const u8, size) };
+    let mut frame = FRAME.lock().expect("frame lock poisoned");
+    if frame.buf.len() < size {
+        frame.buf.resize(size, 0);
+    }
+    frame.buf[..size].copy_from_slice(src);
+    frame.width = width;
+    frame.height = height;
+    frame.pitch = pitch;
 }
 
 extern "C" fn audio_sample_cb(left: i16, right: i16) {
-    unsafe {
-        if SILENT_MODE {
-            return;
-        }
-        AUDIO_BUFFER.push(left);
-        AUDIO_BUFFER.push(right);
+    if !audio_enabled() {
+        return;
     }
+    let mut audio = AUDIO.lock().expect("audio lock poisoned");
+    audio.push(left);
+    audio.push(right);
 }
 extern "C" fn audio_sample_batch_cb(data: *const i16, frames: usize) -> usize {
-    unsafe {
-        if SILENT_MODE {
-            return frames;
-        }
-        if !data.is_null() && frames > 0 {
-            let samples = std::slice::from_raw_parts(data, frames * 2);
-            AUDIO_BUFFER.extend_from_slice(samples);
-        }
+    if audio_enabled() && !data.is_null() && frames > 0 {
+        // SAFETY: libretro guarantees `data` points at `frames` interleaved
+        // stereo sample pairs for the duration of this callback.
+        let samples = unsafe { std::slice::from_raw_parts(data, frames * 2) };
+        AUDIO
+            .lock()
+            .expect("audio lock poisoned")
+            .extend_from_slice(samples);
     }
     frames
 }
@@ -317,15 +507,13 @@ extern "C" fn audio_sample_batch_cb(data: *const i16, frames: usize) -> usize {
 extern "C" fn input_poll_cb() {}
 
 extern "C" fn input_state_cb(port: u32, device: u32, index: u32, id: u32) -> i16 {
-    unsafe {
-        if device == RETRO_DEVICE_JOYPAD
-            && index == 0
-            && port < 2
-            && id < 16
-            && INPUT_STATE[port as usize][id as usize]
-        {
-            return 1;
-        }
+    if device == RETRO_DEVICE_JOYPAD
+        && index == 0
+        && port < 2
+        && id < 16
+        && PADS.lock().expect("pads lock poisoned").state[port as usize][id as usize]
+    {
+        return 1;
     }
     0
 }
@@ -360,16 +548,26 @@ impl Core {
         unsafe { (self.serialize_size_fn)() }
     }
 
-    /// Snapshot the current emulation state into a fresh Vec.
-    /// Returns None if the core refuses to serialize.
-    pub fn save_state(&self) -> Option<Vec<u8>> {
+    /// Serialize the current emulation state into `buf`, reusing its
+    /// allocation. `buf` is resized to exactly `serialize_size()`; when the
+    /// buffer is already that size (the steady state during netplay, where
+    /// this runs every frame) no allocation and no zero-fill happens.
+    /// Returns false if the core refuses to serialize.
+    pub fn save_state_into(&self, buf: &mut Vec<u8>) -> bool {
         let size = self.serialize_size();
         if size == 0 {
-            return None;
+            return false;
         }
-        let mut buf = vec![0u8; size];
-        let ok = unsafe { (self.serialize_fn)(buf.as_mut_ptr() as *mut c_void, size) };
-        if ok {
+        buf.resize(size, 0);
+        unsafe { (self.serialize_fn)(buf.as_mut_ptr() as *mut c_void, size) }
+    }
+
+    /// Snapshot the current emulation state into a fresh Vec.
+    /// Returns None if the core refuses to serialize. Prefer
+    /// `save_state_into` in per-frame paths to avoid the allocation.
+    pub fn save_state(&self) -> Option<Vec<u8>> {
+        let mut buf = Vec::new();
+        if self.save_state_into(&mut buf) {
             Some(buf)
         } else {
             None
@@ -402,12 +600,92 @@ impl Core {
 
 /// Load the FBNeo libretro core, wire callbacks, init the core, and load the ROM.
 /// Returns a `Core` whose `run` is callable once per frame.
+/// The core's `library_version` string, captured at load (e.g.
+/// "v1.0.0.03 260705 GITcf53523"). Two peers can only stay in sync if their
+/// cores were built from the same FBNeo commit — savestate layout and
+/// simulation behavior drift between commits — so the GIT tag from this
+/// string is folded into the matchmaking compatibility hash. The git ref
+/// (not a hash of the core file) is the right key: the same ref built by
+/// different compilers on different OSes yields different binaries that
+/// are nonetheless sync-compatible.
+static CORE_VERSION: OnceLock<String> = OnceLock::new();
+
+/// Short sync-compatibility tag for the loaded core: the `GIT<hash>` token
+/// from the core's version string if present, otherwise the whole version
+/// string with spaces collapsed, otherwise "unknown" (no core loaded yet).
+pub fn core_compat_tag() -> String {
+    match CORE_VERSION.get() {
+        Some(v) => parse_compat_tag(v),
+        None => "unknown".to_string(),
+    }
+}
+
+fn parse_compat_tag(version: &str) -> String {
+    version
+        .split_whitespace()
+        .find_map(|tok| tok.strip_prefix("GIT"))
+        .map(|h| h.to_ascii_lowercase())
+        .unwrap_or_else(|| version.split_whitespace().collect::<Vec<_>>().join("_"))
+}
+
+#[cfg(test)]
+mod compat_tag_tests {
+    use super::parse_compat_tag;
+
+    #[test]
+    fn extracts_git_ref_from_fbneo_version_string() {
+        assert_eq!(parse_compat_tag("v1.0.0.03 260705 GITcf53523"), "cf53523");
+    }
+
+    #[test]
+    fn falls_back_to_collapsed_version_without_git_tag() {
+        assert_eq!(parse_compat_tag("v1.0.0.03 260705"), "v1.0.0.03_260705");
+    }
+}
+
+#[repr(C)]
+struct RetroSystemInfo {
+    library_name: *const c_char,
+    library_version: *const c_char,
+    valid_extensions: *const c_char,
+    need_fullpath: bool,
+    block_extract: bool,
+}
+
 pub unsafe fn load(dll_path: &str, rom_path: &str) -> Result<Core, Box<dyn std::error::Error>> {
     println!("Loading FBNeo Libretro Core...");
     crate::dlog!("retro", "core dll={dll_path}");
     crate::dlog!("retro", "rom zip={rom_path}");
     configure_environment_paths(dll_path, rom_path);
     let lib = Library::new(dll_path)?;
+
+    if let Ok(get_system_info) = lib.get::<Symbol<unsafe extern "C" fn(*mut RetroSystemInfo)>>(
+        b"retro_get_system_info\0",
+    ) {
+        let mut info = RetroSystemInfo {
+            library_name: ptr::null(),
+            library_version: ptr::null(),
+            valid_extensions: ptr::null(),
+            need_fullpath: false,
+            block_extract: false,
+        };
+        get_system_info(&mut info);
+        if !info.library_version.is_null() {
+            let ver = std::ffi::CStr::from_ptr(info.library_version)
+                .to_string_lossy()
+                .into_owned();
+            let name = if info.library_name.is_null() {
+                String::new()
+            } else {
+                std::ffi::CStr::from_ptr(info.library_name)
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            println!("Core: {name} {ver}");
+            crate::dlog!("retro", "core system_info name={name} version={ver}");
+            let _ = CORE_VERSION.set(ver);
+        }
+    }
 
     let retro_set_environment: Symbol<
         unsafe extern "C" fn(extern "C" fn(u32, *mut c_void) -> bool),
@@ -462,8 +740,17 @@ pub unsafe fn load(dll_path: &str, rom_path: &str) -> Result<Core, Box<dyn std::
     };
     let load_ok = retro_load_game(&game_info);
     if !load_ok {
-        println!("WARNING: retro_load_game returned false (CRC mismatch?); booting anyway.");
+        // Booting anyway used to be allowed here, but a rejected romset means
+        // FBNeo's driver-level CRC/layout validation failed — the machine is
+        // either unbootable or, worse, bootable-but-divergent, which shows up
+        // online as an unexplainable instant desync. Fail loudly instead.
         crate::dlog!("retro", "retro_load_game returned false");
+        return Err(format!(
+            "FBNeo rejected the romset at {rom_path}. This usually means the zip is the \
+             wrong MK2 revision or an incomplete/renamed set. Freeplay needs the arcade \
+             'mk2' romset (rev L3.1) matching the bundled FBNeo core."
+        )
+        .into());
     }
     println!("ROM Loaded. Booting System...");
 

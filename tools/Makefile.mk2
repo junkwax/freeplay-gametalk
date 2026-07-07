@@ -1,0 +1,32 @@
+# Drivers, cpus and devices for the Midway T-Unit (Mortal Kombat II) subset.
+#
+# Built for netplay clients that ship a single game: everything outside the
+# T-Unit board is excluded, which shrinks the core by an order of magnitude
+# and guarantees no unrelated driver can ever boot. The T-Unit hardware is:
+#   main CPU  : TMS34010 (@ ~6.25MHz, also draws the video)
+#   sound     : Williams DCS (ADSP-2105) for MK2 / revision boards,
+#               plus the older M6809+YM2151+OKI6295 ADPCM sound board used
+#               by other T-Unit titles registered in the same driver file
+#               (NBA Jam, Judge Dredd, ...), which d_tunit.cpp references.
+
+SOURCES_C += $(FBNEO_BURN_SND_DIR)/ym2151.c
+
+SOURCES_CXX += $(FBNEO_BURN_DIR)/tiles_generic.cpp \
+	$(FBNEO_BURN_DIR)/tilemap_generic.cpp \
+	$(FBNEO_BURN_DIR)/burn_bitmap.cpp \
+	$(TMS34010_CPU_DIR)/tms34010.cpp \
+	$(FBNEO_CPU_DIR)/tms34_intf.cpp \
+	$(ADSP2100_CPU_DIR)/adsp2100.cpp \
+	$(FBNEO_CPU_DIR)/adsp2100_intf.cpp \
+	$(M6809_CPU_DIR)/m6809.cpp \
+	$(FBNEO_CPU_DIR)/m6809_intf.cpp \
+	$(FBNEO_BURN_SND_DIR)/burn_ym2151.cpp \
+	$(FBNEO_BURN_SND_DIR)/msm6295.cpp \
+	$(FBNEO_BURN_SND_DIR)/dac.cpp \
+	$(FBNEO_BURN_DEVICES_DIR)/joyprocess.cpp \
+	$(MIDWAY_DIR)/dcs2k.cpp \
+	$(MIDWAY_DIR)/midtunit.cpp \
+	$(MIDWAY_DIR)/d_tunit.cpp
+
+CFLAGS += -DSUBSET=\"$(SUBSET)\" -DNO_NEOGEO -DNO_PGM2 -DNO_CONSOLES_COMPUTERS
+CXXFLAGS += -DSUBSET=\"$(SUBSET)\" -DNO_NEOGEO -DNO_PGM2 -DNO_CONSOLES_COMPUTERS

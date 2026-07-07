@@ -67,6 +67,11 @@ fn first_zip_in(dir: &str) -> Option<PathBuf> {
     first_zip_in_path(Path::new(dir))
 }
 
+/// Fallback scan for a ROM zip that isn't named exactly `mk2.zip`. Only
+/// accepts filenames that still look like an MK2 set ("mk2 (1).zip",
+/// "MK2.zip", "mk2-l31.zip", ...). An unrestricted "first zip in the folder"
+/// scan used to run here — with a `kof98.zip` sorting first, the client would
+/// silently boot the wrong game (or hand FBNeo garbage) and desync online.
 fn first_zip_in_path(dir: &Path) -> Option<PathBuf> {
     let mut zips: Vec<PathBuf> = std::fs::read_dir(dir)
         .ok()?
@@ -77,6 +82,10 @@ fn first_zip_in_path(dir: &Path) -> Option<PathBuf> {
                     .extension()
                     .and_then(|ext| ext.to_str())
                     .is_some_and(|ext| ext.eq_ignore_ascii_case("zip"))
+                && path
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .is_some_and(|stem| stem.to_ascii_lowercase().starts_with("mk2"))
         })
         .collect();
     zips.sort();
