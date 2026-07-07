@@ -50,24 +50,53 @@ Get-ChildItem "target\release\*.dll" -ErrorAction SilentlyContinue | ForEach-Obj
 }
 
 # ── Ensure FBNeo core ─────────────────────────────────────────────────────────
-if (-not (Test-Path "$OUT_DIR\fbneo_libretro.dll")) {
+# Prefer the trimmed mk2-subset core (built via tools\build-fbneo-windows.ps1,
+# same preference order as render.rs::platform_core_names) and fall back to a
+# stock full-driver core so older dev setups still package. Whichever name is
+# found is kept as-is in $OUT_DIR — the client's own fallback lookup at
+# runtime relies on the real filename being present.
+$fbneo_found = (Test-Path "$OUT_DIR\fbneo_mk2_libretro.dll") -or (Test-Path "$OUT_DIR\fbneo_libretro.dll")
+if (-not $fbneo_found) {
     $fbneo_candidates = @(
-        "cores\fbneo_libretro.dll",
-        "src\fbneo_libretro.dll",
-        "fbneo_libretro.dll",
-        "$env:USERPROFILE\AppData\Roaming\RetroArch\cores\fbneo_libretro.dll"
+        @{ Path = "cores\fbneo_mk2_libretro.dll"; Name = "fbneo_mk2_libretro.dll" },
+        @{ Path = "src\fbneo_mk2_libretro.dll"; Name = "fbneo_mk2_libretro.dll" },
+        @{ Path = "fbneo_mk2_libretro.dll"; Name = "fbneo_mk2_libretro.dll" },
+        @{ Path = "cores\fbneo_libretro.dll"; Name = "fbneo_libretro.dll" },
+        @{ Path = "src\fbneo_libretro.dll"; Name = "fbneo_libretro.dll" },
+        @{ Path = "fbneo_libretro.dll"; Name = "fbneo_libretro.dll" },
+        @{ Path = "$env:USERPROFILE\AppData\Roaming\RetroArch\cores\fbneo_libretro.dll"; Name = "fbneo_libretro.dll" }
     )
-    foreach ($path in $fbneo_candidates) {
-        if (Test-Path $path) {
-            Copy-Item $path "$OUT_DIR\fbneo_libretro.dll"
-            Write-Host "  ✓ Copied fbneo_libretro.dll from $path"
+    foreach ($candidate in $fbneo_candidates) {
+        if (Test-Path $candidate.Path) {
+            Copy-Item $candidate.Path "$OUT_DIR\$($candidate.Name)"
+            Write-Host "  ✓ Copied $($candidate.Name) from $($candidate.Path)"
+            $fbneo_found = $true
             break
         }
     }
 }
-if (-not (Test-Path "$OUT_DIR\fbneo_libretro.dll")) {
-    Write-Host "  ❌ fbneo_libretro.dll not found. Run: .\tools\build-fbneo-windows.ps1" -ForegroundColor Red
+if (-not $fbneo_found) {
+    Write-Host "  ❌ No FBNeo core found (looked for fbneo_mk2_libretro.dll, then fbneo_libretro.dll). Run: .\tools\build-fbneo-windows.ps1" -ForegroundColor Red
     exit 1
+}
+
+# The mk2 subset core is a MinGW/MSYS2 build that dynamically depends on
+# libwinpthread-1.dll (build-fbneo-windows.ps1 stages a copy in cores\
+# alongside the core for exactly this reason). Without it next to
+# freeplay.exe, loading the core silently fails on a machine without MSYS2
+# on PATH. A stock MSVC-built fbneo_libretro.dll doesn't need this.
+if (-not (Test-Path "$OUT_DIR\libwinpthread-1.dll")) {
+    $winpthread_candidates = @("cores\libwinpthread-1.dll", "src\libwinpthread-1.dll", "libwinpthread-1.dll")
+    foreach ($path in $winpthread_candidates) {
+        if (Test-Path $path) {
+            Copy-Item $path "$OUT_DIR\libwinpthread-1.dll"
+            Write-Host "  ✓ Copied libwinpthread-1.dll from $path"
+            break
+        }
+    }
+}
+if ((Test-Path "$OUT_DIR\fbneo_mk2_libretro.dll") -and -not (Test-Path "$OUT_DIR\libwinpthread-1.dll")) {
+    Write-Host "  ⚠ libwinpthread-1.dll not found; the mk2 core will fail to load without it. Re-run .\tools\build-fbneo-windows.ps1 to stage it." -ForegroundColor Yellow
 }
 
 # ── Ensure SDL2 DLLs ──────────────────────────────────────────────────────────
