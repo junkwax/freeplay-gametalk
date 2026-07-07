@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.8.1 - 2026-07-07
+
+### Fixed
+
+- Windows packaging: bundle `libwinpthread-1.dll` alongside the trimmed
+  `fbneo_mk2_libretro.dll` core. The MinGW/MSYS2-built core dynamically
+  depends on it; without it next to `freeplay.exe`, the core silently
+  failed to load and Arcade mode crashed on launch with no visible error.
+- Release CI: FBNeo build cache keys no longer float on FBNeo's `master`
+  branch — release builds now correctly track the pinned commit baked
+  into `tools/build-fbneo-*`, and cache paths point at the trimmed
+  `fbneo_mk2_libretro.*` artifact instead of the old full-driver name.
+- Removed a dead `load_ok` field from `retro::Core`.
+
+### Added
+
+- Settings menu: "Runahead (offline)" and "Runahead (online,
+  experimental)" toggles, bound to the runahead speculation added in
+  the 0.8.0 core overhaul.
+
 ## 0.7.30 - 2026-06-20
 
 ### Fixed
