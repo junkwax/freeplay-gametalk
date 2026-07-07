@@ -146,6 +146,8 @@ pub enum MenuScreen {
         scorebar_style: ScorebarStyle,
         input_delay: u32,
         render_profile: RenderProfile,
+        runahead: bool,
+        runahead_online: bool,
     },
     /// Lab helpers backed by RAM pokes already used by F-keys.
     Training {
@@ -427,7 +429,7 @@ pub const MAIN_ITEMS: [&str; 9] = [
 ];
 const LAB_MENU_ITEMS: [&str; 2] = ["Start Lab", "Load Drones"];
 
-const SETTINGS_ITEMS: [&str; 16] = [
+const SETTINGS_ITEMS: [&str; 18] = [
     "Username",
     "Stats Email",
     "Discord Account",
@@ -444,6 +446,8 @@ const SETTINGS_ITEMS: [&str; 16] = [
     "Open Clips Folder",
     "Open Logs Folder",
     "Render Profile",
+    "Runahead (offline)",
+    "Runahead (online, experimental)",
 ];
 const TRAINING_ITEMS: [&str; 3] = ["Hitbox View", "Infinite Health", "Freeze Timer"];
 
@@ -804,6 +808,10 @@ pub enum NavResult {
     AdjustInputDelay(i8),
     /// Cycle SDL renderer backend preference for hardware tests.
     CycleRenderProfile(i8),
+    /// Toggle offline one-frame runahead and persist config.
+    ToggleRunahead,
+    /// Toggle experimental online (netplay) video-only runahead and persist config.
+    ToggleRunaheadOnline,
     /// Open Training helper menu.
     #[allow(dead_code)]
     OpenTraining,
@@ -1171,6 +1179,8 @@ impl AppState {
                         scorebar_style: ScorebarStyle::Centered,
                         input_delay: 3,
                         render_profile: RenderProfile::Auto,
+                        runahead: true,
+                        runahead_online: false,
                     });
                     NavResult::OpenSettings
                 }
@@ -1451,6 +1461,8 @@ impl AppState {
                 13 => NavResult::OpenClipsFolder,
                 14 => NavResult::OpenLogsFolder,
                 15 => NavResult::CycleRenderProfile(1),
+                16 => NavResult::ToggleRunahead,
+                17 => NavResult::ToggleRunaheadOnline,
                 _ => NavResult::Stay,
             },
             AppState::Menu(MenuScreen::TextEdit { field, value, .. }) => {
@@ -1755,6 +1767,8 @@ pub fn draw(
             scorebar_style,
             input_delay,
             render_profile,
+            runahead,
+            runahead_online,
         }) => draw_settings(
             canvas,
             font,
@@ -1772,6 +1786,8 @@ pub fn draw(
             *scorebar_style,
             *input_delay,
             *render_profile,
+            *runahead,
+            *runahead_online,
             w,
             h,
         )?,
@@ -4086,6 +4102,8 @@ fn draw_settings(
     scorebar_style: ScorebarStyle,
     input_delay: u32,
     render_profile: RenderProfile,
+    runahead: bool,
+    runahead_online: bool,
     w: i32,
     h: i32,
 ) -> Result<(), String> {
@@ -4146,6 +4164,8 @@ fn draw_settings(
             10 => Some(scorebar_style.label().to_string()),
             11 => Some(format!("{input_delay} FRAMES")),
             15 => Some(render_profile.label().to_string()),
+            16 => Some(if runahead { "ON" } else { "OFF" }.to_string()),
+            17 => Some(if runahead_online { "ON" } else { "OFF" }.to_string()),
             _ => None,
         };
         if let Some(value) = value {
@@ -4209,6 +4229,8 @@ fn settings_hint(cursor: usize) -> &'static str {
         13 => "Open the folder where Ctrl+R clips are written.",
         14 => "Open runtime logs next to the app.",
         15 => "Renderer backend for local hardware output tests. Restart applies.",
+        16 => "One-frame runahead for offline play (Arcade/Lab/drones). Cuts input latency by a frame.",
+        17 => "Experimental video-only runahead prediction during netplay. Cannot desync; off by default.",
         _ => "",
     }
 }
