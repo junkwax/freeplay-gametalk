@@ -1,459 +1,296 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Freeplay Replays</title>
-  <style>
-    :root {
-      color-scheme: dark;
-      --bg: #08090d;
-      --panel: #12151d;
-      --panel-2: #171b24;
-      --line: #2a3040;
-      --text: #f3f5f8;
-      --muted: #9da7b8;
-      --gold: #f0c75e;
-      --cyan: #5bd6ff;
-      --red: #ef5b57;
-      --green: #69d889;
-    }
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Freeplay Replays</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;600;700&family=Saira+Condensed:wght@700;800;900&family=Saira:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root { --accent: #E22A35; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { background: #0B0B0E; }
+  body {
+    min-height: 100vh;
+    color: #EDEDE8;
+    background:
+      radial-gradient(1100px 500px at 70% -10%, rgba(226,42,53,.08), transparent 60%),
+      radial-gradient(900px 600px at -10% 110%, rgba(255,255,255,.03), transparent 55%),
+      #0B0B0E;
+    font-family: 'Saira', sans-serif;
+  }
+  a { color: #9a9aa2; text-decoration: none; }
+  a:hover { color: #EDEDE8; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 56px 32px 72px; }
 
-    * {
-      box-sizing: border-box;
-    }
+  .kicker { display: inline-flex; align-items: center; gap: 13px; margin-bottom: 12px; }
+  .kicker-bar { width: 30px; height: 3px; background: var(--accent); box-shadow: 0 0 12px var(--accent); }
+  .kicker-text { font-family: 'Chakra Petch', monospace; font-weight: 600; font-size: 13px; letter-spacing: 7px; color: var(--accent); }
+  h1 { font-family: 'Saira Condensed', sans-serif; font-weight: 800; font-size: 58px; line-height: .9; letter-spacing: 1px; color: #F4F4F0; }
 
-    body {
-      margin: 0;
-      min-height: 100vh;
-      background: var(--bg);
-      color: var(--text);
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    }
+  .head { display: flex; justify-content: space-between; align-items: flex-end; gap: 24px; flex-wrap: wrap; margin-bottom: 30px; }
+  .get-btn {
+    display: inline-flex; align-items: center; gap: 10px; padding: 12px 26px; align-self: flex-start; white-space: nowrap;
+    background: var(--accent); box-shadow: 0 0 22px color-mix(in srgb, var(--accent), transparent 55%);
+    font-family: 'Saira Condensed', sans-serif; font-weight: 800; font-size: 19px; letter-spacing: 3px; color: #fff;
+  }
+  .get-btn:hover { color: #fff; box-shadow: 0 0 30px color-mix(in srgb, var(--accent), transparent 35%); }
 
-    a {
-      color: inherit;
-    }
+  .search {
+    flex: 1; min-width: 220px; max-width: 380px;
+    padding: 10px 16px; background: rgba(8,8,11,.55); border: 1px solid rgba(255,255,255,.12);
+    font-family: 'Chakra Petch', monospace; font-size: 13px; letter-spacing: 2px; color: #EDEDE8;
+    outline: none;
+  }
+  .search::placeholder { color: #3a3a42; letter-spacing: 3px; }
+  .search:focus { border-color: color-mix(in srgb, var(--accent), transparent 40%); box-shadow: 0 0 14px color-mix(in srgb, var(--accent), transparent 82%); }
 
-    .shell {
-      width: min(1180px, calc(100% - 32px));
-      margin: 0 auto;
-      padding: 24px 0 40px;
-    }
+  .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 18px; }
+  .filters { display: flex; gap: 8px; }
+  .chip {
+    padding: 9px 18px; cursor: pointer; white-space: nowrap; user-select: none;
+    font-family: 'Chakra Petch', monospace; font-size: 12px; letter-spacing: 3px;
+    background: transparent; border: 1px solid rgba(255,255,255,.1); color: #62626c;
+  }
+  .chip:hover { border-color: rgba(255,255,255,.25); color: #9a9aa2; }
+  .chip.on {
+    background: color-mix(in srgb, var(--accent), transparent 84%);
+    border-color: color-mix(in srgb, var(--accent), transparent 45%);
+    color: var(--accent);
+  }
+  .shown { font-family: 'Chakra Petch', monospace; font-size: 12px; letter-spacing: 3px; color: #52525a; }
 
-    header {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) 220px;
-      gap: 24px;
-      align-items: end;
-      padding: 10px 0 22px;
-      border-bottom: 1px solid var(--line);
-    }
+  .panel { background: rgba(8,8,11,.55); border: 1px solid rgba(255,255,255,.07); }
+  .thead, .row { display: grid; grid-template-columns: 1fr 100px 120px 170px 100px 210px; align-items: center; padding: 0 20px; }
+  .thead { padding-top: 10px; padding-bottom: 10px; border-bottom: 1px solid rgba(255,255,255,.07); font-family: 'Chakra Petch', monospace; font-size: 11px; letter-spacing: 3px; color: #3a3a42; }
+  .row { height: 66px; border-bottom: 1px solid rgba(255,255,255,.04); }
+  .row:hover { background: linear-gradient(90deg, color-mix(in srgb, var(--accent), transparent 84%), transparent); }
+  .match { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+  .fighter { font-family: 'Saira Condensed', sans-serif; font-weight: 800; font-size: 19px; letter-spacing: 1px; color: #9a9aa2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .fighter.won { color: #F4F4F0; text-shadow: 0 0 14px color-mix(in srgb, var(--accent), transparent 45%); }
+  .fighter.won::after { content: "W"; margin-left: 7px; font-family: 'Chakra Petch', monospace; font-weight: 700; font-size: 10px; letter-spacing: 1px; color: var(--accent); vertical-align: super; }
+  .vs { font-family: 'Chakra Petch', monospace; font-size: 10px; letter-spacing: 2px; color: #52525a; flex: none; }
+  .badge { display: inline-flex; padding: 4px 10px; font-family: 'Chakra Petch', monospace; font-weight: 700; font-size: 11px; letter-spacing: 2px; }
+  .badge.decided { border: 1px solid rgba(54,211,153,.35); color: #36D399; }
+  .badge.pending { border: 1px solid rgba(226,181,58,.35); color: #E2B53A; }
+  .meta { font-family: 'Chakra Petch', monospace; font-size: 13px; letter-spacing: 1px; color: #8a8a92; }
+  .watch-cell { display: flex; justify-content: flex-end; gap: 8px; }
+  .watch {
+    display: inline-block; padding: 8px 18px; border: 1px solid rgba(255,255,255,.12); cursor: pointer; white-space: nowrap;
+    font-family: 'Saira Condensed', sans-serif; font-weight: 700; font-size: 15px; letter-spacing: 2px; color: #9a9aa2;
+  }
+  .watch:hover { border-color: var(--accent); color: #EDEDE8; }
+  .dl { color: #62626c; }
+  .dl:hover { border-color: rgba(255,255,255,.35); color: #EDEDE8; }
 
-    h1 {
-      margin: 0;
-      font-size: clamp(2rem, 6vw, 4.5rem);
-      line-height: 0.92;
-      letter-spacing: 0;
-      text-transform: uppercase;
-    }
+  .score { font-family: 'Chakra Petch', monospace; font-weight: 700; font-size: 18px; letter-spacing: 3px; color: #F2F2EE; }
+  .score.nil { color: #3a3a42; }
 
-    .meta {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px 18px;
-      margin-top: 18px;
-      color: var(--muted);
-      font-size: 0.92rem;
-    }
+  .empty { padding: 72px 24px; text-align: center; }
+  .empty-title { font-family: 'Saira Condensed', sans-serif; font-weight: 800; font-size: 34px; letter-spacing: 1px; color: #4a4a52; }
+  .empty-sub { font-family: 'Chakra Petch', monospace; font-size: 12px; letter-spacing: 3px; color: #3a3a42; margin-top: 10px; }
 
-    .preview {
-      width: 100%;
-      aspect-ratio: 16 / 10;
-      object-fit: cover;
-      border: 1px solid var(--line);
-      background: #000;
-    }
+  .foot { margin-top: 22px; font-family: 'Chakra Petch', monospace; font-size: 12px; letter-spacing: 3px; color: #62626c; }
 
-    .toolbar {
-      display: grid;
-      grid-template-columns: minmax(180px, 1fr) auto auto;
-      gap: 12px;
-      align-items: center;
-      padding: 18px 0;
-    }
-
-    input,
-    select {
-      width: 100%;
-      min-height: 42px;
-      border: 1px solid var(--line);
-      background: var(--panel);
-      color: var(--text);
-      padding: 0 12px;
-      font: inherit;
-      outline: none;
-    }
-
-    input:focus,
-    select:focus {
-      border-color: var(--cyan);
-    }
-
-    .count {
-      color: var(--muted);
-      white-space: nowrap;
-    }
-
-    .table-wrap {
-      overflow-x: auto;
-      border: 1px solid var(--line);
-      background: var(--panel);
-    }
-
-    table {
-      width: 100%;
-      min-width: 820px;
-      border-collapse: collapse;
-    }
-
-    th,
-    td {
-      padding: 14px 16px;
-      border-bottom: 1px solid var(--line);
-      text-align: left;
-      vertical-align: middle;
-    }
-
-    th {
-      color: var(--muted);
-      font-size: 0.76rem;
-      font-weight: 700;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      background: #0d1017;
-    }
-
-    tbody tr {
-      background: var(--panel);
-    }
-
-    tbody tr:nth-child(even) {
-      background: var(--panel-2);
-    }
-
-    tbody tr:hover {
-      background: #1d2330;
-    }
-
-    .players {
-      display: grid;
-      gap: 4px;
-      font-weight: 700;
-    }
-
-    .winner {
-      color: var(--gold);
-    }
-
-    .sub {
-      color: var(--muted);
-      font-size: 0.88rem;
-      font-weight: 500;
-    }
-
-    .score {
-      font-size: 1.2rem;
-      font-weight: 800;
-      white-space: nowrap;
-    }
-
-    .result-win {
-      color: var(--green);
-    }
-
-    .result-loss {
-      color: var(--red);
-    }
-
-    .actions {
-      display: flex;
-      gap: 8px;
-      justify-content: flex-end;
-    }
-
-    .btn {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      min-height: 36px;
-      padding: 0 12px;
-      border: 1px solid var(--line);
-      background: #202632;
-      color: var(--text);
-      font-weight: 800;
-      text-decoration: none;
-      white-space: nowrap;
-    }
-
-    .btn.primary {
-      border-color: #b88d28;
-      background: #2a2414;
-      color: var(--gold);
-    }
-
-    .empty {
-      padding: 48px 20px;
-      color: var(--muted);
-      text-align: center;
-    }
-
-    footer {
-      padding-top: 18px;
-      color: var(--muted);
-      font-size: 0.86rem;
-    }
-
-    @media (max-width: 720px) {
-      .shell {
-        width: min(100% - 20px, 1180px);
-        padding-top: 12px;
-      }
-
-      header {
-        grid-template-columns: 1fr;
-        gap: 14px;
-      }
-
-      .preview {
-        max-height: 150px;
-      }
-
-      .toolbar {
-        grid-template-columns: 1fr;
-      }
-
-      .count {
-        white-space: normal;
-      }
-    }
-  </style>
+  @media (max-width: 820px) {
+    .thead { display: none; }
+    .row { grid-template-columns: 1fr auto; grid-auto-flow: row; height: auto; padding: 14px 16px; gap: 6px 12px; }
+    .row .meta { grid-column: 1 / -1; }
+  }
+</style>
 </head>
 <body>
-  <main class="shell">
-    <header>
-      <div>
-        <h1>Freeplay Replays</h1>
-        <div class="meta">
-          <span id="updated">Updated --</span>
-          <span id="total">0 matches</span>
-        </div>
+<main class="wrap">
+  <header class="head">
+    <div>
+      <div class="kicker">
+        <div class="kicker-bar"></div>
+        <div class="kicker-text">FREEPLAY · MATCH ARCHIVE</div>
       </div>
-      <img class="preview" src="https://raw.githubusercontent.com/junkwax/freeplay-gametalk/main/screenshot.png" alt="Freeplay gameplay screenshot">
-    </header>
+      <h1>REPLAYS</h1>
+    </div>
+    <a class="get-btn" href="https://github.com/junkwax/freeplay-gametalk/releases">GET FREEPLAY <span style="font-family:'Saira',sans-serif">↓</span></a>
+  </header>
 
-    <section class="toolbar" aria-label="Replay filters">
-      <input id="search" type="search" placeholder="Search players" autocomplete="off">
-      <select id="result">
-        <option value="all">All results</option>
-        <option value="decided">Decided</option>
-        <option value="pending">Pending</option>
-      </select>
-      <div class="count" id="visible-count">0 shown</div>
-    </section>
+  <div class="toolbar">
+    <div class="filters" id="filters">
+      <div class="chip on" data-filter="decided">DECIDED</div>
+      <div class="chip" data-filter="pending">PENDING</div>
+      <div class="chip" data-filter="all">ALL RESULTS</div>
+    </div>
+    <input class="search" id="search" type="search" placeholder="SEARCH PLAYER…" autocomplete="off">
+    <div class="shown"><span id="shown">0</span> SHOWN</div>
+  </div>
 
-    <section class="table-wrap" aria-live="polite">
-      <table>
-        <thead>
-          <tr>
-            <th>Match</th>
-            <th>Outcome</th>
-            <th>Recorded</th>
-            <th>Duration</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody id="rows"></tbody>
-      </table>
-      <div id="empty" class="empty" hidden>No public replays yet.</div>
-    </section>
+  <section class="panel">
+    <div class="thead">
+      <div>MATCH</div><div>SCORE</div><div>OUTCOME</div><div>RECORDED</div><div>DURATION</div><div></div>
+    </div>
+    <div id="rows"></div>
+    <div class="empty" id="empty" hidden>
+      <div class="empty-title">NO MATCHES FOUND</div>
+      <div class="empty-sub">TRY A DIFFERENT SEARCH OR FILTER</div>
+    </div>
+  </section>
 
-    <footer>
-      Watch opens the installed Freeplay app through the xband protocol.
-    </footer>
-  </main>
+  <p class="foot">WATCH OPENS THE INSTALLED FREEPLAY APP THROUGH THE XBAND PROTOCOL</p>
+</main>
 
-  <script>
-    const REPLAY_SOURCES = [
-      "https://freeplay-stats-681135711161.us-central1.run.app/replays/list?limit=100",
-      "replays.json"
-    ];
+<script>
+// ── DATA ─────────────────────────────────────────────────────────────
+// Your updater rewrites this array (or serve replays.json — see below).
+// Each replay: { p1, p2, score: "2-1", recorded, duration, url, file }
+// Outcome is derived from score: any player above 0 = DECIDED, 0-0 = PENDING.
+var REPLAYS = [
+  { p1: "RaidenBolt99", p2: "SubZeroFan",    score: "2-0", recorded: "JUL 07 · 08:41", duration: "4:12", url: "xband://replay/8f2a1", file: "files/8f2a1.fpr" },
+  { p1: "MileenaX",     p2: "KLowe_TX",      score: "2-1", recorded: "JUL 06 · 23:18", duration: "6:55", url: "xband://replay/7c9e4", file: "files/7c9e4.fpr" },
+  { p1: "ShangT_99",    p2: "BarakaMain",    score: "0-0", recorded: "JUL 06 · 21:02", duration: "0:15", url: "xband://replay/1b7d0", file: "files/1b7d0.fpr" },
+  { p1: "JaxBriggs__",  p2: "RaidenBolt99",  score: "1-2", recorded: "JUL 06 · 19:30", duration: "5:21", url: "xband://replay/9a3f6", file: "files/9a3f6.fpr" },
+  { p1: "KitanaFan",    p2: "Reptile_Green", score: "0-0", recorded: "JUL 06 · 18:44", duration: "0:09", url: "xband://replay/4e8c2", file: "files/4e8c2.fpr" },
+  { p1: "SubZeroFan",   p2: "ScorpionKing",  score: "2-1", recorded: "JUL 05 · 22:07", duration: "7:33", url: "xband://replay/6d1a9", file: "files/6d1a9.fpr" },
+  { p1: "KungLao_Hat",  p2: "MileenaX",      score: "2-0", recorded: "JUL 05 · 20:52", duration: "5:04", url: "xband://replay/2f5b8", file: "files/2f5b8.fpr" },
+  { p1: "BarakaMain",   p2: "JaxBriggs__",   score: "0-2", recorded: "JUL 05 · 18:15", duration: "4:49", url: "xband://replay/0c4e7", file: "files/0c4e7.fpr" },
+  { p1: "ScorpionKing", p2: "ShangT_99",     score: "0-0", recorded: "JUL 04 · 23:59", duration: "0:17", url: "xband://replay/5a9d3", file: "files/5a9d3.fpr" },
+  { p1: "Reptile_Green",p2: "KungLao_Hat",   score: "1-2", recorded: "JUL 04 · 21:26", duration: "6:02", url: "xband://replay/3e7f1", file: "files/3e7f1.fpr" },
+  { p1: "KLowe_TX",     p2: "KitanaFan",     score: "2-1", recorded: "JUL 04 · 19:38", duration: "8:17", url: "xband://replay/b2c60", file: "files/b2c60.fpr" },
+  { p1: "RaidenBolt99", p2: "ShangT_99",     score: "0-0", recorded: "JUL 03 · 22:44", duration: "0:12", url: "xband://replay/d8a45", file: "files/d8a45.fpr" },
+  { p1: "MileenaX",     p2: "SubZeroFan",    score: "2-0", recorded: "JUL 03 · 20:11", duration: "5:58", url: "xband://replay/e1f92", file: "files/e1f92.fpr" },
+  { p1: "KungLao_Hat",  p2: "JaxBriggs__",   score: "2-1", recorded: "JUL 03 · 17:29", duration: "4:23", url: "xband://replay/76b3c", file: "files/76b3c.fpr" }
+];
 
-    const state = {
-      replays: [],
-      query: "",
-      result: "all"
-    };
+// ── GITHUB SOURCE ───────────────────────────────────────────────────
+// The page lists replay files live from this repo directory via the GitHub API.
+// Push .fpr files there and they appear here automatically — no JSON, no rebuild.
+var GH = { owner: "junkwax", repo: "freeplay-gametalk", branch: "main", dir: "replays/files" };
 
-    const rows = document.getElementById("rows");
-    const empty = document.getElementById("empty");
-    const search = document.getElementById("search");
-    const result = document.getElementById("result");
-    const updated = document.getElementById("updated");
-    const total = document.getElementById("total");
-    const visibleCount = document.getElementById("visible-count");
-
-    function text(value, fallback = "--") {
-      if (value === null || value === undefined || value === "") return fallback;
-      return String(value);
+// Filename convention (parts split by "__", order-insensitive after the players):
+//   <P1>_vs_<P2>__<S1>-<S2>__<YYYY-MM-DD>-<HHMM>__<M>m<S>s.fpr
+//   e.g. RaidenBolt99_vs_SubZeroFan__2-0__2026-07-06-2241__4m12s.fpr
+// Outcome is derived from score (either player > 0 = decided, else pending;
+// falls back to duration < 20s = pending when no score); date/duration default to —.
+var MONTHS = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
+function parseReplayFile(f) {
+  var base = f.name.replace(/\.[^.]+$/, "");
+  var parts = base.split("__");
+  var players = parts.shift().split(/_vs_/i);
+  var r = {
+    p1: players[0] || base, p2: players[1] || "?",
+    score: "", recorded: "—", duration: "—",
+    url: "xband://replay/" + encodeURIComponent(f.name),
+    file: f.download_url || f.name,
+    sort: base
+  };
+  parts.forEach(function (p) {
+    var d = p.match(/^(\d{4})-(\d{2})-(\d{2})-?(\d{2})?(\d{2})?$/);
+    var t = p.match(/^(\d+)m(\d+)s$/i);
+    var s = p.match(/^(\d{1,2})-(\d{1,2})$/);
+    if (d) {
+      r.recorded = MONTHS[+d[2] - 1] + " " + d[3] + (d[4] ? " · " + d[4] + ":" + d[5] : "");
+      r.sort = p;
     }
+    else if (t) { r.duration = t[1] + ":" + ("0" + t[2]).slice(-2); }
+    else if (s) { r.score = s[1] + "-" + s[2]; }
+  });
+  return r;
+}
 
-    function escapeHtml(value) {
-      return text(value, "").replace(/[&<>"']/g, char => ({
-        "&": "&amp;",
-        "<": "&lt;",
-        ">": "&gt;",
-        "\"": "&quot;",
-        "'": "&#39;"
-      }[char]));
-    }
+// Fallback: maintain replays.json next to this file instead: { "replays": [ ... ] }
+// ─────────────────────────────────────────────────────────────────────
 
-    function numberOrNull(value) {
-      const number = Number(value);
-      return Number.isFinite(number) ? number : null;
-    }
+var state = { filter: "decided", query: "" };
 
-    function scoreLine(replay) {
-      const p1 = numberOrNull(replay.p1_score);
-      const p2 = numberOrNull(replay.p2_score);
-      if (p1 === null || p2 === null) return "Pending";
-      return `${p1}-${p2}`;
-    }
+// Outcome rule: DECIDED when either player's score is above 0.
+// With no score, falls back to duration (< 20s = still pending).
+function durSeconds(d) {
+  var m = String(d || "").match(/^(\d+):(\d{2})$/);
+  return m ? (+m[1]) * 60 + (+m[2]) : NaN;
+}
+function parseScore(r) {
+  var m = String(r.score || "").match(/^(\d{1,2})\s*[-–:]\s*(\d{1,2})$/);
+  return m ? [+m[1], +m[2]] : null;
+}
+function outcomeOf(r) {
+  var sc = parseScore(r);
+  if (sc) return (sc[0] > 0 || sc[1] > 0) ? "decided" : "pending";
+  var s = durSeconds(r.duration);
+  return (!isNaN(s) && s < 20) ? "pending" : "decided";
+}
 
-    function winnerName(replay) {
-      if (replay.winner) return replay.winner;
-      const p1 = numberOrNull(replay.p1_score);
-      const p2 = numberOrNull(replay.p2_score);
-      if (p1 !== null && p2 !== null) {
-        if (p1 > p2) return replay.p1;
-        if (p2 > p1) return replay.p2;
-      }
-      return "";
-    }
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+  });
+}
 
-    function replayUrl(replay) {
-      const url = replay.url ? String(replay.url) : replay.file ? new URL(replay.file, location.href).href : "";
-      return url.startsWith("https://") ? url : "";
-    }
+function render() {
+  var q = state.query.trim().toLowerCase();
+  var list = REPLAYS.filter(function (r) {
+    if (state.filter !== "all" && outcomeOf(r) !== state.filter) return false;
+    if (!q) return true;
+    return String(r.p1).toLowerCase().indexOf(q) !== -1 || String(r.p2).toLowerCase().indexOf(q) !== -1;
+  });
+  document.getElementById("shown").textContent = list.length;
+  document.getElementById("empty").hidden = list.length > 0;
+  document.getElementById("rows").innerHTML = list.map(function (r) {
+    var decided = outcomeOf(r) === "decided";
+    var sc = parseScore(r);
+    var w1 = decided && sc && sc[0] > sc[1] ? " won" : "";
+    var w2 = decided && sc && sc[1] > sc[0] ? " won" : "";
+    var scoreHtml = sc
+      ? '<span class="score' + ((sc[0] > 0 || sc[1] > 0) ? "" : " nil") + '">' + sc[0] + ' – ' + sc[1] + '</span>'
+      : '<span class="score nil">—</span>';
+    return '<div class="row">' +
+      '<div class="match"><span class="fighter' + w1 + '">' + esc(r.p1) + '</span><span class="vs">VS</span><span class="fighter' + w2 + '">' + esc(r.p2) + '</span></div>' +
+      '<div>' + scoreHtml + '</div>' +
+      '<div><span class="badge ' + (decided ? "decided" : "pending") + '">' + (decided ? "DECIDED" : "PENDING") + '</span></div>' +
+      '<div class="meta">' + esc(r.recorded) + '</div>' +
+      '<div class="meta">' + esc(r.duration) + '</div>' +
+      '<div class="watch-cell"><a class="watch dl" href="' + esc(r.file || "#") + '" download>SAVE</a><a class="watch" href="' + esc(r.url || "#") + '">WATCH</a></div>' +
+      '</div>';
+  }).join("");
+}
 
-    function watchUrl(replay) {
-      const url = replayUrl(replay);
-      return url ? `xband://replay?url=${encodeURIComponent(url)}` : "";
-    }
+document.getElementById("filters").addEventListener("click", function (e) {
+  var chip = e.target.closest(".chip");
+  if (!chip) return;
+  state.filter = chip.dataset.filter;
+  this.querySelectorAll(".chip").forEach(function (c) { c.classList.toggle("on", c === chip); });
+  render();
+});
 
-    function formatDate(value) {
-      if (!value) return "--";
-      const date = new Date(value);
-      if (Number.isNaN(date.getTime())) return value;
-      return new Intl.DateTimeFormat(undefined, {
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-        hour: "numeric",
-        minute: "2-digit"
-      }).format(date);
-    }
+document.getElementById("search").addEventListener("input", function () {
+  state.query = this.value;
+  render();
+});
 
-    function replayDate(replay) {
-      if (replay.recorded_at) return formatDate(replay.recorded_at);
-      const unix = numberOrNull(replay.recorded_unix);
-      return unix === null ? "--" : formatDate(unix * 1000);
-    }
-
-    function replayMatchesFilters(replay) {
-      const q = state.query.trim().toLowerCase();
-      if (q) {
-        const haystack = `${replay.p1 || ""} ${replay.p2 || ""} ${replay.winner || ""}`.toLowerCase();
-        if (!haystack.includes(q)) return false;
-      }
-      const decided = Boolean(winnerName(replay));
-      if (state.result === "decided" && !decided) return false;
-      if (state.result === "pending" && decided) return false;
-      return true;
-    }
-
-    function render() {
-      const filtered = state.replays.filter(replayMatchesFilters);
-      rows.innerHTML = "";
-      empty.hidden = filtered.length !== 0;
-      visibleCount.textContent = `${filtered.length} shown`;
-
-      for (const replay of filtered) {
-        const winner = winnerName(replay);
-        const watch = watchUrl(replay);
-        const download = replayUrl(replay);
-        const tr = document.createElement("tr");
-        tr.innerHTML = `
-          <td>
-            <div class="players">
-              <span class="${winner === replay.p1 ? "winner" : ""}">${escapeHtml(text(replay.p1, "P1"))}</span>
-              <span class="${winner === replay.p2 ? "winner" : ""}">${escapeHtml(text(replay.p2, "P2"))}</span>
-            </div>
-          </td>
-          <td>
-            <div class="score ${winner ? "result-win" : "result-loss"}">${escapeHtml(scoreLine(replay))}</div>
-            <div class="sub">${winner ? `${escapeHtml(winner)} wins` : "Awaiting result"}</div>
-          </td>
-          <td>${escapeHtml(replayDate(replay))}</td>
-          <td>
-            <div>${escapeHtml(text(replay.duration))}</div>
-            <div class="sub">${replay.frames ? `${escapeHtml(replay.frames)} frames` : ""}</div>
-          </td>
-          <td>
-            <div class="actions">
-              ${watch ? `<a class="btn primary" href="${escapeHtml(watch)}">Watch</a>` : ""}
-              ${download ? `<a class="btn" href="${escapeHtml(download)}" download>Download</a>` : ""}
-            </div>
-          </td>
-        `;
-        rows.appendChild(tr);
-      }
-    }
-
-    async function load() {
-      let lastError = null;
-
-      for (const source of REPLAY_SOURCES) {
-        try {
-          const response = await fetch(source, { cache: "no-store" });
-          if (!response.ok) throw new Error(`${source}: HTTP ${response.status}`);
-          const data = await response.json();
-          state.replays = Array.isArray(data.replays) ? data.replays : [];
-          updated.textContent = data.updated_at ? `Updated ${formatDate(data.updated_at)}` : "Updated live";
-          total.textContent = `${state.replays.length} matches`;
-          render();
-          return;
-        } catch (error) {
-          lastError = error;
-        }
-      }
-
-      empty.textContent = `Replay index failed to load: ${lastError ? lastError.message : "unknown error"}`;
-      empty.hidden = false;
-      render();
-    }
-
-    search.addEventListener("input", () => {
-      state.query = search.value;
-      render();
+// Populate from GitHub: list the replay dir via the contents API.
+// Falls back to replays.json, then to the inline sample data above.
+function loadFromJson() {
+  return fetch("replays.json")
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (data) {
+      if (data && data.replays && data.replays.length) { REPLAYS = data.replays; }
     });
+}
 
-    result.addEventListener("change", () => {
-      state.result = result.value;
-      render();
-    });
+fetch("https://api.github.com/repos/" + GH.owner + "/" + GH.repo + "/contents/" + GH.dir + "?ref=" + GH.branch)
+  .then(function (r) { return r.ok ? r.json() : null; })
+  .then(function (files) {
+    if (Array.isArray(files)) {
+      var rows = files.filter(function (f) { return f.type === "file" && /\.fpr$/i.test(f.name); }).map(parseReplayFile);
+      if (rows.length) {
+        rows.sort(function (a, b) { return b.sort < a.sort ? -1 : 1; }); // newest first
+        REPLAYS = rows;
+        return;
+      }
+    }
+    return loadFromJson();
+  })
+  .catch(loadFromJson)
+  .then(render, render);
 
-    load();
-  </script>
+render();
+</script>
 </body>
 </html>
