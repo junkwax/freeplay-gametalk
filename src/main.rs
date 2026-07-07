@@ -3118,6 +3118,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         scorebar_style: cfg.scorebar_style,
                                         input_delay: cfg.input_delay,
                                         render_profile: cfg.render_profile,
+                                        runahead: cfg.runahead,
+                                        runahead_online: cfg.runahead_online,
                                     });
                                 }
                                 NavResult::OpenTraining => {
@@ -3184,6 +3186,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             scorebar_style: cfg.scorebar_style,
                                             input_delay: cfg.input_delay,
                                             render_profile: cfg.render_profile,
+                                            runahead: cfg.runahead,
+                                            runahead_online: cfg.runahead_online,
                                         }),
                                     });
                                 }
@@ -3289,6 +3293,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             scorebar_style: cfg.scorebar_style,
                                             input_delay: cfg.input_delay,
                                             render_profile: cfg.render_profile,
+                                            runahead: cfg.runahead,
+                                            runahead_online: cfg.runahead_online,
                                         });
                                     }
                                 },
@@ -3318,6 +3324,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             scorebar_style: cfg.scorebar_style,
                                             input_delay: cfg.input_delay,
                                             render_profile: cfg.render_profile,
+                                            runahead: cfg.runahead,
+                                            runahead_online: cfg.runahead_online,
                                         });
                                     } else {
                                         let (tx, rx) = std::sync::mpsc::channel();
@@ -3651,6 +3659,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             cfg.render_profile.label()
                                         ),
                                         Instant::now() + Duration::from_millis(2200),
+                                    ));
+                                }
+                                NavResult::ToggleRunahead => {
+                                    cfg.runahead = !cfg.runahead;
+                                    config::save(&cfg);
+                                    if let AppState::Menu(MenuScreen::Settings {
+                                        ref mut runahead,
+                                        ..
+                                    }) = state
+                                    {
+                                        *runahead = cfg.runahead;
+                                    }
+                                    toast = Some((
+                                        format!(
+                                            "Runahead (offline) {}",
+                                            if cfg.runahead { "ON" } else { "OFF" }
+                                        ),
+                                        Instant::now() + Duration::from_millis(1800),
+                                    ));
+                                }
+                                NavResult::ToggleRunaheadOnline => {
+                                    cfg.runahead_online = !cfg.runahead_online;
+                                    config::save(&cfg);
+                                    if let AppState::Menu(MenuScreen::Settings {
+                                        ref mut runahead_online,
+                                        ..
+                                    }) = state
+                                    {
+                                        *runahead_online = cfg.runahead_online;
+                                    }
+                                    toast = Some((
+                                        format!(
+                                            "Runahead (online, experimental) {}",
+                                            if cfg.runahead_online { "ON" } else { "OFF" }
+                                        ),
+                                        Instant::now() + Duration::from_millis(1800),
                                     ));
                                 }
                                 NavResult::ToggleTraining(kind) => {
@@ -6175,6 +6219,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     scorebar_style: cfg.scorebar_style,
                                     input_delay: cfg.input_delay,
                                     render_profile: cfg.render_profile,
+                                    runahead: cfg.runahead,
+                                    runahead_online: cfg.runahead_online,
                                 });
                                 break;
                             }

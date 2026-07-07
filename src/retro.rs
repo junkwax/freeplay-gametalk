@@ -524,7 +524,6 @@ pub struct Core {
     _lib: Library, // kept alive so the other symbols stay valid
     pub run: unsafe extern "C" fn(),
     pub av_info: SystemAvInfo,
-    pub load_ok: bool,
     reset_fn: unsafe extern "C" fn(),
     serialize_size_fn: unsafe extern "C" fn() -> usize,
     serialize_fn: unsafe extern "C" fn(*mut c_void, usize) -> bool,
@@ -784,7 +783,6 @@ pub unsafe fn load(dll_path: &str, rom_path: &str) -> Result<Core, Box<dyn std::
         _lib: lib,
         run: run_fn,
         av_info,
-        load_ok,
         reset_fn,
         serialize_size_fn: ss_fn,
         serialize_fn: s_fn,
