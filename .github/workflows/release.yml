@@ -19,12 +19,6 @@ on:
 permissions:
   contents: write
 
-# Pin upstream FBNeo across Linux/macOS jobs so a release ships a known core,
-# rather than whatever upstream master happened to be the day CI ran. Bump
-# this when you've validated a newer FBNeo locally.
-env:
-  FBNEO_REF: master
-
 jobs:
   version:
     name: Resolve release version
@@ -87,14 +81,30 @@ jobs:
         shell: pwsh
         run: cargo build --release
 
+      - name: Resolve FBNeo ref
+        id: fbneo-ref
+        shell: pwsh
+        # Single source of truth for the pin is tools/build-fbneo-windows.ps1
+        # itself (an FBNEO_REF env var can still override it there); read it
+        # back out here so the cache key tracks the same commit the build
+        # actually checks out, instead of duplicating the pin in the workflow.
+        run: |
+          $ref = $env:FBNEO_REF
+          if (-not $ref) {
+            $match = Select-String -Path .\tools\build-fbneo-windows.ps1 -Pattern 'else\s*\{\s*"([0-9a-f]{7,40})"\s*\}'
+            $ref = $match.Matches[0].Groups[1].Value
+          }
+          "ref=$ref" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Resolved FBNEO_REF=$ref"
+
       - name: Cache FBNeo libretro core
         id: fbneo-cache
         uses: actions/cache@v5
         with:
           path: |
-            cores/fbneo_libretro.dll
+            cores/fbneo_mk2_libretro.dll
             vendor/FBNeo
-          key: fbneo-windows-${{ env.FBNEO_REF }}
+          key: fbneo-windows-${{ steps.fbneo-ref.outputs.ref }}
 
       - name: Build FBNeo libretro core
         if: steps.fbneo-cache.outputs.cache-hit != 'true'
@@ -203,14 +213,25 @@ jobs:
             build-essential pkg-config \
             libsdl2-dev libsdl2-ttf-dev
 
+      - name: Resolve FBNeo ref
+        id: fbneo-ref
+        # Single source of truth for the pin is tools/build-fbneo-linux.sh
+        # itself (an FBNEO_REF env var can still override it there); read it
+        # back out here so the cache key tracks the same commit the build
+        # actually checks out, instead of duplicating the pin in the workflow.
+        run: |
+          ref="${FBNEO_REF:-$(sed -n 's/.*FBNEO_REF:-\([0-9a-f]*\).*/\1/p' tools/build-fbneo-linux.sh | head -n1)}"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "Resolved FBNEO_REF=$ref"
+
       - name: Cache FBNeo libretro core
         id: fbneo-cache
         uses: actions/cache@v5
         with:
           path: |
-            cores/fbneo_libretro.so
+            cores/fbneo_mk2_libretro.so
             vendor/FBNeo
-          key: fbneo-linux-${{ env.FBNEO_REF }}
+          key: fbneo-linux-${{ steps.fbneo-ref.outputs.ref }}
 
       - name: Build FBNeo libretro core
         if: steps.fbneo-cache.outputs.cache-hit != 'true'
@@ -316,16 +337,27 @@ jobs:
             echo "PKG_CONFIG_PATH=$BREW_PREFIX/lib/pkgconfig"
           } >> "$GITHUB_ENV"
 
+      - name: Resolve FBNeo ref
+        id: fbneo-ref
+        # Single source of truth for the pin is tools/build-fbneo-macos.sh
+        # itself (an FBNEO_REF env var can still override it there); read it
+        # back out here so the cache key tracks the same commit the build
+        # actually checks out, instead of duplicating the pin in the workflow.
+        run: |
+          ref="${FBNEO_REF:-$(sed -n 's/.*FBNEO_REF:-\([0-9a-f]*\).*/\1/p' tools/build-fbneo-macos.sh | head -n1)}"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "Resolved FBNEO_REF=$ref"
+
       - name: Cache FBNeo libretro core
         id: fbneo-cache
         uses: actions/cache@v5
         with:
           path: |
-            cores/fbneo_libretro.dylib
+            cores/fbneo_mk2_libretro.dylib
             vendor/FBNeo
           # Per-arch key: an arm64 .dylib must never be restored on the Intel
           # job (or vice versa) — that would ship a core for the wrong CPU.
-          key: fbneo-macos-${{ matrix.arch }}-${{ env.FBNEO_REF }}
+          key: fbneo-macos-${{ matrix.arch }}-${{ steps.fbneo-ref.outputs.ref }}
 
       - name: Build FBNeo libretro core
         if: steps.fbneo-cache.outputs.cache-hit != 'true'
