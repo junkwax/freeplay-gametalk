@@ -4,6 +4,7 @@
 //! screen branches — only the footer's right-side content and prompt list
 //! change per screen.
 
+use super::geometry;
 use super::layout::Scale;
 use super::theme;
 use crate::font::{FpFont, FpFontCache};
@@ -145,7 +146,7 @@ pub fn draw_header(
     cursor_x -= chip_w;
     canvas.set_draw_color(Color::RGBA(255, 255, 255, 8));
     canvas.fill_rect(Some(scale.rect(cursor_x, HEADER_H / 2.0 - 16.0, chip_w, 32.0)))?;
-    fill_circle(canvas, scale, cursor_x + 8.0 + avatar_d / 2.0, HEADER_H / 2.0, avatar_d / 2.0, theme::ACCENT);
+    geometry::fill_circle(canvas, scale, cursor_x + 8.0 + avatar_d / 2.0, HEADER_H / 2.0, avatar_d / 2.0, theme::ACCENT);
     let initial = username.chars().next().unwrap_or('?').to_uppercase().to_string();
     let (iw, ih) = fonts.text_size(FpFont::SairaCondensedBlack, scale.font_px(15.0), &initial);
     let (ix, iy) = scale.point(
@@ -188,7 +189,7 @@ pub fn draw_header(
         fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(14.0), &ping_label, px, py, theme::MUTE)?;
     }
     cursor_x -= 9.0;
-    fill_circle(canvas, scale, cursor_x, HEADER_H / 2.0, 4.0, dot_color);
+    geometry::fill_circle(canvas, scale, cursor_x, HEADER_H / 2.0, 4.0, dot_color);
 
     Ok(())
 }
@@ -217,7 +218,7 @@ pub fn draw_prompt_row(
     let mut x = x;
     let chip_d = 34.0;
     for p in prompts {
-        stroke_circle(canvas, scale, x + chip_d / 2.0, row_cy, chip_d / 2.0, p.color);
+        geometry::stroke_circle(canvas, scale, x + chip_d / 2.0, row_cy, chip_d / 2.0, 1.5, p.color);
         let (gw, gh) = fonts.text_size(FpFont::SairaCondensedBold, scale.font_px(15.0), p.glyph);
         let (gx, gy) = scale.point(
             x + chip_d / 2.0 - (gw as f32 / scale.s) / 2.0,
@@ -283,35 +284,4 @@ pub fn draw_footer(
     }
 
     Ok(())
-}
-
-/// Cheap filled-circle approximation: enough horizontal strips to look round
-/// at menu-chrome sizes (~8-34px diameter) without needing a texture asset.
-fn fill_circle(canvas: &mut Canvas<Window>, scale: &Scale, cx: f32, cy: f32, r: f32, color: Color) {
-    if color.a == 0 {
-        return;
-    }
-    canvas.set_draw_color(color);
-    canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
-    let steps = 24;
-    for i in 0..steps {
-        let t = -1.0 + 2.0 * (i as f32) / (steps as f32 - 1.0);
-        let y = cy + t * r;
-        let half_w = (r * r - (t * r) * (t * r)).max(0.0).sqrt();
-        let rect = scale.rect(cx - half_w, y, half_w * 2.0, (r * 2.0 / steps as f32).max(1.0));
-        let _ = canvas.fill_rect(Some(rect));
-    }
-}
-
-fn stroke_circle(canvas: &mut Canvas<Window>, scale: &Scale, cx: f32, cy: f32, r: f32, color: Color) {
-    canvas.set_draw_color(color);
-    canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
-    let segments = 28;
-    for i in 0..segments {
-        let a0 = std::f32::consts::TAU * (i as f32) / segments as f32;
-        let a1 = std::f32::consts::TAU * (i as f32 + 1.0) / segments as f32;
-        let p0 = scale.point(cx + a0.cos() * r, cy + a0.sin() * r);
-        let p1 = scale.point(cx + a1.cos() * r, cy + a1.sin() * r);
-        let _ = canvas.draw_line(p0, p1);
-    }
 }

@@ -53,17 +53,79 @@ fn vertex(x: f32, y: f32, color: Color) -> SdlVertex {
     }
 }
 
-fn fill(canvas: &mut Canvas<Window>, verts: &[SdlVertex; 6]) {
+fn fill_triangles(canvas: &mut Canvas<Window>, verts: &[SdlVertex]) {
     unsafe {
         SDL_RenderGeometry(
             canvas.raw(),
             std::ptr::null_mut(),
             verts.as_ptr(),
-            6,
+            verts.len() as i32,
             std::ptr::null(),
             0,
         );
     }
+}
+
+/// Segments for circle geometry — enough that the polygon reads as smooth
+/// at any size fp_ui actually draws circles (34px footer chips up to the
+/// ~340px radar), rather than the pixelated rectangle-strip/line-segment
+/// approximation this replaced.
+const CIRCLE_SEGMENTS: usize = 64;
+
+/// Fill a solid circle (logical center/radius) as a triangle fan.
+pub fn fill_circle(canvas: &mut Canvas<Window>, scale: &Scale, cx: f32, cy: f32, r: f32, color: Color) {
+    canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
+    let center = scale.point(cx, cy);
+    let center_v = vertex(center.0 as f32, center.1 as f32, color);
+    let mut perim = Vec::with_capacity(CIRCLE_SEGMENTS + 1);
+    for i in 0..=CIRCLE_SEGMENTS {
+        let a = std::f32::consts::TAU * i as f32 / CIRCLE_SEGMENTS as f32;
+        let p = scale.point(cx + a.cos() * r, cy + a.sin() * r);
+        perim.push(vertex(p.0 as f32, p.1 as f32, color));
+    }
+    let mut verts = Vec::with_capacity(CIRCLE_SEGMENTS * 3);
+    for i in 0..CIRCLE_SEGMENTS {
+        verts.push(center_v);
+        verts.push(perim[i]);
+        verts.push(perim[i + 1]);
+    }
+    fill_triangles(canvas, &verts);
+}
+
+/// Stroke a circle outline (logical center/radius, logical border
+/// `thickness`) as a ring of quads between an inner and outer radius.
+pub fn stroke_circle(
+    canvas: &mut Canvas<Window>,
+    scale: &Scale,
+    cx: f32,
+    cy: f32,
+    r: f32,
+    thickness: f32,
+    color: Color,
+) {
+    canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
+    let r_out = r + thickness / 2.0;
+    let r_in = (r - thickness / 2.0).max(0.0);
+    let mut verts = Vec::with_capacity(CIRCLE_SEGMENTS * 6);
+    for i in 0..CIRCLE_SEGMENTS {
+        let a0 = std::f32::consts::TAU * i as f32 / CIRCLE_SEGMENTS as f32;
+        let a1 = std::f32::consts::TAU * (i + 1) as f32 / CIRCLE_SEGMENTS as f32;
+        let o0 = scale.point(cx + a0.cos() * r_out, cy + a0.sin() * r_out);
+        let o1 = scale.point(cx + a1.cos() * r_out, cy + a1.sin() * r_out);
+        let i0 = scale.point(cx + a0.cos() * r_in, cy + a0.sin() * r_in);
+        let i1 = scale.point(cx + a1.cos() * r_in, cy + a1.sin() * r_in);
+        let o0v = vertex(o0.0 as f32, o0.1 as f32, color);
+        let o1v = vertex(o1.0 as f32, o1.1 as f32, color);
+        let i0v = vertex(i0.0 as f32, i0.1 as f32, color);
+        let i1v = vertex(i1.0 as f32, i1.1 as f32, color);
+        verts.push(o0v);
+        verts.push(o1v);
+        verts.push(i1v);
+        verts.push(o0v);
+        verts.push(i1v);
+        verts.push(i0v);
+    }
+    fill_triangles(canvas, &verts);
 }
 
 /// The 4 corners of a `skewX(deg)` parallelogram for a logical rect at
@@ -115,7 +177,7 @@ pub fn fill_skewed_rect(
         vertex(br.0, br.1, color),
         vertex(bl.0, bl.1, color),
     ];
-    fill(canvas, &verts);
+    fill_triangles(canvas, &verts);
 }
 
 /// Fill an axis-aligned logical rect `(x, y, w, h)` with a horizontal color
@@ -146,5 +208,5 @@ pub fn fill_horizontal_gradient_rect(
         vertex(br.0 as f32, br.1 as f32, right),
         vertex(bl.0 as f32, bl.1 as f32, left),
     ];
-    fill(canvas, &verts);
+    fill_triangles(canvas, &verts);
 }

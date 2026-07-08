@@ -120,10 +120,10 @@ fn draw_quick_match(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scale:
     let cx = SIDE_PAD + 60.0 + 170.0;
     let cy = PANEL_TOP + PANEL_H / 2.0;
     for r in [150.0, 95.0] {
-        stroke_circle_logical(canvas, scale, cx, cy, r, Color::RGBA(255, 255, 255, 15));
+        geometry::stroke_circle(canvas, scale, cx, cy, r, 1.0, Color::RGBA(255, 255, 255, 15));
     }
-    stroke_circle_logical(canvas, scale, cx, cy, 150.0, Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 90));
-    fill_circle_logical(canvas, scale, cx, cy, 37.0, Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 230));
+    geometry::stroke_circle(canvas, scale, cx, cy, 150.0, 1.5, Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 90));
+    geometry::fill_circle(canvas, scale, cx, cy, 37.0, Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 230));
     let (vw, vh) = fonts.text_size(FpFont::SairaCondensedBold, scale.font_px(26.0), "VS");
     let (vx, vy) = scale.point(cx - (vw as f32 / scale.s) / 2.0, cy - (vh as f32 / scale.s) / 2.0);
     fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(26.0), "VS", vx, vy, Color::RGB(255, 255, 255))?;
@@ -253,30 +253,4 @@ fn draw_server_browser(
         fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(16.0), &format!("{}", lobby.players), px, py, Color::RGB(0xcf, 0xcf, 0xc9))?;
     }
     Ok(())
-}
-
-fn fill_circle_logical(canvas: &mut Canvas<Window>, scale: &Scale, cx: f32, cy: f32, r: f32, color: Color) {
-    canvas.set_draw_color(color);
-    canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
-    let steps = 32;
-    for i in 0..steps {
-        let t = -1.0 + 2.0 * (i as f32) / (steps as f32 - 1.0);
-        let y = cy + t * r;
-        let half_w = (r * r - (t * r) * (t * r)).max(0.0).sqrt();
-        let rect = scale.rect(cx - half_w, y, half_w * 2.0, (r * 2.0 / steps as f32).max(1.0));
-        let _ = canvas.fill_rect(Some(rect));
-    }
-}
-
-fn stroke_circle_logical(canvas: &mut Canvas<Window>, scale: &Scale, cx: f32, cy: f32, r: f32, color: Color) {
-    canvas.set_draw_color(color);
-    canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
-    let segments = 48;
-    for i in 0..segments {
-        let a0 = std::f32::consts::TAU * (i as f32) / segments as f32;
-        let a1 = std::f32::consts::TAU * (i as f32 + 1.0) / segments as f32;
-        let p0 = scale.point(cx + a0.cos() * r, cy + a0.sin() * r);
-        let p1 = scale.point(cx + a1.cos() * r, cy + a1.sin() * r);
-        let _ = canvas.draw_line(p0, p1);
-    }
 }
