@@ -2821,6 +2821,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 fp_ui::FpResult::ActivateMainItem(cursor) => {
                                     state = AppState::Menu(MenuScreen::Main { cursor });
                                 }
+                                fp_ui::FpResult::ActivateLabMenuItem(cursor) => {
+                                    state = AppState::Menu(MenuScreen::LabMenu { cursor });
+                                }
                                 fp_ui::FpResult::ExitGame => break 'running,
                                 fp_ui::FpResult::SettingsChanged => {
                                     if let AppState::FpUi(fp_ui::FpScreen::Settings { fields, .. }) = &state {
@@ -6662,7 +6665,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let (win_w, win_h) = canvas.output_size().unwrap_or((1200, 762));
                 if let (AppState::FpUi(screen), Some(fpf)) = (&state, fp_fonts.as_mut()) {
                     let fp_username = discord_user.as_deref().unwrap_or(&cfg.player_username);
-                    fp_ui::draw(screen, &mut canvas, fpf, win_w as i32, win_h as i32, fp_username)
+                    fp_ui::draw(screen, &mut canvas, fpf, win_w as i32, win_h as i32, fp_username, &main_leaderboard)
                         .map_err(|e| format!("fp_ui draw: {e}"))?;
                 } else {
                     menu::draw(
@@ -7557,7 +7560,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let (win_w, win_h) = canvas.output_size().unwrap_or((1200, 762));
                 if let (AppState::FpUi(screen), Some(fpf)) = (&state, fp_fonts.as_mut()) {
                     let fp_username = discord_user.as_deref().unwrap_or(&cfg.player_username);
-                    fp_ui::draw(screen, &mut canvas, fpf, win_w as i32, win_h as i32, fp_username)
+                    fp_ui::draw(screen, &mut canvas, fpf, win_w as i32, win_h as i32, fp_username, &main_leaderboard)
                         .map_err(|e| format!("fp_ui draw: {e}"))?;
                 } else {
                     menu::draw(

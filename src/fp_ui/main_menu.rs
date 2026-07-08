@@ -1,25 +1,20 @@
-//! Main Menu — matches `screenshots/01-menu.png`/`03-menu-back.png`.
-//!
-//! The mockup's own menu list (`menuDefs` in the embedded script) has 4-5
-//! entries (Play/Online/Settings/Quit, later grown to include Network News
-//! and Rankings — screens out of scope here). The real app's Main Menu has
-//! 9 (`crate::menu::MAIN_ITEMS`: Online, Arcade, Lab, Replays, Profile,
-//! Controls, Settings, About, Quit). Per the legacy-screens handoff, this
-//! maps the mockup's row *language* (accent bar, number, label, sub-label)
-//! onto all 9 real items rather than inventing a different structure for
-//! the extra five — dropping none, styling all nine.
-//!
-//! Sub-label text: two rows verbatim from the mockup's own `menuDefs`
-//! ("Find, host or join a netplay match" for Online, "Start a local
-//! freeplay match" for Play/Arcade); the rest describe the real screen
-//! since the mockup has no equivalent entry to copy from.
+//! Main Menu — matches the mockup's `menuDefs`/`isMenu` branch exactly: 5
+//! rows (Play, Online, Network News, Rankings, Settings), not the real
+//! app's full 9-item `crate::menu::MAIN_ITEMS`. The other 4 legacy items
+//! (Arcade/Lab/Replays/Drones) live one level down in `play_menu.rs`'s
+//! submenu, matching the mockup's own `playMenuDefs`; Controls folds into
+//! Settings' categories (a follow-up item — see `settings.rs`'s module
+//! doc); Profile and Quit aren't reachable from here at all in the mockup
+//! (Profile is a mouse-only header chip with no documented gamepad
+//! binding; Quit is invoked by a hold-Start gesture this app has no
+//! hold-duration tracking for yet — see `super::nav`'s `Back` handling for
+//! the substitute used instead).
 
 use super::chrome::{self, FooterRight};
 use super::geometry;
 use super::layout::Scale;
 use super::theme;
 use crate::font::{FpFont, FpFontCache};
-use crate::menu::MAIN_ITEMS;
 use sdl2::pixels::Color;
 use sdl2::render::Canvas;
 use sdl2::video::Window;
@@ -32,16 +27,13 @@ const LIST_X: f32 = 56.0;
 const LIST_TOP: f32 = 158.0; // header (104) + this screen's top:54 offset
 const LABEL_GAP: f32 = 26.0; // bar -> number -> label gap, per rowStyle
 
-const SUBS: [&str; 9] = [
-    "Find, host or join a netplay match",
-    "Start a local freeplay match",
-    "Practice tools, hitboxes, dummy AI",
-    "Watch recorded matches",
-    "Rank, record, match history",
-    "Rebind keyboard and controller",
-    "Controls, video, audio, netcode",
-    "Version, keybindings, GitHub",
-    "Exit to system",
+/// (label, sub-label) — verbatim from the mockup's own `menuDefs`.
+pub const ITEMS: [(&str, &str); 5] = [
+    ("PLAY", "Start a local freeplay match"),
+    ("ONLINE", "Find, host or join a netplay match"),
+    ("NETWORK NEWS", "The wire \u{b7} bulletins \u{b7} line notices"),
+    ("RANKINGS", "National top 100 \u{b7} season ladder"),
+    ("SETTINGS", "Controls \u{b7} video \u{b7} audio \u{b7} netcode"),
 ];
 
 pub fn draw(
@@ -69,11 +61,11 @@ pub fn draw(
         theme::ACCENT,
     )?;
 
-    for (i, label) in MAIN_ITEMS.iter().enumerate() {
-        draw_row(canvas, fonts, scale, i, label, SUBS[i], i == cursor)?;
+    for (i, (label, sub)) in ITEMS.iter().enumerate() {
+        draw_row(canvas, fonts, scale, i, label, sub, i == cursor)?;
     }
 
-    draw_cabinet_box(canvas, fonts, scale, MAIN_ITEMS.len() as f32)?;
+    draw_cabinet_box(canvas, fonts, scale, ITEMS.len() as f32)?;
     draw_ghost_watermark(canvas, fonts, scale)?;
 
     chrome::draw_footer(

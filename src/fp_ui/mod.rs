@@ -12,13 +12,17 @@
 //! `menu::main_menu_state`'s round trip and `FpResult::ActivateMainItem`
 //! delegating to the legacy `nav_accept`, not reimplemented here.
 
+pub mod about;
+pub mod bandwidth;
 pub mod chrome;
 pub mod geometry;
 pub mod input;
 pub mod layout;
 mod lobby;
 mod main_menu;
+mod play_menu;
 mod quit;
+pub mod rankings;
 pub mod settings;
 pub mod theme;
 
@@ -26,17 +30,45 @@ pub use input::{event_to_fp_nav, FpNav};
 pub use layout::Scale;
 pub use settings::SettingsFields;
 
+use crate::menu::{LobbyPreview, MAIN_SETTINGS_INDEX as LEGACY_SETTINGS_INDEX};
 use crate::font::FpFontCache;
-use crate::menu::{LobbyPreview, MAIN_ITEMS, MAIN_SETTINGS_INDEX};
 use sdl2::render::Canvas;
 use sdl2::video::Window;
 
-/// Main Menu index for "Online" — `crate::fp_ui` special-cases it (opens the
-/// new Lobby screen rather than delegating to legacy's OnlineHub) the same
-/// way it special-cases Settings and Quit.
-const MAIN_ONLINE_INDEX: usize = 0;
+/// fp_ui's own Main Menu cursor space — 5 rows matching the mockup's
+/// `menuDefs` (Play/Online/Network News/Rankings/Settings), decoupled from
+/// `crate::menu::MAIN_ITEMS`'s 9-item legacy ordering. Only used for
+/// `FpScreen::Main { cursor }` and "return to Main at row X" transitions;
+/// never sent to `main.rs` as an `ActivateMainItem` payload (those still
+/// carry *legacy* indices — see `LEGACY_*_INDEX` below).
+const MAIN_PLAY_INDEX: usize = 0;
+const MAIN_ONLINE_INDEX: usize = 1;
+const MAIN_NETWORK_NEWS_INDEX: usize = 2;
+const MAIN_RANKINGS_INDEX: usize = 3;
+const MAIN_SETTINGS_INDEX: usize = 4;
+const MAIN_ITEM_COUNT: usize = 5;
 
-/// All fp_ui screens. Play lands in step 6.
+/// Legacy `crate::menu::MAIN_ITEMS` indices this module delegates real
+/// actions to via `FpResult::ActivateMainItem`. Named here (rather than
+/// inlined as magic numbers) since fp_ui's own Main Menu no longer mirrors
+/// legacy's ordering 1:1 the way it used to.
+const LEGACY_ARCADE_INDEX: usize = 1;
+const LEGACY_LAB_INDEX: usize = 2;
+const LEGACY_REPLAYS_INDEX: usize = 3;
+/// Not yet used — the mockup itself has no controller-reachable path to
+/// Profile either (only the header avatar chip, a mouse-only affordance),
+/// so fp_ui doesn't invent one. Kept named here for whichever follow-up
+/// step wires a native Profile screen + a real gesture to reach it.
+#[allow(dead_code)]
+const LEGACY_PROFILE_INDEX: usize = 4;
+
+/// fp_ui's own PlayMenu cursor space (Arcade/Lab/Replays/Drones).
+const PLAY_ARCADE_INDEX: usize = 0;
+const PLAY_LAB_INDEX: usize = 1;
+const PLAY_REPLAYS_INDEX: usize = 2;
+const PLAY_DRONES_INDEX: usize = 3;
+
+/// All fp_ui screens.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FpScreen {
     Main { cursor: usize },
@@ -45,6 +77,21 @@ pub enum FpScreen {
     /// the modal (and the screen underneath if Cancel is chosen) still
     /// shows the row the player quit from selected.
     Quit { choice: usize, menu_cursor: usize },
+    /// Play's submenu: Arcade / Lab / Replays / Drones. Arcade boots the ROM
+    /// directly (no character-select step — see `play_menu.rs`); Lab,
+    /// Replays and Drones delegate to their legacy screens for now (own
+    /// fp_ui visual language is follow-up work).
+    PlayMenu { cursor: usize },
+    /// Static bulletin board ("the wire") — no backend exists for this
+    /// content anywhere in the app; see `bandwidth.rs` module doc.
+    Bandwidth,
+    /// Community leaderboard. Reads real data the caller already fetches
+    /// unconditionally at startup (`main_leaderboard` in `main.rs`) rather
+    /// than opening a second fetch pipeline — see `rankings.rs`.
+    Rankings,
+    /// Static build info + keybindings, reachable from any fp_ui screen via
+    /// the Info gesture (Y / Triangle) as well as the Main Menu footer icon.
+    About,
     /// `fields` mirrors the relevant `Config` fields directly; every
     /// adjustment writes straight into this copy, and `FpResult::SettingsChanged`
     /// tells the caller to sync it into the real `Config` and persist
@@ -66,7 +113,7 @@ pub enum FpScreen {
 
 impl FpScreen {
     pub fn main() -> Self {
-        FpScreen::Main { cursor: 0 }
+        FpScreen::Main { cursor: MAIN_PLAY_INDEX }
     }
 
     pub fn settings_from_cfg(cfg: &crate::config::Config) -> Self {
@@ -100,6 +147,13 @@ pub enum FpResult {
     /// checks, screen construction, session/profile/replay side effects),
     /// rather than reimplementing any of that here.
     ActivateMainItem(usize),
+    /// Same idea as `ActivateMainItem`, but the caller sets
+    /// `state = AppState::Menu(MenuScreen::LabMenu { cursor })` instead —
+    /// `nav_accept`'s `LabMenu` arm handles both of its rows (Start Lab /
+    /// Load Drones) the same way its `Main` arm handles the top-level menu,
+    /// so PlayMenu's "Drones" row can jump straight to `GhostSelect` without
+    /// fp_ui needing to reimplement Lab's own 2-item chooser.
+    ActivateLabMenuItem(usize),
     /// EXIT GAME confirmed on the Quit overlay. The caller breaks the main
     /// loop exactly like the legacy `NavResult::Quit`.
     ExitGame,
@@ -134,21 +188,95 @@ pub fn nav(screen: &mut FpScreen, input: FpNav) -> FpResult {
                 FpResult::Stay
             }
             FpNav::Down => {
-                *cursor = (*cursor + 1).min(MAIN_ITEMS.len() - 1);
+                *cursor = (*cursor + 1).min(MAIN_ITEM_COUNT - 1);
                 FpResult::Stay
             }
-            FpNav::Confirm => {
-                if *cursor == MAIN_ITEMS.len() - 1 {
-                    // Quit is always the last item — open the overlay
-                    // instead of delegating to legacy's instant-exit.
-                    *screen = FpScreen::Quit { choice: 0, menu_cursor: *cursor };
+            FpNav::Confirm => match *cursor {
+                c if c == MAIN_PLAY_INDEX => {
+                    *screen = FpScreen::PlayMenu { cursor: 0 };
                     FpResult::Stay
-                } else if *cursor == MAIN_ONLINE_INDEX {
+                }
+                c if c == MAIN_ONLINE_INDEX => {
                     *screen = FpScreen::lobby();
                     FpResult::Stay
-                } else {
-                    FpResult::ActivateMainItem(*cursor)
                 }
+                c if c == MAIN_NETWORK_NEWS_INDEX => {
+                    *screen = FpScreen::Bandwidth;
+                    FpResult::Stay
+                }
+                c if c == MAIN_RANKINGS_INDEX => {
+                    *screen = FpScreen::Rankings;
+                    FpResult::Stay
+                }
+                _ => FpResult::ActivateMainItem(LEGACY_SETTINGS_INDEX),
+            },
+            // Not a menu row in the new mockup (no Quit entry in `menuDefs`
+            // — its own keybindings table documents "Quit to desktop: HOLD
+            // START" instead, a gesture this app has no hold-duration
+            // tracking for yet). Back-from-root is the next best fit: the
+            // conventional "press Back at the top level to exit" pattern,
+            // and it costs no new input plumbing.
+            FpNav::Back => {
+                *screen = FpScreen::Quit { choice: 0, menu_cursor: *cursor };
+                FpResult::Stay
+            }
+            FpNav::Info => {
+                *screen = FpScreen::About;
+                FpResult::Stay
+            }
+            _ => FpResult::Stay,
+        },
+        FpScreen::PlayMenu { cursor } => match input {
+            FpNav::Up => {
+                *cursor = cursor.saturating_sub(1);
+                FpResult::Stay
+            }
+            FpNav::Down => {
+                *cursor = (*cursor + 1).min(PLAY_DRONES_INDEX);
+                FpResult::Stay
+            }
+            FpNav::Confirm => match *cursor {
+                c if c == PLAY_ARCADE_INDEX => FpResult::ActivateMainItem(LEGACY_ARCADE_INDEX),
+                c if c == PLAY_LAB_INDEX => FpResult::ActivateMainItem(LEGACY_LAB_INDEX),
+                c if c == PLAY_REPLAYS_INDEX => FpResult::ActivateMainItem(LEGACY_REPLAYS_INDEX),
+                _ => FpResult::ActivateLabMenuItem(1), // Drones = LabMenu row 1 ("Load Drones")
+            },
+            FpNav::Back => {
+                *screen = FpScreen::Main { cursor: MAIN_PLAY_INDEX };
+                FpResult::Stay
+            }
+            FpNav::Info => {
+                *screen = FpScreen::About;
+                FpResult::Stay
+            }
+            _ => FpResult::Stay,
+        },
+        FpScreen::Bandwidth => match input {
+            FpNav::Back => {
+                *screen = FpScreen::Main { cursor: MAIN_NETWORK_NEWS_INDEX };
+                FpResult::Stay
+            }
+            FpNav::Info => {
+                *screen = FpScreen::About;
+                FpResult::Stay
+            }
+            _ => FpResult::Stay,
+        },
+        FpScreen::Rankings => match input {
+            FpNav::Back => {
+                *screen = FpScreen::Main { cursor: MAIN_RANKINGS_INDEX };
+                FpResult::Stay
+            }
+            FpNav::Info => {
+                *screen = FpScreen::About;
+                FpResult::Stay
+            }
+            _ => FpResult::Stay,
+        },
+        FpScreen::About => match input {
+            FpNav::Back => {
+                *screen = FpScreen::main();
+                FpResult::Stay
             }
             _ => FpResult::Stay,
         },
@@ -255,6 +383,7 @@ pub fn draw(
     win_w: i32,
     win_h: i32,
     username: &str,
+    leaderboard: &crate::menu::LeaderboardState,
 ) -> Result<(), String> {
     let scale = Scale::compute(win_w, win_h);
     fonts.begin_frame(scale.s);
@@ -267,6 +396,10 @@ pub fn draw(
             main_menu::draw(canvas, fonts, &scale, *menu_cursor, username)?;
             quit::draw(canvas, fonts, &scale, *choice)?;
         }
+        FpScreen::PlayMenu { cursor } => play_menu::draw(canvas, fonts, &scale, *cursor, username)?,
+        FpScreen::Bandwidth => bandwidth::draw(canvas, fonts, &scale, username)?,
+        FpScreen::Rankings => rankings::draw(canvas, fonts, &scale, username, leaderboard)?,
+        FpScreen::About => about::draw(canvas, fonts, &scale, username)?,
         FpScreen::Settings { cat, row, fields } => {
             settings::draw(canvas, fonts, &scale, fields, *cat, *row, username)?
         }

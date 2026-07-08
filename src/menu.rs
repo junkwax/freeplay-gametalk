@@ -640,9 +640,13 @@ pub fn test_state(name: &str) -> Option<AppState> {
         "fp:quit" => {
             return Some(AppState::FpUi(crate::fp_ui::FpScreen::Quit {
                 choice: 0,
-                menu_cursor: MAIN_ITEMS.len() - 1,
+                menu_cursor: 0,
             }))
         }
+        "fp:playmenu" => return Some(AppState::FpUi(crate::fp_ui::FpScreen::PlayMenu { cursor: 0 })),
+        "fp:bandwidth" => return Some(AppState::FpUi(crate::fp_ui::FpScreen::Bandwidth)),
+        "fp:rankings" => return Some(AppState::FpUi(crate::fp_ui::FpScreen::Rankings)),
+        "fp:about" => return Some(AppState::FpUi(crate::fp_ui::FpScreen::About)),
         "fp:settings" => {
             return Some(AppState::FpUi(crate::fp_ui::FpScreen::settings_from_cfg(
                 &crate::config::load(),

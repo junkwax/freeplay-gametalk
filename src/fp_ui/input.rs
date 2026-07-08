@@ -18,6 +18,13 @@ pub enum FpNav {
     Back,
     PrevTab,
     NextTab,
+    /// Opens the About screen — the mockup's own footer shows this as a
+    /// "SELECT · About" hint (its physical Select/Share/View button,
+    /// distinct from the Back/Circle button `FpNav::Back` already uses),
+    /// so it's mapped to SDL's `Button::Back` (the generic name for that
+    /// same physical button in `sdl2::controller`) rather than a face
+    /// button.
+    Info,
 }
 
 pub fn event_to_fp_nav(ev: &Event) -> Option<FpNav> {
@@ -33,6 +40,7 @@ pub fn event_to_fp_nav(ev: &Event) -> Option<FpNav> {
             Keycode::Escape => Some(FpNav::Back),
             Keycode::PageUp => Some(FpNav::PrevTab),
             Keycode::PageDown => Some(FpNav::NextTab),
+            Keycode::I => Some(FpNav::Info),
             _ => None,
         },
         Event::ControllerButtonDown { button, .. } => match button {
@@ -44,6 +52,7 @@ pub fn event_to_fp_nav(ev: &Event) -> Option<FpNav> {
             Button::B => Some(FpNav::Back),
             Button::LeftShoulder => Some(FpNav::PrevTab),
             Button::RightShoulder => Some(FpNav::NextTab),
+            Button::Back => Some(FpNav::Info),
             _ => None,
         },
         _ => None,
