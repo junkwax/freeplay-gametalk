@@ -1,13 +1,17 @@
 //! Settings — matches `screenshots/04-settings.png`'s row language (sidebar
-//! categories, slider/pill rows), bound to real `Config` fields.
+//! categories, slider/pill rows), bound to real `Config` fields, now with
+//! all 4 of the mockup's categories (Controls/Video/Audio/Netplay) — an
+//! earlier pass here left Controls out as "an open product question" per
+//! the legacy-screens handoff doc; the fuller mockup answers that question
+//! itself (`catDefs` lists `controls` first), so it's implemented for real
+//! now rather than continuing to flag it.
 //!
-//! The mockup's sidebar has 4 categories (Controls/Video/Audio/Netplay);
-//! this implements 3 (Video/Audio/Netplay), all bound to real, persisted
-//! settings. Controls is left out deliberately: the legacy-screens handoff
-//! doc flags "does Controls become a Settings category, or stay standalone"
-//! as an open product question, and Controls already has its own working
-//! destination from the Main Menu — folding it in here would be answering
-//! that question by fiat rather than flagging it.
+//! Controls (cat 0) is a real rebinding UI, not a config-field row list like
+//! the other 3 categories — see `draw_controls_rows` and
+//! `super::FpResult::BeginRebind`/`ClearAllBindings`, which hand off to the
+//! exact same `AppState::Rebinding` capture flow and `PlayerBindings`
+//! storage the legacy Controls screen (`crate::menu::draw_controls`) uses,
+//! rather than reimplementing bind storage/capture here.
 //!
 //! Category switching uses L1/R1 (`FpNav::PrevTab`/`NextTab`), matching the
 //! convention the handoff doc specifies for Lobby tabs — the doc's own
@@ -23,12 +27,15 @@ use super::layout::Scale;
 use super::theme;
 use crate::config::{AspectMode, AudioBuffer, RenderProfile, ScorebarStyle, VideoFilter};
 use crate::font::{FpFont, FpFontCache};
+use crate::input::{Action, Bindings, Player};
 use sdl2::pixels::Color;
 use sdl2::render::Canvas;
 use sdl2::video::Window;
 
-pub const CATS: [&str; 3] = ["VIDEO", "AUDIO", "NETPLAY"];
-const ROWS_PER_CAT: [usize; 3] = [6, 2, 4];
+pub const CONTROLS_CAT_INDEX: usize = 0;
+pub const CATS: [&str; 4] = ["CONTROLS", "VIDEO", "AUDIO", "NETPLAY"];
+// Controls: 11 actions + a "CLEAR ALL" row.
+const ROWS_PER_CAT: [usize; 4] = [Action::ALL.len() + 1, 6, 2, 4];
 
 const SIDE_PAD: f32 = 56.0;
 const CONTENT_TOP: f32 = 142.0;
@@ -85,41 +92,44 @@ impl SettingsFields {
         }
     }
 
+    /// `cat` here is one of the 3 config-row categories (Video=1/Audio=2/
+    /// Netplay=3) — Controls (cat 0) has its own row rendering
+    /// (`draw_controls_rows`), not a `SettingsFields` row at all.
     fn row_meta(cat: usize, row: usize) -> (&'static str, &'static str) {
         match (cat, row) {
-            (0, 0) => ("FULLSCREEN", "Borderless desktop fullscreen"),
-            (0, 1) => ("RENDER PROFILE", "SDL renderer backend"),
-            (0, 2) => ("VIDEO FILTER", "Gameplay frame presentation"),
-            (0, 3) => ("CRT CORNER BEND", "Rounded glass shading on CRT filters"),
-            (0, 4) => ("ASPECT MODE", "How the frame fits the window"),
-            (0, 5) => ("SCOREBAR STYLE", "Netplay score overlay layout"),
-            (1, 0) => ("VOLUME", "Output level"),
-            (1, 1) => ("AUDIO BUFFER", "Queue depth vs. latency"),
-            (2, 0) => ("INPUT DELAY", "Frames of delay before rollback"),
-            (2, 1) => ("RUNAHEAD (OFFLINE)", "One-frame speculative local play"),
-            (2, 2) => ("RUNAHEAD (ONLINE)", "Experimental video-only netplay speculation"),
-            (2, 3) => ("DISCORD RICH PRESENCE", "Show match status in Discord"),
+            (1, 0) => ("FULLSCREEN", "Borderless desktop fullscreen"),
+            (1, 1) => ("RENDER PROFILE", "SDL renderer backend"),
+            (1, 2) => ("VIDEO FILTER", "Gameplay frame presentation"),
+            (1, 3) => ("CRT CORNER BEND", "Rounded glass shading on CRT filters"),
+            (1, 4) => ("ASPECT MODE", "How the frame fits the window"),
+            (1, 5) => ("SCOREBAR STYLE", "Netplay score overlay layout"),
+            (2, 0) => ("VOLUME", "Output level"),
+            (2, 1) => ("AUDIO BUFFER", "Queue depth vs. latency"),
+            (3, 0) => ("INPUT DELAY", "Frames of delay before rollback"),
+            (3, 1) => ("RUNAHEAD (OFFLINE)", "One-frame speculative local play"),
+            (3, 2) => ("RUNAHEAD (ONLINE)", "Experimental video-only netplay speculation"),
+            (3, 3) => ("DISCORD RICH PRESENCE", "Show match status in Discord"),
             _ => ("", ""),
         }
     }
 
     fn value(&self, cat: usize, row: usize) -> RowValue {
         match (cat, row) {
-            (0, 0) => RowValue::Toggle(self.fullscreen),
-            (0, 1) => RowValue::Cycle(self.render_profile.label()),
-            (0, 2) => RowValue::Cycle(self.video_filter.label()),
-            (0, 3) => RowValue::Toggle(self.crt_corner_bend),
-            (0, 4) => RowValue::Cycle(self.aspect_mode.label()),
-            (0, 5) => RowValue::Cycle(self.scorebar_style.label()),
-            (1, 0) => RowValue::Slider { pct: self.volume_percent as f32, text: format!("{}%", self.volume_percent) },
-            (1, 1) => RowValue::Cycle(self.audio_buffer.label()),
-            (2, 0) => RowValue::Slider {
+            (1, 0) => RowValue::Toggle(self.fullscreen),
+            (1, 1) => RowValue::Cycle(self.render_profile.label()),
+            (1, 2) => RowValue::Cycle(self.video_filter.label()),
+            (1, 3) => RowValue::Toggle(self.crt_corner_bend),
+            (1, 4) => RowValue::Cycle(self.aspect_mode.label()),
+            (1, 5) => RowValue::Cycle(self.scorebar_style.label()),
+            (2, 0) => RowValue::Slider { pct: self.volume_percent as f32, text: format!("{}%", self.volume_percent) },
+            (2, 1) => RowValue::Cycle(self.audio_buffer.label()),
+            (3, 0) => RowValue::Slider {
                 pct: self.input_delay as f32 / 8.0 * 100.0,
                 text: format!("{}f", self.input_delay),
             },
-            (2, 1) => RowValue::Toggle(self.runahead),
-            (2, 2) => RowValue::Toggle(self.runahead_online),
-            (2, 3) => RowValue::Toggle(self.discord_rpc_enabled),
+            (3, 1) => RowValue::Toggle(self.runahead),
+            (3, 2) => RowValue::Toggle(self.runahead_online),
+            (3, 3) => RowValue::Toggle(self.discord_rpc_enabled),
             _ => RowValue::Toggle(false),
         }
     }
@@ -128,20 +138,20 @@ impl SettingsFields {
     /// sign and flip.
     pub fn adjust(&mut self, cat: usize, row: usize, delta: i8) {
         match (cat, row) {
-            (0, 0) => self.fullscreen = !self.fullscreen,
-            (0, 1) => self.render_profile = self.render_profile.cycle(delta),
-            (0, 2) => self.video_filter = self.video_filter.cycle(delta),
-            (0, 3) => self.crt_corner_bend = !self.crt_corner_bend,
-            (0, 4) => self.aspect_mode = self.aspect_mode.cycle(delta),
-            (0, 5) => self.scorebar_style = self.scorebar_style.cycle(delta),
-            (1, 0) => {
+            (1, 0) => self.fullscreen = !self.fullscreen,
+            (1, 1) => self.render_profile = self.render_profile.cycle(delta),
+            (1, 2) => self.video_filter = self.video_filter.cycle(delta),
+            (1, 3) => self.crt_corner_bend = !self.crt_corner_bend,
+            (1, 4) => self.aspect_mode = self.aspect_mode.cycle(delta),
+            (1, 5) => self.scorebar_style = self.scorebar_style.cycle(delta),
+            (2, 0) => {
                 self.volume_percent = (self.volume_percent as i32 + delta as i32 * 5).clamp(0, 100) as u8
             }
-            (1, 1) => self.audio_buffer = self.audio_buffer.cycle(delta),
-            (2, 0) => self.input_delay = (self.input_delay as i32 + delta as i32).clamp(0, 8) as u32,
-            (2, 1) => self.runahead = !self.runahead,
-            (2, 2) => self.runahead_online = !self.runahead_online,
-            (2, 3) => self.discord_rpc_enabled = !self.discord_rpc_enabled,
+            (2, 1) => self.audio_buffer = self.audio_buffer.cycle(delta),
+            (3, 0) => self.input_delay = (self.input_delay as i32 + delta as i32).clamp(0, 8) as u32,
+            (3, 1) => self.runahead = !self.runahead,
+            (3, 2) => self.runahead_online = !self.runahead_online,
+            (3, 3) => self.discord_rpc_enabled = !self.discord_rpc_enabled,
             _ => {}
         }
     }
@@ -156,6 +166,8 @@ pub fn draw(
     cat: usize,
     row: usize,
     sidebar_focus: bool,
+    controls_player: Player,
+    bindings: &Bindings,
     username: &str,
 ) -> Result<(), String> {
     chrome::draw_header(canvas, fonts, scale, username, true, None)?;
@@ -179,21 +191,36 @@ pub fn draw(
     fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(24.0), CATS[cat], cnx, cny, Color::RGB(0x8a, 0x8a, 0x92))?;
 
     let rows_top = list_top + 44.0;
-    for r in 0..rows_in_cat(cat) {
-        let (label, hint) = SettingsFields::row_meta(cat, r);
-        draw_row(canvas, fonts, scale, panel_x, rows_top + r as f32 * ROW_H, label, hint, fields.value(cat, r), r == row, !sidebar_focus)?;
+    if cat == CONTROLS_CAT_INDEX {
+        draw_controls_rows(canvas, fonts, scale, panel_x, rows_top, row, controls_player, bindings, !sidebar_focus)?;
+    } else {
+        for r in 0..rows_in_cat(cat) {
+            let (label, hint) = SettingsFields::row_meta(cat, r);
+            draw_row(canvas, fonts, scale, panel_x, rows_top + r as f32 * ROW_H, label, hint, fields.value(cat, r), r == row, !sidebar_focus)?;
+        }
     }
 
-    chrome::draw_footer(
-        canvas,
-        fonts,
-        scale,
+    let content_prompts: &[chrome::FooterPrompt] = if cat == CONTROLS_CAT_INDEX {
+        &[
+            chrome::FooterPrompt { glyph: "\u{2195}", label: "Row", color: Color::RGB(0xcf, 0xcf, 0xc9) },
+            chrome::FooterPrompt { glyph: "L/R", label: "Category", color: Color::RGB(0xcf, 0xcf, 0xc9) },
+            chrome::FooterPrompt { glyph: "\u{2194}", label: "Switch Player", color: Color::RGB(0xcf, 0xcf, 0xc9) },
+            chrome::PROMPT_SELECT,
+            chrome::PROMPT_BACK,
+        ]
+    } else {
         &[
             chrome::FooterPrompt { glyph: "\u{2195}", label: "Row", color: Color::RGB(0xcf, 0xcf, 0xc9) },
             chrome::FooterPrompt { glyph: "L/R", label: "Category", color: Color::RGB(0xcf, 0xcf, 0xc9) },
             chrome::FooterPrompt { glyph: "\u{2194}", label: "Adjust", color: Color::RGB(0xcf, 0xcf, 0xc9) },
             chrome::PROMPT_BACK,
-        ],
+        ]
+    };
+    chrome::draw_footer(
+        canvas,
+        fonts,
+        scale,
+        content_prompts,
         FooterRight::Text("CHANGES SAVED AUTOMATICALLY"),
     )?;
     Ok(())
@@ -265,6 +292,144 @@ fn draw_cabinet_box(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scale:
     fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(11.0), "CABINET", lx, ly, theme::MUTE)?;
     let (nx, ny) = scale.point(SIDE_PAD + 18.0, y + 27.0);
     fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(20.0), "MORTAL KOMBAT II", nx, ny, Color::RGB(0xcf, 0xcf, 0xc9))?;
+    Ok(())
+}
+
+/// Controls category content: a P1/P2 tab switcher (mockup's own
+/// `rebindPlayerTabs`, mouse-only there — `Left`/`Right` drive it here
+/// instead, see `FpScreen::Settings::controls_player`'s doc comment) above
+/// the 11 real `Action::ALL` bindings plus a "CLEAR ALL" row, reading
+/// current bindings via the same `crate::menu::summarize_bindings`/
+/// `pretty_binding_name` the legacy Controls screen displays them with.
+#[allow(clippy::too_many_arguments)]
+fn draw_controls_rows(
+    canvas: &mut Canvas<Window>,
+    fonts: &mut FpFontCache,
+    scale: &Scale,
+    x: f32,
+    top: f32,
+    row: usize,
+    controls_player: Player,
+    bindings: &Bindings,
+    focused: bool,
+) -> Result<(), String> {
+    let tab_h = 36.0;
+    for (i, p) in [Player::P1, Player::P2].iter().enumerate() {
+        let tab_w = 70.0;
+        let tx = x + i as f32 * (tab_w + 8.0);
+        let active = *p == controls_player;
+        canvas.set_draw_color(if active {
+            Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 46)
+        } else {
+            Color::RGBA(255, 255, 255, 10)
+        });
+        canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
+        canvas.fill_rect(Some(scale.rect(tx, top, tab_w, tab_h)))?;
+        canvas.set_draw_color(if active { theme::ACCENT } else { Color::RGBA(255, 255, 255, 24) });
+        canvas.draw_rect(scale.rect(tx, top, tab_w, tab_h))?;
+        let label = p.label();
+        let (lw, lh) = fonts.text_size(FpFont::ChakraPetchSemiBold, scale.font_px(13.0), label);
+        let (ltx, lty) = scale.point(
+            tx + tab_w / 2.0 - (lw as f32 / scale.s) / 2.0,
+            top + tab_h / 2.0 - (lh as f32 / scale.s) / 2.0,
+        );
+        fonts.draw(
+            canvas,
+            FpFont::ChakraPetchSemiBold,
+            scale.font_px(13.0),
+            label,
+            ltx,
+            lty,
+            if active { theme::TEXT } else { Color::RGB(0x6a, 0x6a, 0x72) },
+        )?;
+    }
+
+    let rows_top = top + tab_h + 14.0;
+    let row_h = 46.0;
+    let pb = bindings.get(controls_player);
+    for (i, action) in Action::ALL.iter().enumerate() {
+        let y = rows_top + i as f32 * row_h;
+        let selected = row == i;
+        draw_bind_row(canvas, fonts, scale, x, y, row_h, action.label(), &crate::menu::summarize_bindings(pb, *action), selected, focused)?;
+    }
+
+    let clear_y = rows_top + Action::ALL.len() as f32 * row_h + 10.0;
+    let clear_selected = row == Action::ALL.len();
+    canvas.set_draw_color(if clear_selected && focused {
+        Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 20)
+    } else {
+        Color::RGBA(255, 255, 255, 8)
+    });
+    canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
+    let clear_w = 260.0;
+    let clear_h = 40.0;
+    canvas.fill_rect(Some(scale.rect(x, clear_y, clear_w, clear_h)))?;
+    canvas.set_draw_color(if clear_selected && focused { theme::ACCENT } else { Color::RGBA(255, 255, 255, 24) });
+    canvas.draw_rect(scale.rect(x, clear_y, clear_w, clear_h))?;
+    // "X" rather than the Unicode multiplication-X glyph (U+2715) — missing
+    // from this font, same tofu-box issue `chrome::PROMPT_SELECT` already
+    // works around with a plain letter.
+    let clear_label = format!("X CLEAR ALL \u{b7} {}", controls_player.label());
+    let (cx, cy) = scale.point(x + 16.0, clear_y + clear_h / 2.0 - 7.0);
+    fonts.draw(
+        canvas,
+        FpFont::ChakraPetchSemiBold,
+        scale.font_px(12.0),
+        &clear_label,
+        cx,
+        cy,
+        if clear_selected && focused { theme::ACCENT } else { Color::RGB(0x7a, 0x7a, 0x82) },
+    )?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_bind_row(
+    canvas: &mut Canvas<Window>,
+    fonts: &mut FpFontCache,
+    scale: &Scale,
+    x: f32,
+    y: f32,
+    row_h: f32,
+    action_label: &str,
+    binding_text: &str,
+    selected: bool,
+    focused: bool,
+) -> Result<(), String> {
+    if selected {
+        canvas.set_draw_color(if focused {
+            theme::ACCENT
+        } else {
+            Color::RGBA(255, 255, 255, 90)
+        });
+        canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
+        canvas.fill_rect(Some(scale.rect(x, y, 3.0, row_h - 4.0)))?;
+    }
+    canvas.set_draw_color(Color::RGBA(255, 255, 255, 10));
+    canvas.fill_rect(Some(scale.rect(x, y + row_h - 4.0, 620.0, 1.0)))?;
+
+    let (lx, ly) = scale.point(x + 14.0, y + row_h / 2.0 - 11.0);
+    fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(20.0), action_label, lx, ly, Color::RGB(0xed, 0xed, 0xe8))?;
+
+    if selected && focused {
+        let hint = "CROSS TO REBIND";
+        let (hw, hh) = fonts.text_size(FpFont::ChakraPetchSemiBold, scale.font_px(11.0), hint);
+        let pad_x = 9.0;
+        let pad_y = 3.0;
+        let hint_w = (hw as f32 / scale.s) + pad_x * 2.0;
+        let hint_h = (hh as f32 / scale.s) + pad_y * 2.0;
+        let hint_x = x + 620.0 - hint_w;
+        let hint_y = y + row_h / 2.0 - hint_h / 2.0 - 2.0;
+        canvas.set_draw_color(Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 140));
+        canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
+        canvas.draw_rect(scale.rect(hint_x, hint_y, hint_w, hint_h))?;
+        let (htx, hty) = scale.point(hint_x + pad_x, hint_y + pad_y);
+        fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(11.0), hint, htx, hty, theme::ACCENT)?;
+    } else {
+        let (bw, _) = fonts.text_size(FpFont::ChakraPetchSemiBold, scale.font_px(14.0), binding_text);
+        let (bx, by) = scale.point(x + 620.0 - (bw as f32 / scale.s), y + row_h / 2.0 - 9.0);
+        fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(14.0), binding_text, bx, by, Color::RGB(0xcf, 0xcf, 0xc9))?;
+    }
     Ok(())
 }
 

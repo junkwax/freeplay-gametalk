@@ -3141,6 +3141,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         }
                                     }
                                 }
+                                // Same `AppState::Rebinding` capture the legacy Controls
+                                // screen uses — `came_from` is the current fp_ui Settings
+                                // screen (not a legacy `MenuScreen`), so `finish_rebind`
+                                // returns here instead of to legacy once a button is
+                                // pressed or the capture is canceled.
+                                fp_ui::FpResult::BeginRebind(action, player) => {
+                                    let came_from = state.clone();
+                                    state = AppState::Rebinding {
+                                        action,
+                                        player,
+                                        came_from: Box::new(came_from),
+                                    };
+                                }
+                                fp_ui::FpResult::ClearAllBindings(player) => {
+                                    cfg.bindings.get_mut(player).clear_all();
+                                    config::save(&cfg);
+                                }
                             }
                         }
                     }
@@ -6879,6 +6896,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         fp_username,
                         &main_leaderboard,
                         &main_profile,
+                        &cfg.bindings,
                     )
                     .map_err(|e| format!("fp_ui draw: {e}"))?;
                 } else {
@@ -7811,6 +7829,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         fp_username,
                         &main_leaderboard,
                         &main_profile,
+                        &cfg.bindings,
                     )
                     .map_err(|e| format!("fp_ui draw: {e}"))?;
                 } else {

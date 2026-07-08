@@ -32,7 +32,11 @@ pub enum AppState {
     Rebinding {
         action: Action,
         player: Player,
-        came_from: MenuScreen,
+        /// Boxed `AppState` rather than `MenuScreen` so rebinding can be
+        /// entered from an fp_ui screen (the new native Controls category)
+        /// and correctly return there afterward, not just from legacy
+        /// `MenuScreen::Controls`.
+        came_from: Box<AppState>,
     },
 }
 
@@ -1424,7 +1428,7 @@ impl AppState {
                     *self = AppState::Rebinding {
                         action,
                         player,
-                        came_from: MenuScreen::Controls { cursor, player },
+                        came_from: Box::new(AppState::Menu(MenuScreen::Controls { cursor, player })),
                     };
                     NavResult::BeginRebind
                 } else if cursor == Action::ALL.len() {
@@ -1608,7 +1612,7 @@ impl AppState {
 
     pub fn finish_rebind(&mut self) {
         if let AppState::Rebinding { came_from, .. } = self.clone() {
-            *self = AppState::Menu(came_from);
+            *self = *came_from;
         }
     }
 
@@ -1904,8 +1908,15 @@ pub fn draw(
             player,
             came_from,
         } => {
-            let cursor = match came_from {
-                MenuScreen::Controls { cursor, .. } => *cursor,
+            // Rebind capture always renders via this legacy screen even when
+            // entered from the new native Controls category (fp_ui's own
+            // `AppState::FpUi(..)` render path never runs while `state` is
+            // `Rebinding` — see main.rs's `fp_ui::draw` guard) — a brief,
+            // known visual flash to the old style for the "press a button"
+            // moment, not a functional gap; `finish_rebind` still correctly
+            // returns to whichever screen (legacy or fp_ui) it came from.
+            let cursor = match came_from.as_ref() {
+                AppState::Menu(MenuScreen::Controls { cursor, .. }) => *cursor,
                 _ => 0,
             };
             draw_controls(
@@ -3705,7 +3716,7 @@ fn draw_controls(
     Ok(())
 }
 
-fn summarize_bindings(pb: &PlayerBindings, action: Action) -> String {
+pub(crate) fn summarize_bindings(pb: &PlayerBindings, action: Action) -> String {
     let mut parts: Vec<String> = Vec::new();
     for (a, b) in &pb.entries {
         if *a != action {
@@ -3731,7 +3742,7 @@ fn summarize_bindings(pb: &PlayerBindings, action: Action) -> String {
     }
 }
 
-fn pretty_binding_name(s: &str) -> String {
+pub(crate) fn pretty_binding_name(s: &str) -> String {
     s.replace("DPAD", "D-PAD ")
         .replace("TRIGGER", "TRIGGER ")
         .replace("SHOULDER", "SHOULDER ")

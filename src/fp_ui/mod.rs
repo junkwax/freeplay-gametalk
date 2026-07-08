@@ -122,7 +122,20 @@ pub enum FpScreen {
     /// there was no way to reach the sidebar with Up/Down at all, which
     /// read as "stuck" since both a category and a row are drawn as
     /// selected at once with nothing showing which one input applies to.
-    Settings { cat: usize, row: usize, fields: SettingsFields, sidebar_focus: bool },
+    /// `controls_player`: which player's bindings the Controls category
+    /// (cat 0) is showing/rebinding — `FpNav::Left`/`Right` switch it while
+    /// that category is active instead of adjusting a value (Controls rows
+    /// have none to adjust; the mockup's own `rebindPlayerTabs` are a
+    /// mouse-only affordance we don't have, so repurposing the otherwise-
+    /// idle Left/Right for this category is the closest controller-native
+    /// equivalent).
+    Settings {
+        cat: usize,
+        row: usize,
+        fields: SettingsFields,
+        sidebar_focus: bool,
+        controls_player: crate::input::Player,
+    },
     /// `tab`: 0=Quick Match, 1=Host/Join, 2=Server Browser.
     /// `host_join_focus`: 0=Host column, 1=Join column (tab 1 only).
     /// `lobbies`/`cursor`/`status`: the real public-lobby list (tab 2),
@@ -148,6 +161,7 @@ impl FpScreen {
             row: 0,
             fields: SettingsFields::from_cfg(cfg),
             sidebar_focus: false,
+            controls_player: crate::input::Player::P1,
         }
     }
 
@@ -213,6 +227,16 @@ pub enum FpResult {
     /// show — not every server-recorded match has a local `.rep` file, e.g.
     /// if it predates this install or was played on another device).
     WatchLastMatchReplay,
+    /// Confirm on a Controls-category row (Settings' new 1st category).
+    /// The caller enters the exact same `AppState::Rebinding` capture the
+    /// legacy Controls screen uses (`came_from` set to the current
+    /// `AppState::FpUi(FpScreen::Settings{..})` so it returns here, not to
+    /// legacy, once a button is pressed or the rebind is canceled).
+    BeginRebind(crate::input::Action, crate::input::Player),
+    /// Confirm on Controls' "CLEAR ALL" row. Caller does what legacy's
+    /// `NavResult::ClearAllBindings` does: `Bindings::get_mut(player).clear_all()`
+    /// + save.
+    ClearAllBindings(crate::input::Player),
 }
 
 pub fn nav(screen: &mut FpScreen, input: FpNav) -> FpResult {
@@ -373,7 +397,7 @@ pub fn nav(screen: &mut FpScreen, input: FpNav) -> FpResult {
             }
             _ => FpResult::Stay,
         },
-        FpScreen::Settings { cat, row, fields, sidebar_focus } => match input {
+        FpScreen::Settings { cat, row, fields, sidebar_focus, controls_player } => match input {
             FpNav::Up => {
                 if *sidebar_focus {
                     *cat = cat.saturating_sub(1);
@@ -401,6 +425,13 @@ pub fn nav(screen: &mut FpScreen, input: FpNav) -> FpResult {
                 *row = 0;
                 FpResult::Stay
             }
+            FpNav::Confirm if *cat == settings::CONTROLS_CAT_INDEX => {
+                if *row < crate::input::Action::ALL.len() {
+                    FpResult::BeginRebind(crate::input::Action::ALL[*row], *controls_player)
+                } else {
+                    FpResult::ClearAllBindings(*controls_player)
+                }
+            }
             FpNav::PrevTab => {
                 *cat = (*cat + settings::CATS.len() - 1) % settings::CATS.len();
                 *row = 0;
@@ -409,6 +440,14 @@ pub fn nav(screen: &mut FpScreen, input: FpNav) -> FpResult {
             FpNav::NextTab => {
                 *cat = (*cat + 1) % settings::CATS.len();
                 *row = 0;
+                FpResult::Stay
+            }
+            // Controls rows have nothing to adjust with Left/Right (no
+            // toggle/cycle/slider value) — repurposed to switch which
+            // player's bindings are shown/rebound instead (see
+            // `FpScreen::Settings::controls_player`'s doc comment).
+            FpNav::Left | FpNav::Right if !*sidebar_focus && *cat == settings::CONTROLS_CAT_INDEX => {
+                *controls_player = controls_player.other();
                 FpResult::Stay
             }
             FpNav::Left if !*sidebar_focus => {
@@ -478,6 +517,7 @@ pub fn draw(
     username: &str,
     leaderboard: &crate::menu::LeaderboardState,
     profile: &crate::menu::ProfileScreenState,
+    bindings: &crate::input::Bindings,
 ) -> Result<(), String> {
     let scale = Scale::compute(win_w, win_h);
     fonts.begin_frame(scale.s);
@@ -495,8 +535,8 @@ pub fn draw(
         FpScreen::Rankings => rankings::draw(canvas, fonts, &scale, username, leaderboard)?,
         FpScreen::Profile => profile::draw(canvas, fonts, &scale, username, profile)?,
         FpScreen::About => about::draw(canvas, fonts, &scale, username)?,
-        FpScreen::Settings { cat, row, fields, sidebar_focus } => {
-            settings::draw(canvas, fonts, &scale, fields, *cat, *row, *sidebar_focus, username)?
+        FpScreen::Settings { cat, row, fields, sidebar_focus, controls_player } => {
+            settings::draw(canvas, fonts, &scale, fields, *cat, *row, *sidebar_focus, *controls_player, bindings, username)?
         }
         FpScreen::Lobby { tab, host_join_focus, cursor, lobbies, status } => {
             lobby::draw(canvas, fonts, &scale, *tab, *host_join_focus, *cursor, lobbies, status, username)?
