@@ -2807,20 +2807,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
 
-                _ if matches!(state, AppState::FpUi(_)) => {
+                // Combined so a Confirm on the fp_ui Main Menu can convert
+                // `state` to the legacy `Menu(MenuScreen::Main)` and, in the
+                // same event, immediately fall into the unmodified legacy
+                // Accept handling below — reusing its ROM-present checks and
+                // NavResult side effects (session start, profile fetch,
+                // replay listing, ...) instead of re-implementing them here.
+                _ if matches!(state, AppState::FpUi(_)) || matches!(state, AppState::Menu(_)) => {
                     if let AppState::FpUi(screen) = &mut state {
                         if let Some(nav) = fp_ui::event_to_fp_nav(&event) {
                             match fp_ui::nav(screen, nav) {
                                 fp_ui::FpResult::Stay => {}
-                                fp_ui::FpResult::EnterLegacyAbout => {
-                                    state = AppState::Menu(MenuScreen::About);
+                                fp_ui::FpResult::ActivateMainItem(cursor) => {
+                                    state = AppState::Menu(MenuScreen::Main { cursor });
                                 }
                             }
                         }
                     }
-                }
-
-                _ if matches!(state, AppState::Menu(_)) => {
+                    if !matches!(state, AppState::Menu(_)) {
+                        continue;
+                    }
                     if handle_replay_select_shortcut(&event, &mut state) {
                         continue;
                     }
@@ -6525,7 +6531,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 canvas.set_logical_size(0, 0)?;
                 let (win_w, win_h) = canvas.output_size().unwrap_or((1200, 762));
                 if let (AppState::FpUi(screen), Some(fpf)) = (&state, fp_fonts.as_mut()) {
-                    fp_ui::draw(screen, &mut canvas, fpf, win_w as i32, win_h as i32)
+                    let fp_username = discord_user.as_deref().unwrap_or(&cfg.player_username);
+                    fp_ui::draw(screen, &mut canvas, fpf, win_w as i32, win_h as i32, fp_username)
                         .map_err(|e| format!("fp_ui draw: {e}"))?;
                 } else {
                     menu::draw(
@@ -7403,7 +7410,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 canvas.set_logical_size(0, 0)?;
                 let (win_w, win_h) = canvas.output_size().unwrap_or((1200, 762));
                 if let (AppState::FpUi(screen), Some(fpf)) = (&state, fp_fonts.as_mut()) {
-                    fp_ui::draw(screen, &mut canvas, fpf, win_w as i32, win_h as i32)
+                    let fp_username = discord_user.as_deref().unwrap_or(&cfg.player_username);
+                    fp_ui::draw(screen, &mut canvas, fpf, win_w as i32, win_h as i32, fp_username)
                         .map_err(|e| format!("fp_ui draw: {e}"))?;
                 } else {
                     menu::draw(
