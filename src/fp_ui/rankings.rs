@@ -24,6 +24,7 @@ use sdl2::video::Window;
 const SIDE_PAD: f32 = 56.0;
 const TOP: f32 = 38.0 + 104.0;
 const MAX_ROWS: usize = 10;
+const SKEW_DEG: f32 = -9.0;
 
 pub fn draw(
     canvas: &mut Canvas<Window>,
@@ -32,7 +33,14 @@ pub fn draw(
     username: &str,
     leaderboard: &LeaderboardState,
 ) -> Result<(), String> {
+    // The mockup's radial-glow/vignette/skewed-line background is defined
+    // once on the shared stage div, above every per-screen `sc-if` branch —
+    // every screen gets it, not just Main Menu/Play submenu (the only two
+    // that had picked it up so far). Rankings was missing it entirely,
+    // rendering flat black instead.
+    chrome::draw_background_accents(canvas, scale, SKEW_DEG)?;
     chrome::draw_header(canvas, fonts, scale, username, true, None)?;
+    draw_ghost_watermark(canvas, fonts, scale)?;
 
     canvas.set_draw_color(theme::ACCENT);
     canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
@@ -79,6 +87,26 @@ pub fn draw(
         &[chrome::PROMPT_NAVIGATE, chrome::PROMPT_BACK],
         FooterRight::Text("GLICKO-2 RATING SYSTEM"),
     )?;
+    Ok(())
+}
+
+/// Ghost "#1" watermark, right edge — same poor-man's-stroke treatment as
+/// the Main Menu's "II" and the Play submenu's "PLAY" (`main_menu.rs`'s
+/// `draw_ghost_watermark`), sized/positioned per the mockup's own
+/// `right:-40px;top:56%` + `skewX(-9deg)`.
+fn draw_ghost_watermark(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scale: &Scale) -> Result<(), String> {
+    let px = scale.font_px(560.0);
+    let (w, h) = fonts.text_size(FpFont::SairaCondensedBlack, px, "#1");
+    let (x, y) = scale.point(
+        theme::VW + 40.0 - (w as f32 / scale.s),
+        theme::VH * 0.56 - (h as f32 / scale.s) / 2.0,
+    );
+    let stroke_color = Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 71);
+    let r = scale.len(1.0).round().max(1.0) as i32;
+    for (dx, dy) in [(-r, -r), (0, -r), (r, -r), (-r, 0), (r, 0), (-r, r), (0, r), (r, r)] {
+        fonts.draw_italic(canvas, FpFont::SairaCondensedBlack, px, "#1", x + dx, y + dy, stroke_color)?;
+    }
+    fonts.draw_italic(canvas, FpFont::SairaCondensedBlack, px, "#1", x, y, Color::RGB(0x0c, 0x0c, 0x11))?;
     Ok(())
 }
 

@@ -475,6 +475,14 @@ fn draw_cabinet_title(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scal
     let (sw, _) = fonts.text_size_tracked(FpFont::ChakraPetchMedium, scale.font_px(14.0), sub, sub_track);
     let (sx, sy) = scale.point(theme::VW - 96.0 - (sw as f32 / scale.s), bottom + 8.0);
     fonts.draw_tracked(canvas, FpFont::ChakraPetchMedium, scale.font_px(14.0), sub, sx, sy, Color::RGB(0x5e, 0x5e, 0x66), sub_track)?;
+
+    // Build/version line — no real MK2 ROM revision is tracked anywhere in
+    // this app (unlike the mockup's invented "ROM rev L3.1"), so this shows
+    // freeplay-gametalk's own real build info instead of fabricating one.
+    let build = crate::version::footer_string();
+    let (bw, _) = fonts.text_size(FpFont::ChakraPetchMedium, scale.font_px(12.0), &build);
+    let (bx, by) = scale.point(theme::VW - 96.0 - (bw as f32 / scale.s), bottom + 28.0);
+    fonts.draw(canvas, FpFont::ChakraPetchMedium, scale.font_px(12.0), &build, bx, by, Color::RGB(0x3a, 0x3a, 0x42))?;
     Ok(())
 }
 

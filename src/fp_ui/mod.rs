@@ -237,6 +237,17 @@ pub enum FpResult {
     /// `NavResult::ClearAllBindings` does: `Bindings::get_mut(player).clear_all()`
     /// + save.
     ClearAllBindings(crate::input::Player),
+    /// Confirm on the Account category's Username or Stats Email row.
+    /// Caller opens the same legacy `MenuScreen::TextEdit` capture
+    /// `NavResult::EditText` does, same known rough edge as
+    /// `OpenJoinCode` — lands back on legacy Main (not fp_ui Settings) once
+    /// submitted/cancelled, rather than threading a `came_from` back to
+    /// fp_ui for what's a one-off action.
+    BeginAccountEdit(crate::menu::EditField),
+    /// Confirm on the Account category's Discord row. Caller does exactly
+    /// what legacy's `NavResult::ConnectDiscord` does (same rough edge as
+    /// above: lands on legacy Settings/Matchmaking, not fp_ui).
+    ToggleDiscordConnect,
 }
 
 pub fn nav(screen: &mut FpScreen, input: FpNav) -> FpResult {
@@ -432,6 +443,11 @@ pub fn nav(screen: &mut FpScreen, input: FpNav) -> FpResult {
                     FpResult::ClearAllBindings(*controls_player)
                 }
             }
+            FpNav::Confirm if *cat == settings::ACCOUNT_CAT_INDEX => match *row {
+                0 => FpResult::BeginAccountEdit(crate::menu::EditField::Username),
+                1 => FpResult::BeginAccountEdit(crate::menu::EditField::StatsEmail),
+                _ => FpResult::ToggleDiscordConnect,
+            },
             FpNav::PrevTab => {
                 *cat = (*cat + settings::CATS.len() - 1) % settings::CATS.len();
                 *row = 0;
@@ -457,6 +473,15 @@ pub fn nav(screen: &mut FpScreen, input: FpNav) -> FpResult {
             FpNav::Right if !*sidebar_focus => {
                 fields.adjust(*cat, *row, 1);
                 FpResult::SettingsChanged
+            }
+            // Back drills up one level at a time: from a category's content,
+            // it hands focus to the sidebar (same place Up-at-top-row and
+            // L1/R1 already land you) rather than leaving Settings outright;
+            // only a second Back — now with the sidebar already focused —
+            // exits to the Main Menu.
+            FpNav::Back if !*sidebar_focus => {
+                *sidebar_focus = true;
+                FpResult::Stay
             }
             FpNav::Back => {
                 *screen = FpScreen::Main { cursor: MAIN_SETTINGS_INDEX };
@@ -518,6 +543,8 @@ pub fn draw(
     leaderboard: &crate::menu::LeaderboardState,
     profile: &crate::menu::ProfileScreenState,
     bindings: &crate::input::Bindings,
+    stats_email: &str,
+    discord_connected: bool,
 ) -> Result<(), String> {
     let scale = Scale::compute(win_w, win_h);
     fonts.begin_frame(scale.s);
@@ -535,9 +562,20 @@ pub fn draw(
         FpScreen::Rankings => rankings::draw(canvas, fonts, &scale, username, leaderboard)?,
         FpScreen::Profile => profile::draw(canvas, fonts, &scale, username, profile)?,
         FpScreen::About => about::draw(canvas, fonts, &scale, username)?,
-        FpScreen::Settings { cat, row, fields, sidebar_focus, controls_player } => {
-            settings::draw(canvas, fonts, &scale, fields, *cat, *row, *sidebar_focus, *controls_player, bindings, username)?
-        }
+        FpScreen::Settings { cat, row, fields, sidebar_focus, controls_player } => settings::draw(
+            canvas,
+            fonts,
+            &scale,
+            fields,
+            *cat,
+            *row,
+            *sidebar_focus,
+            *controls_player,
+            bindings,
+            username,
+            stats_email,
+            discord_connected,
+        )?,
         FpScreen::Lobby { tab, host_join_focus, cursor, lobbies, status } => {
             lobby::draw(canvas, fonts, &scale, *tab, *host_join_focus, *cursor, lobbies, status, username)?
         }

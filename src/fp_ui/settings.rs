@@ -33,9 +33,18 @@ use sdl2::render::Canvas;
 use sdl2::video::Window;
 
 pub const CONTROLS_CAT_INDEX: usize = 0;
-pub const CATS: [&str; 4] = ["CONTROLS", "VIDEO", "AUDIO", "NETPLAY"];
-// Controls: 11 actions + a "CLEAR ALL" row.
-const ROWS_PER_CAT: [usize; 4] = [Action::ALL.len() + 1, 6, 2, 4];
+/// Username / Stats Email / Discord connection — the profile-identity
+/// fields the legacy `MenuScreen::Settings` used to expose (rows 0-2 there)
+/// that had no home anywhere in fp_ui after the redesign into
+/// Controls/Video/Audio/Netplay categories. Not in the mockup's own
+/// `catDefs` (which has no account/profile category at all), but real user
+/// feedback that these were missing and useful outweighs mockup fidelity
+/// here — appended last rather than reordered in, to avoid renumbering the
+/// other 4 categories' index constants.
+pub const ACCOUNT_CAT_INDEX: usize = 4;
+pub const CATS: [&str; 5] = ["CONTROLS", "VIDEO", "AUDIO", "NETPLAY", "ACCOUNT"];
+// Controls: 11 actions + a "CLEAR ALL" row. Account: Username/Stats Email/Discord.
+const ROWS_PER_CAT: [usize; 5] = [Action::ALL.len() + 1, 6, 2, 4, 3];
 
 const SIDE_PAD: f32 = 56.0;
 const CONTENT_TOP: f32 = 142.0;
@@ -169,6 +178,8 @@ pub fn draw(
     controls_player: Player,
     bindings: &Bindings,
     username: &str,
+    stats_email: &str,
+    discord_connected: bool,
 ) -> Result<(), String> {
     chrome::draw_header(canvas, fonts, scale, username, true, None)?;
 
@@ -193,6 +204,8 @@ pub fn draw(
     let rows_top = list_top + 44.0;
     if cat == CONTROLS_CAT_INDEX {
         draw_controls_rows(canvas, fonts, scale, panel_x, rows_top, row, controls_player, bindings, !sidebar_focus)?;
+    } else if cat == ACCOUNT_CAT_INDEX {
+        draw_account_rows(canvas, fonts, scale, panel_x, rows_top, row, username, stats_email, discord_connected, !sidebar_focus)?;
     } else {
         for r in 0..rows_in_cat(cat) {
             let (label, hint) = SettingsFields::row_meta(cat, r);
@@ -205,6 +218,13 @@ pub fn draw(
             chrome::FooterPrompt { glyph: "\u{2195}", label: "Row", color: Color::RGB(0xcf, 0xcf, 0xc9) },
             chrome::FooterPrompt { glyph: "L/R", label: "Category", color: Color::RGB(0xcf, 0xcf, 0xc9) },
             chrome::FooterPrompt { glyph: "\u{2194}", label: "Switch Player", color: Color::RGB(0xcf, 0xcf, 0xc9) },
+            chrome::PROMPT_SELECT,
+            chrome::PROMPT_BACK,
+        ]
+    } else if cat == ACCOUNT_CAT_INDEX {
+        &[
+            chrome::FooterPrompt { glyph: "\u{2195}", label: "Row", color: Color::RGB(0xcf, 0xcf, 0xc9) },
+            chrome::FooterPrompt { glyph: "L/R", label: "Category", color: Color::RGB(0xcf, 0xcf, 0xc9) },
             chrome::PROMPT_SELECT,
             chrome::PROMPT_BACK,
         ]
@@ -280,9 +300,14 @@ fn draw_cat_row(
     Ok(())
 }
 
+/// The mockup's own version of this box has a third line, "ROM rev L3.1 ·
+/// FREE PLAY" — no real MK2 ROM revision is tracked anywhere in this app, so
+/// rather than fabricate one this shows freeplay-gametalk's own real build
+/// version instead (which "FREE PLAY" is also true of — there's no coin
+/// economy in this client, it's always free play).
 fn draw_cabinet_box(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scale: &Scale, y: f32) -> Result<(), String> {
     let w = SIDEBAR_W;
-    let h = 60.0;
+    let h = 84.0;
     canvas.set_draw_color(Color::RGBA(14, 14, 18, 153));
     canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
     canvas.fill_rect(Some(scale.rect(SIDE_PAD, y, w, h)))?;
@@ -292,6 +317,9 @@ fn draw_cabinet_box(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scale:
     fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(11.0), "CABINET", lx, ly, theme::MUTE)?;
     let (nx, ny) = scale.point(SIDE_PAD + 18.0, y + 27.0);
     fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(20.0), "MORTAL KOMBAT II", nx, ny, Color::RGB(0xcf, 0xcf, 0xc9))?;
+    let build = format!("FREE PLAY \u{b7} v{}", crate::version::VERSION);
+    let (fx, fy) = scale.point(SIDE_PAD + 18.0, y + 55.0);
+    fonts.draw(canvas, FpFont::ChakraPetchMedium, scale.font_px(12.0), &build, fx, fy, Color::RGB(0x52, 0x52, 0x5a))?;
     Ok(())
 }
 
@@ -350,7 +378,19 @@ fn draw_controls_rows(
     for (i, action) in Action::ALL.iter().enumerate() {
         let y = rows_top + i as f32 * row_h;
         let selected = row == i;
-        draw_bind_row(canvas, fonts, scale, x, y, row_h, action.label(), &crate::menu::summarize_bindings(pb, *action), selected, focused)?;
+        draw_bind_row(
+            canvas,
+            fonts,
+            scale,
+            x,
+            y,
+            row_h,
+            action.label(),
+            &crate::menu::summarize_bindings(pb, *action),
+            "CROSS TO REBIND",
+            selected,
+            focused,
+        )?;
     }
 
     let clear_y = rows_top + Action::ALL.len() as f32 * row_h + 10.0;
@@ -383,6 +423,45 @@ fn draw_controls_rows(
     Ok(())
 }
 
+/// Account category content: Username / Stats Email / Discord connection —
+/// see `super::FpResult::BeginAccountEdit`/`ToggleDiscordConnect`, which hand
+/// off to the exact legacy `MenuScreen::TextEdit`/Discord-OAuth flows the
+/// old `MenuScreen::Settings` rows 0-2 used, rather than reimplementing
+/// text capture or OAuth here.
+#[allow(clippy::too_many_arguments)]
+fn draw_account_rows(
+    canvas: &mut Canvas<Window>,
+    fonts: &mut FpFontCache,
+    scale: &Scale,
+    x: f32,
+    top: f32,
+    row: usize,
+    username: &str,
+    stats_email: &str,
+    discord_connected: bool,
+    focused: bool,
+) -> Result<(), String> {
+    let row_h = 46.0;
+    let rows: [(&str, String, &str); 3] = [
+        ("USERNAME", username.to_string(), "CROSS TO EDIT"),
+        (
+            "STATS EMAIL",
+            if stats_email.is_empty() { "NOT SET".to_string() } else { stats_email.to_string() },
+            "CROSS TO EDIT",
+        ),
+        (
+            "DISCORD",
+            if discord_connected { "CONNECTED".to_string() } else { "NOT CONNECTED".to_string() },
+            if discord_connected { "CROSS TO DISCONNECT" } else { "CROSS TO CONNECT" },
+        ),
+    ];
+    for (i, (label, value, hint)) in rows.iter().enumerate() {
+        let y = top + i as f32 * row_h;
+        draw_bind_row(canvas, fonts, scale, x, y, row_h, label, value, hint, row == i, focused)?;
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn draw_bind_row(
     canvas: &mut Canvas<Window>,
@@ -393,6 +472,7 @@ fn draw_bind_row(
     row_h: f32,
     action_label: &str,
     binding_text: &str,
+    select_hint: &str,
     selected: bool,
     focused: bool,
 ) -> Result<(), String> {
@@ -412,7 +492,7 @@ fn draw_bind_row(
     fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(20.0), action_label, lx, ly, Color::RGB(0xed, 0xed, 0xe8))?;
 
     if selected && focused {
-        let hint = "CROSS TO REBIND";
+        let hint = select_hint;
         let (hw, hh) = fonts.text_size(FpFont::ChakraPetchSemiBold, scale.font_px(11.0), hint);
         let pad_x = 9.0;
         let pad_y = 3.0;

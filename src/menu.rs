@@ -657,6 +657,20 @@ pub fn test_state(name: &str) -> Option<AppState> {
                 &crate::config::load(),
             )))
         }
+        "fp:settings:account" => {
+            let crate::fp_ui::FpScreen::Settings { fields, sidebar_focus, controls_player, .. } =
+                crate::fp_ui::FpScreen::settings_from_cfg(&crate::config::load())
+            else {
+                unreachable!()
+            };
+            return Some(AppState::FpUi(crate::fp_ui::FpScreen::Settings {
+                cat: crate::fp_ui::settings::ACCOUNT_CAT_INDEX,
+                row: 0,
+                fields,
+                sidebar_focus,
+                controls_player,
+            }));
+        }
         "fp:lobby" => return Some(AppState::FpUi(crate::fp_ui::FpScreen::lobby())),
         "fp:lobby:host" => {
             return Some(AppState::FpUi(crate::fp_ui::FpScreen::Lobby {

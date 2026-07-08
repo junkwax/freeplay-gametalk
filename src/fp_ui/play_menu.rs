@@ -17,10 +17,15 @@ use sdl2::pixels::Color;
 use sdl2::render::Canvas;
 use sdl2::video::Window;
 
-const ROW_H: f32 = 104.0;
+// Same row height/skew as `main_menu.rs` — the mockup's own CSS actually
+// specifies 104px/-11deg here (vs Main Menu's 92px/-9deg), but the two
+// screens sitting back-to-back in the same navigation flow with visibly
+// different item sizes read as inconsistent, so this intentionally departs
+// from the mockup to match Main Menu instead, per direct user feedback.
+const ROW_H: f32 = 92.0;
 const ROW_GAP: f32 = 4.0;
 const BAR_W: f32 = 8.0;
-const SKEW_DEG: f32 = -11.0;
+const SKEW_DEG: f32 = -9.0;
 const LIST_X: f32 = 56.0;
 // Header (104) + this screen's own container `top:54` offset — the top of
 // the eyebrow, not the row list. See `main_menu.rs`'s identical constants
@@ -70,17 +75,28 @@ pub fn draw(
     draw_watermark(canvas, fonts, scale)?;
 
     // Bottom-right "MORTAL KOMBAT / ARCADE · 1993 · PLAY MODES" label —
-    // same tracked treatment as Main Menu's equivalent caption.
+    // same tracked treatment as Main Menu's equivalent caption. `bottom`
+    // subtracts FOOTER_H the same way Main Menu's does — this used to omit
+    // it, positioning the caption low enough to collide with the footer.
+    let bottom = theme::VH - chrome::FOOTER_H - 96.0;
     let mk_size = 32.0;
     let mk_track = scale.len(11.0).round() as i32;
     let (mkw, mkh) = fonts.text_size_tracked(FpFont::SairaCondensedBold, scale.font_px(mk_size), "MORTAL KOMBAT", mk_track);
-    let (mkx, mky) = scale.point(theme::VW - 96.0 - (mkw as f32 / scale.s), theme::VH - 96.0 - (mkh as f32 / scale.s) - 8.0);
+    let (mkx, mky) = scale.point(theme::VW - 96.0 - (mkw as f32 / scale.s), bottom - (mkh as f32 / scale.s));
     fonts.draw_tracked(canvas, FpFont::SairaCondensedBold, scale.font_px(mk_size), "MORTAL KOMBAT", mkx, mky, Color::RGB(0xde, 0xde, 0xd8), mk_track)?;
     let sub = "ARCADE \u{b7} 1993 \u{b7} PLAY MODES";
     let sub_track = scale.len(6.0).round() as i32;
     let (subw, _) = fonts.text_size_tracked(FpFont::ChakraPetchMedium, scale.font_px(14.0), sub, sub_track);
-    let (subx, suby) = scale.point(theme::VW - 96.0 - (subw as f32 / scale.s), theme::VH - 96.0);
+    let (subx, suby) = scale.point(theme::VW - 96.0 - (subw as f32 / scale.s), bottom + 8.0);
     fonts.draw_tracked(canvas, FpFont::ChakraPetchMedium, scale.font_px(14.0), sub, subx, suby, Color::RGB(0x5e, 0x5e, 0x66), sub_track)?;
+
+    // Same real build-info line as Main Menu's equivalent caption (no real
+    // MK2 ROM revision is tracked in this app, so this is our own build
+    // version rather than a fabricated ROM revision).
+    let build = crate::version::footer_string();
+    let (buildw, _) = fonts.text_size(FpFont::ChakraPetchMedium, scale.font_px(12.0), &build);
+    let (buildx, buildy) = scale.point(theme::VW - 96.0 - (buildw as f32 / scale.s), bottom + 28.0);
+    fonts.draw(canvas, FpFont::ChakraPetchMedium, scale.font_px(12.0), &build, buildx, buildy, Color::RGB(0x3a, 0x3a, 0x42))?;
 
     chrome::draw_footer(
         canvas,
@@ -191,12 +207,21 @@ fn draw_row(
 /// Giant near-black "PLAY" watermark at the right edge — same treatment as
 /// Main Menu's "II" watermark (see `main_menu::draw_ghost_watermark`'s doc
 /// for the stroke-only-text fidelity gap, which applies here too).
+/// Same poor-man's-stroke treatment as `main_menu.rs`'s "II" watermark and
+/// `rankings.rs`'s "#1" — this one was missing it entirely (flat fill,
+/// no accent outline), the only one of the three ghost watermarks that was.
 fn draw_watermark(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scale: &Scale) -> Result<(), String> {
-    let (w, h) = fonts.text_size(FpFont::SairaCondensedBlack, scale.font_px(520.0), "PLAY");
+    let px = scale.font_px(520.0);
+    let (w, h) = fonts.text_size(FpFont::SairaCondensedBlack, px, "PLAY");
     let (x, y) = scale.point(
         theme::VW - 30.0 - (w as f32 / scale.s),
         theme::VH / 2.0 - (h as f32 / scale.s) / 2.0,
     );
-    fonts.draw(canvas, FpFont::SairaCondensedBlack, scale.font_px(520.0), "PLAY", x, y, Color::RGB(0x0c, 0x0c, 0x11))?;
+    let stroke_color = Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 82);
+    let r = scale.len(1.0).round().max(1.0) as i32;
+    for (dx, dy) in [(-r, -r), (0, -r), (r, -r), (-r, 0), (r, 0), (-r, r), (0, r), (r, r)] {
+        fonts.draw(canvas, FpFont::SairaCondensedBlack, px, "PLAY", x + dx, y + dy, stroke_color)?;
+    }
+    fonts.draw(canvas, FpFont::SairaCondensedBlack, px, "PLAY", x, y, Color::RGB(0x0c, 0x0c, 0x11))?;
     Ok(())
 }

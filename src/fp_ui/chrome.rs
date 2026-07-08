@@ -183,11 +183,14 @@ pub fn draw_header(
         }
     };
     let (bx, by) = scale.point(SIDE_PAD + (word_w as f32 / scale.s) + 20.0, HEADER_H / 2.0 - 7.0);
+    // `version::footer_string()` — version + build date + short git hash —
+    // is what legacy screens show; this used to just be "BUILD {VERSION}",
+    // missing the date/hash a dev build actually needs to identify itself.
     fonts.draw(
         canvas,
         FpFont::ChakraPetchSemiBold,
         scale.font_px(13.0),
-        &format!("BUILD {}", crate::version::VERSION),
+        &crate::version::footer_string(),
         bx,
         by,
         theme::MUTE,

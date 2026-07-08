@@ -3158,6 +3158,54 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     cfg.bindings.get_mut(player).clear_all();
                                     config::save(&cfg);
                                 }
+                                fp_ui::FpResult::BeginAccountEdit(field) => {
+                                    // Mirrors legacy's NavResult::EditText for just the
+                                    // two fields the Account category exposes. Same known
+                                    // rough edge as OpenJoinCode above: lands on legacy
+                                    // Main (not fp_ui Settings) once submitted/cancelled.
+                                    let (title, label, value) = match &field {
+                                        menu::EditField::Username => (
+                                            "Username",
+                                            "Choose the name other players see",
+                                            cfg.player_username.clone(),
+                                        ),
+                                        menu::EditField::StatsEmail => (
+                                            "Stats Email",
+                                            "Optional email for portable stats",
+                                            cfg.stats_email.clone(),
+                                        ),
+                                        _ => ("", "", String::new()),
+                                    };
+                                    state = AppState::Menu(MenuScreen::TextEdit {
+                                        title: title.into(),
+                                        label: label.into(),
+                                        value,
+                                        field,
+                                        came_from: Box::new(menu::MenuScreen::Main { cursor: 0 }),
+                                    });
+                                }
+                                fp_ui::FpResult::ToggleDiscordConnect => {
+                                    // Mirrors legacy's NavResult::ConnectDiscord exactly.
+                                    if matchmaking::connected_discord_user_from_cached_token()
+                                        .is_some()
+                                    {
+                                        matchmaking::clear_cached_token();
+                                        discord_user = None;
+                                        discord_id = None;
+                                        toast = Some((
+                                            "Discord disconnected".into(),
+                                            Instant::now() + Duration::from_millis(2200),
+                                        ));
+                                        state = AppState::Menu(MenuScreen::Main { cursor: 0 });
+                                    } else {
+                                        let (tx, rx) = std::sync::mpsc::channel();
+                                        mm_rx = Some(rx);
+                                        matchmaking::start_discord_connect(tx);
+                                        state = AppState::Menu(MenuScreen::Matchmaking {
+                                            status: "Opening Discord login...".into(),
+                                        });
+                                    }
+                                }
                             }
                         }
                     }
@@ -6897,6 +6945,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &main_leaderboard,
                         &main_profile,
                         &cfg.bindings,
+                        &cfg.stats_email,
+                        discord_user.is_some(),
                     )
                     .map_err(|e| format!("fp_ui draw: {e}"))?;
                 } else {
@@ -7830,6 +7880,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &main_leaderboard,
                         &main_profile,
                         &cfg.bindings,
+                        &cfg.stats_email,
+                        discord_user.is_some(),
                     )
                     .map_err(|e| format!("fp_ui draw: {e}"))?;
                 } else {
