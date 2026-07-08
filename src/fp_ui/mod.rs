@@ -47,6 +47,18 @@ const MAIN_NETWORK_NEWS_INDEX: usize = 2;
 const MAIN_RANKINGS_INDEX: usize = 3;
 const MAIN_SETTINGS_INDEX: usize = 4;
 const MAIN_ITEM_COUNT: usize = 5;
+/// Sentinel `cursor` value (one past the last real row) meaning "the YOUR
+/// STATS panel is focused" rather than any of the 5 menu rows — reached via
+/// `FpNav::Right` from any row, `FpNav::Left` to return. Kept as a sentinel
+/// on the existing `cursor: usize` rather than a new `FpScreen::Main` field
+/// so every other `FpScreen::Main { cursor: N }` construction site (Quit's
+/// restore, the various screens' `Back` targets) keeps working unchanged.
+const MAIN_STATS_INDEX: usize = MAIN_ITEM_COUNT;
+/// Sentinel `cursor` value meaning "the LAST MATCH card is focused" —
+/// reached via `FpNav::Down` from the bottom row (SETTINGS), `Up` to
+/// return. One past `MAIN_STATS_INDEX` so the two side-target sentinels
+/// never collide.
+const MAIN_LAST_MATCH_INDEX: usize = MAIN_ITEM_COUNT + 1;
 
 /// Legacy `crate::menu::MAIN_ITEMS` indices this module delegates real
 /// actions to via `FpResult::ActivateMainItem`. Named here (rather than
@@ -55,11 +67,10 @@ const MAIN_ITEM_COUNT: usize = 5;
 const LEGACY_ARCADE_INDEX: usize = 1;
 const LEGACY_LAB_INDEX: usize = 2;
 const LEGACY_REPLAYS_INDEX: usize = 3;
-/// Not yet used — the mockup itself has no controller-reachable path to
-/// Profile either (only the header avatar chip, a mouse-only affordance),
-/// so fp_ui doesn't invent one. Kept named here for whichever follow-up
-/// step wires a native Profile screen + a real gesture to reach it.
-#[allow(dead_code)]
+/// Reached by confirming while the "YOUR STATS" panel is focused
+/// (`MAIN_STATS_INDEX`) — the mockup's own header avatar chip is a
+/// mouse-only affordance with no documented gamepad binding, so this is a
+/// new gesture rather than a mirror of anything in the mockup itself.
 const LEGACY_PROFILE_INDEX: usize = 4;
 
 /// fp_ui's own PlayMenu cursor space (Arcade/Lab/Replays/Drones).
@@ -96,7 +107,13 @@ pub enum FpScreen {
     /// adjustment writes straight into this copy, and `FpResult::SettingsChanged`
     /// tells the caller to sync it into the real `Config` and persist
     /// (`"changes saved automatically"`, per the mockup's footer).
-    Settings { cat: usize, row: usize, fields: SettingsFields },
+    /// `sidebar_focus`: true while Up/Down drive the category sidebar
+    /// (`cat`) instead of the row cursor (`row`) — L1/R1 (`PrevTab`/
+    /// `NextTab`) can still switch categories either way, but without this
+    /// there was no way to reach the sidebar with Up/Down at all, which
+    /// read as "stuck" since both a category and a row are drawn as
+    /// selected at once with nothing showing which one input applies to.
+    Settings { cat: usize, row: usize, fields: SettingsFields, sidebar_focus: bool },
     /// `tab`: 0=Quick Match, 1=Host/Join, 2=Server Browser.
     /// `host_join_focus`: 0=Host column, 1=Join column (tab 1 only).
     /// `lobbies`/`cursor`/`status`: the real public-lobby list (tab 2),
@@ -121,6 +138,7 @@ impl FpScreen {
             cat: 0,
             row: 0,
             fields: SettingsFields::from_cfg(cfg),
+            sidebar_focus: false,
         }
     }
 
@@ -178,19 +196,54 @@ pub enum FpResult {
     /// Confirm on a Server Browser row. Caller does what legacy's
     /// `NavResult::JoinLobby` does with this id.
     JoinLobby(String),
+    /// Confirm while the "LAST MATCH" card is focused (`MAIN_LAST_MATCH_INDEX`).
+    /// The caller looks up a local replay file matching the most recent
+    /// `HistoryRow` (same opponent, score, and date) and, if one exists,
+    /// starts reviewing it the same way picking it from the legacy
+    /// `ReplaySelect` screen would; otherwise it's a no-op (no replay to
+    /// show — not every server-recorded match has a local `.rep` file, e.g.
+    /// if it predates this install or was played on another device).
+    WatchLastMatchReplay,
 }
 
 pub fn nav(screen: &mut FpScreen, input: FpNav) -> FpResult {
     match screen {
         FpScreen::Main { cursor } => match input {
             FpNav::Up => {
-                *cursor = cursor.saturating_sub(1);
+                if *cursor == MAIN_LAST_MATCH_INDEX {
+                    *cursor = MAIN_SETTINGS_INDEX;
+                } else if *cursor < MAIN_ITEM_COUNT {
+                    *cursor = cursor.saturating_sub(1);
+                }
                 FpResult::Stay
             }
             FpNav::Down => {
-                *cursor = (*cursor + 1).min(MAIN_ITEM_COUNT - 1);
+                if *cursor < MAIN_ITEM_COUNT {
+                    *cursor = if *cursor == MAIN_ITEM_COUNT - 1 {
+                        MAIN_LAST_MATCH_INDEX
+                    } else {
+                        *cursor + 1
+                    };
+                }
                 FpResult::Stay
             }
+            // The "YOUR STATS" panel sits to the right of the row list —
+            // Right focuses it (Confirm there opens the real Profile
+            // screen), Left returns focus to the rows.
+            FpNav::Right => {
+                *cursor = MAIN_STATS_INDEX;
+                FpResult::Stay
+            }
+            FpNav::Left => {
+                if *cursor == MAIN_STATS_INDEX {
+                    *cursor = MAIN_PLAY_INDEX;
+                }
+                FpResult::Stay
+            }
+            FpNav::Confirm if *cursor == MAIN_STATS_INDEX => {
+                FpResult::ActivateMainItem(LEGACY_PROFILE_INDEX)
+            }
+            FpNav::Confirm if *cursor == MAIN_LAST_MATCH_INDEX => FpResult::WatchLastMatchReplay,
             FpNav::Confirm => match *cursor {
                 c if c == MAIN_PLAY_INDEX => {
                     *screen = FpScreen::PlayMenu { cursor: 0 };
@@ -299,13 +352,32 @@ pub fn nav(screen: &mut FpScreen, input: FpNav) -> FpResult {
             }
             _ => FpResult::Stay,
         },
-        FpScreen::Settings { cat, row, fields } => match input {
+        FpScreen::Settings { cat, row, fields, sidebar_focus } => match input {
             FpNav::Up => {
-                *row = row.saturating_sub(1);
+                if *sidebar_focus {
+                    *cat = cat.saturating_sub(1);
+                } else if *row == 0 {
+                    // Nothing above the top row — hand Up/Down over to the
+                    // sidebar rather than doing nothing, so a controller
+                    // without working shoulder buttons can still reach the
+                    // other categories.
+                    *sidebar_focus = true;
+                } else {
+                    *row -= 1;
+                }
                 FpResult::Stay
             }
             FpNav::Down => {
-                *row = (*row + 1).min(settings::rows_in_cat(*cat) - 1);
+                if *sidebar_focus {
+                    *cat = (*cat + 1).min(settings::CATS.len() - 1);
+                } else {
+                    *row = (*row + 1).min(settings::rows_in_cat(*cat) - 1);
+                }
+                FpResult::Stay
+            }
+            FpNav::Confirm if *sidebar_focus => {
+                *sidebar_focus = false;
+                *row = 0;
                 FpResult::Stay
             }
             FpNav::PrevTab => {
@@ -318,11 +390,11 @@ pub fn nav(screen: &mut FpScreen, input: FpNav) -> FpResult {
                 *row = 0;
                 FpResult::Stay
             }
-            FpNav::Left => {
+            FpNav::Left if !*sidebar_focus => {
                 fields.adjust(*cat, *row, -1);
                 FpResult::SettingsChanged
             }
-            FpNav::Right => {
+            FpNav::Right if !*sidebar_focus => {
                 fields.adjust(*cat, *row, 1);
                 FpResult::SettingsChanged
             }
@@ -384,6 +456,7 @@ pub fn draw(
     win_h: i32,
     username: &str,
     leaderboard: &crate::menu::LeaderboardState,
+    profile: &crate::menu::ProfileScreenState,
 ) -> Result<(), String> {
     let scale = Scale::compute(win_w, win_h);
     fonts.begin_frame(scale.s);
@@ -391,17 +464,17 @@ pub fn draw(
     canvas.clear();
 
     match screen {
-        FpScreen::Main { cursor } => main_menu::draw(canvas, fonts, &scale, *cursor, username)?,
+        FpScreen::Main { cursor } => main_menu::draw(canvas, fonts, &scale, *cursor, username, profile)?,
         FpScreen::Quit { choice, menu_cursor } => {
-            main_menu::draw(canvas, fonts, &scale, *menu_cursor, username)?;
+            main_menu::draw(canvas, fonts, &scale, *menu_cursor, username, profile)?;
             quit::draw(canvas, fonts, &scale, *choice)?;
         }
         FpScreen::PlayMenu { cursor } => play_menu::draw(canvas, fonts, &scale, *cursor, username)?,
         FpScreen::Bandwidth => bandwidth::draw(canvas, fonts, &scale, username)?,
         FpScreen::Rankings => rankings::draw(canvas, fonts, &scale, username, leaderboard)?,
         FpScreen::About => about::draw(canvas, fonts, &scale, username)?,
-        FpScreen::Settings { cat, row, fields } => {
-            settings::draw(canvas, fonts, &scale, fields, *cat, *row, username)?
+        FpScreen::Settings { cat, row, fields, sidebar_focus } => {
+            settings::draw(canvas, fonts, &scale, fields, *cat, *row, *sidebar_focus, username)?
         }
         FpScreen::Lobby { tab, host_join_focus, cursor, lobbies, status } => {
             lobby::draw(canvas, fonts, &scale, *tab, *host_join_focus, *cursor, lobbies, status, username)?

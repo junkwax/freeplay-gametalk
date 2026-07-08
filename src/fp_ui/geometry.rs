@@ -180,6 +180,52 @@ pub fn fill_skewed_rect(
     fill_triangles(canvas, &verts);
 }
 
+/// Fill an arbitrary solid-color triangle from 3 logical points — used for
+/// the selected menu row's `&#9656;` chevron, which the mockup skews the
+/// same as everything else in this design (`skewX(-9deg)`); simplest to
+/// just hand the caller pre-skewed points rather than adding a whole
+/// second skew parameter here.
+pub fn fill_triangle(canvas: &mut Canvas<Window>, scale: &Scale, points: [(f32, f32); 3], color: Color) {
+    canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
+    let verts: Vec<SdlVertex> = points
+        .iter()
+        .map(|&(x, y)| {
+            let p = scale.point(x, y);
+            vertex(p.0 as f32, p.1 as f32, color)
+        })
+        .collect();
+    fill_triangles(canvas, &verts);
+}
+
+/// Fill an axis-aligned logical rect `(x, y, w, h)` with a vertical color
+/// gradient (`top` at y, `bottom` at y+h) — used for the Main Menu's top
+/// background glow.
+pub fn fill_vertical_gradient_rect(
+    canvas: &mut Canvas<Window>,
+    scale: &Scale,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    top: Color,
+    bottom: Color,
+) {
+    let tl = scale.point(x, y);
+    let tr = scale.point(x + w, y);
+    let bl = scale.point(x, y + h);
+    let br = scale.point(x + w, y + h);
+    canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
+    let verts = [
+        vertex(tl.0 as f32, tl.1 as f32, top),
+        vertex(tr.0 as f32, tr.1 as f32, top),
+        vertex(br.0 as f32, br.1 as f32, bottom),
+        vertex(tl.0 as f32, tl.1 as f32, top),
+        vertex(br.0 as f32, br.1 as f32, bottom),
+        vertex(bl.0 as f32, bl.1 as f32, bottom),
+    ];
+    fill_triangles(canvas, &verts);
+}
+
 /// Fill an axis-aligned logical rect `(x, y, w, h)` with a horizontal color
 /// gradient (`left` at x, `right` at x+w), interpolated per-pixel by
 /// `SDL_RenderGeometry`'s vertex color blending — used for the active menu

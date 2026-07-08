@@ -26,6 +26,11 @@ struct Bulletin {
     highlighted: bool,
 }
 
+/// The Main Menu's scrolling wire ticker reuses this same flavor text
+/// (`main_menu.rs`'s `draw_ticker`) rather than inventing a second static
+/// string — still no real bulletin backend, see this module's doc comment.
+pub const TICKER_TEXT: &str = "WIRE // WEST REGION FINALS SATURDAY 20:00 \u{b7} PHANTOM_9847 ENTERS TOP 50 \u{b7} NETCODE PATCH 2.4.1 LIVE ON ALL NODES \u{b7} NODE MAINTENANCE SUNDAY 03:00\u{2013}05:00 \u{b7} SEASON LADDER RESETS IN 9 DAYS";
+
 const BULLETINS: [Bulletin; 6] = [
     Bulletin {
         time: "21:15",

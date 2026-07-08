@@ -1701,6 +1701,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         matchmaking::fetch_leaderboard(cfg.stats_url.clone(), tx);
         menu::LeaderboardState::Loading
     };
+    // Fetched unconditionally at startup, same reasoning as `main_leaderboard`
+    // above — fp_ui's Main Menu "YOUR STATS"/"LAST MATCH" panels need the
+    // current player's own record regardless of which screen is open, unlike
+    // the on-demand fetch `NavResult::OpenProfile` triggers only while the
+    // dedicated Profile screen is active (polled separately below).
+    let mut main_profile_rx: Option<std::sync::mpsc::Receiver<matchmaking::ProfileUpdate>> = None;
+    let mut main_profile = {
+        let profile_id = discord_id
+            .clone()
+            .or_else(matchmaking::discord_id_from_cached_token)
+            .or_else(|| {
+                matchmaking::guest_player_id(&cfg.player_username, &cfg.stats_email, &cfg.guest_device_id)
+            });
+        match profile_id {
+            Some(did) if !cfg.stats_url.is_empty() => {
+                let display_name = discord_user.clone().unwrap_or_else(|| cfg.player_username.clone());
+                let (tx, rx) = std::sync::mpsc::channel();
+                main_profile_rx = Some(rx);
+                matchmaking::fetch_profile(cfg.stats_url.clone(), did, display_name, tx);
+                menu::ProfileScreenState::Loading
+            }
+            Some(_) => menu::ProfileScreenState::Error("stats_url not configured".into()),
+            None => menu::ProfileScreenState::NotLoggedIn,
+        }
+    };
     let mut avatar_rx: Option<std::sync::mpsc::Receiver<Vec<u8>>> = None;
     let mut ghost_list_rx: Option<std::sync::mpsc::Receiver<matchmaking::GhostListUpdate>> = None;
     let mut ghost_download_rx: Option<std::sync::mpsc::Receiver<matchmaking::GhostDownloadUpdate>> =
@@ -2935,6 +2960,53 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         status: "Joining lobby...".into(),
                                         thumb: None,
                                     });
+                                }
+                                fp_ui::FpResult::WatchLastMatchReplay => {
+                                    let row = if let menu::ProfileScreenState::Loaded { history, .. } = &main_profile {
+                                        history.first().cloned()
+                                    } else {
+                                        None
+                                    };
+                                    let path = row.as_ref().and_then(match_replay::find_matching_local_replay);
+                                    match path {
+                                        Some(path) => {
+                                            ensure_core_loaded(&mut core, &mut audio_queue, &audio_subsystem)?;
+                                            if let Some(c) = &core {
+                                                match prepare_replay_review(c, &path) {
+                                                    Ok(pb) => enter_replay_review(
+                                                        pb,
+                                                        &mut match_replay_playback,
+                                                        &mut replay_review_paused,
+                                                        &mut replay_review_speed,
+                                                        &mut replay_review_tick,
+                                                        &mut replay_event_filter,
+                                                        &mut replay_clip_in,
+                                                        &mut replay_clip_out,
+                                                        &mut ghost_playback,
+                                                        &mut ghost_recording,
+                                                        &mut drone_runner,
+                                                        &mut input_history,
+                                                        &mut clip_recorder,
+                                                        &mut toast,
+                                                        &mut state,
+                                                    ),
+                                                    Err(e) => {
+                                                        println!("[replay] Last-match replay load failed: {e}");
+                                                        toast = Some((
+                                                            format!("Replay unavailable: {e}"),
+                                                            Instant::now() + Duration::from_millis(3200),
+                                                        ));
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        None => {
+                                            toast = Some((
+                                                "No local replay found for this match".into(),
+                                                Instant::now() + Duration::from_millis(2400),
+                                            ));
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -6665,8 +6737,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let (win_w, win_h) = canvas.output_size().unwrap_or((1200, 762));
                 if let (AppState::FpUi(screen), Some(fpf)) = (&state, fp_fonts.as_mut()) {
                     let fp_username = discord_user.as_deref().unwrap_or(&cfg.player_username);
-                    fp_ui::draw(screen, &mut canvas, fpf, win_w as i32, win_h as i32, fp_username, &main_leaderboard)
-                        .map_err(|e| format!("fp_ui draw: {e}"))?;
+                    fp_ui::draw(
+                        screen,
+                        &mut canvas,
+                        fpf,
+                        win_w as i32,
+                        win_h as i32,
+                        fp_username,
+                        &main_leaderboard,
+                        &main_profile,
+                    )
+                    .map_err(|e| format!("fp_ui draw: {e}"))?;
                 } else {
                     menu::draw(
                         &state,
@@ -7256,6 +7337,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
 
+                // Drain the Main Menu's own profile fetch (separate from
+                // `profile_rx` above, which only updates while the dedicated
+                // Profile screen is open).
+                if let Some(rx) = &main_profile_rx {
+                    match rx.try_recv() {
+                        Ok(matchmaking::ProfileUpdate::Loaded { profile, history }) => {
+                            main_profile = menu::ProfileScreenState::Loaded {
+                                profile,
+                                history,
+                                avatar_rgba: None,
+                            };
+                            main_profile_rx = None;
+                        }
+                        Ok(matchmaking::ProfileUpdate::Empty { username }) => {
+                            main_profile = menu::ProfileScreenState::Empty { username };
+                            main_profile_rx = None;
+                        }
+                        Ok(matchmaking::ProfileUpdate::Error(msg)) => {
+                            main_profile = menu::ProfileScreenState::Error(msg);
+                            main_profile_rx = None;
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                            main_profile_rx = None;
+                        }
+                    }
+                }
+
                 // Drain the avatar download channel — decode and cache.
                 if let Some(rx) = &avatar_rx {
                     if let AppState::Menu(menu::MenuScreen::Profile {
@@ -7560,8 +7669,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let (win_w, win_h) = canvas.output_size().unwrap_or((1200, 762));
                 if let (AppState::FpUi(screen), Some(fpf)) = (&state, fp_fonts.as_mut()) {
                     let fp_username = discord_user.as_deref().unwrap_or(&cfg.player_username);
-                    fp_ui::draw(screen, &mut canvas, fpf, win_w as i32, win_h as i32, fp_username, &main_leaderboard)
-                        .map_err(|e| format!("fp_ui draw: {e}"))?;
+                    fp_ui::draw(
+                        screen,
+                        &mut canvas,
+                        fpf,
+                        win_w as i32,
+                        win_h as i32,
+                        fp_username,
+                        &main_leaderboard,
+                        &main_profile,
+                    )
+                    .map_err(|e| format!("fp_ui draw: {e}"))?;
                 } else {
                     menu::draw(
                         &state,

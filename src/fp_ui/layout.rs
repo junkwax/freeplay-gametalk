@@ -48,7 +48,6 @@ impl Scale {
     }
 
     /// A logical length (e.g. a stroke width) -> window-space pixels.
-    #[allow(dead_code)]
     pub fn len(&self, l: f32) -> f32 {
         l * self.s
     }

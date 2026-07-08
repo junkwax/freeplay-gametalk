@@ -624,6 +624,72 @@ pub fn list_online_replays() -> Vec<ReplayMeta> {
         .collect()
 }
 
+/// Finds the local `.ncrp` file (if any) recorded for the match described
+/// by a `matchmaking::HistoryRow` — used by the Main Menu's "LAST MATCH"
+/// card to jump straight into reviewing that specific match. Matches on
+/// opponent name plus the recording's own start time (parsed from the
+/// `{unix}_p1_vs_p2.ncrp` filename `Recording::save_default` writes,
+/// see below) landing within 30 minutes of the server's `played_at` —
+/// wide enough to cover clock drift between this machine and the stats
+/// server, tight enough that two matches against the same opponent on the
+/// same day won't be confused for each other. Not every server-recorded
+/// match has a local file (a different device, or a build predating local
+/// recording), so this returns `None` rather than guessing.
+pub fn find_matching_local_replay(row: &crate::matchmaking::HistoryRow) -> Option<String> {
+    let target_unix = parse_iso8601_unix(&row.played_at)?;
+    const TOLERANCE_SECS: i64 = 30 * 60;
+    list_online_replays()
+        .into_iter()
+        .filter_map(|meta| {
+            let started_unix: i64 = meta.filename.split('_').next()?.parse().ok()?;
+            let names_match = meta.p1_name.eq_ignore_ascii_case(&row.opponent_username)
+                || meta.p2_name.eq_ignore_ascii_case(&row.opponent_username);
+            if !names_match {
+                return None;
+            }
+            let diff = (started_unix - target_unix).abs();
+            (diff <= TOLERANCE_SECS).then_some((diff, meta.path))
+        })
+        .min_by_key(|(diff, _)| *diff)
+        .map(|(_, path)| path)
+}
+
+/// "YYYY-MM-DDTHH:MM:SS..." (ISO8601, server-side) -> Unix seconds (UTC).
+/// Ignores fractional seconds and timezone offsets beyond a bare `Z` —
+/// good enough for matching against a replay's own recorded-at timestamp
+/// within a tolerance window, not for exact display (see `main_menu.rs`'s
+/// `short_date` for the display-only ISO parse, which makes the same
+/// no-`chrono`-dependency call).
+fn parse_iso8601_unix(s: &str) -> Option<i64> {
+    let b = s.as_bytes();
+    if b.len() < 19 || b[4] != b'-' || b[7] != b'-' || b[10] != b'T' || b[13] != b':' || b[16] != b':' {
+        return None;
+    }
+    let y: i64 = s.get(0..4)?.parse().ok()?;
+    let mo: u32 = s.get(5..7)?.parse().ok()?;
+    let d: u32 = s.get(8..10)?.parse().ok()?;
+    let h: i64 = s.get(11..13)?.parse().ok()?;
+    let mi: i64 = s.get(14..16)?.parse().ok()?;
+    let se: i64 = s.get(17..19)?.parse().ok()?;
+    if !(1..=12).contains(&mo) || !(1..=31).contains(&d) {
+        return None;
+    }
+    Some(days_from_civil(y, mo, d) * 86400 + h * 3600 + mi * 60 + se)
+}
+
+/// Howard Hinnant's `days_from_civil` — days since the Unix epoch for a
+/// given (proleptic Gregorian) calendar date. Correct for any real date;
+/// this app only ever feeds it post-2020 server timestamps.
+fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = (m as i64 + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d as i64 - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
 pub fn replay_notes_path<P: AsRef<Path>>(path: P) -> PathBuf {
     path.as_ref().with_extension("ncrp.notes")
 }
@@ -928,6 +994,37 @@ mod tests {
     fn filename_parts_are_safe() {
         assert_eq!(filename_part("Liu Kang!"), "LiuKang");
         assert_eq!(filename_part(""), "Player");
+    }
+
+    #[test]
+    fn days_from_civil_matches_known_epochs() {
+        assert_eq!(days_from_civil(1970, 1, 1), 0);
+        assert_eq!(days_from_civil(1969, 12, 31), -1);
+        assert_eq!(days_from_civil(2000, 3, 1), 11017);
+        assert_eq!(days_from_civil(2024, 2, 29), 19782); // leap day
+    }
+
+    #[test]
+    fn parse_iso8601_unix_matches_known_timestamp() {
+        // 2026-06-13T14:32:00Z, cross-checked against `date -u -d ... +%s`.
+        assert_eq!(parse_iso8601_unix("2026-06-13T14:32:00Z"), Some(1_781_361_120));
+        assert_eq!(parse_iso8601_unix("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(parse_iso8601_unix("not-a-date"), None);
+        assert_eq!(parse_iso8601_unix("2026-13-40T00:00:00Z"), None);
+    }
+
+    #[test]
+    fn find_matching_local_replay_requires_opponent_and_time_window() {
+        let row = crate::matchmaking::HistoryRow {
+            opponent_username: "Nobody_Plays_This".into(),
+            result: "won".into(),
+            our_score: 2,
+            opponent_score: 1,
+            played_at: "2026-06-13T14:32:00Z".into(),
+        };
+        // No local replays directory / no matching file in the test
+        // environment, so this must resolve to `None` rather than panic.
+        assert_eq!(find_matching_local_replay(&row), None);
     }
 
     #[test]

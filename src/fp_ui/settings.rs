@@ -155,6 +155,7 @@ pub fn draw(
     fields: &SettingsFields,
     cat: usize,
     row: usize,
+    sidebar_focus: bool,
     username: &str,
 ) -> Result<(), String> {
     chrome::draw_header(canvas, fonts, scale, username, true, None)?;
@@ -169,7 +170,7 @@ pub fn draw(
 
     let list_top = CONTENT_TOP + 26.0 + 70.0;
     for (i, label) in CATS.iter().enumerate() {
-        draw_cat_row(canvas, fonts, scale, i, label, list_top, i == cat)?;
+        draw_cat_row(canvas, fonts, scale, i, label, list_top, i == cat, sidebar_focus)?;
     }
     draw_cabinet_box(canvas, fonts, scale, list_top + CATS.len() as f32 * (CAT_ROW_H + CAT_ROW_GAP) + 24.0)?;
 
@@ -180,7 +181,7 @@ pub fn draw(
     let rows_top = list_top + 44.0;
     for r in 0..rows_in_cat(cat) {
         let (label, hint) = SettingsFields::row_meta(cat, r);
-        draw_row(canvas, fonts, scale, panel_x, rows_top + r as f32 * ROW_H, label, hint, fields.value(cat, r), r == row)?;
+        draw_row(canvas, fonts, scale, panel_x, rows_top + r as f32 * ROW_H, label, hint, fields.value(cat, r), r == row, !sidebar_focus)?;
     }
 
     chrome::draw_footer(
@@ -198,6 +199,12 @@ pub fn draw(
     Ok(())
 }
 
+/// `current`: this is the active category regardless of input focus.
+/// `focused`: Up/Down currently drive the sidebar (`FpScreen::Settings`'s
+/// `sidebar_focus`) — only then does the current category get the full
+/// bright treatment; otherwise it shows a dimmer "this is where you are,
+/// but Up/Down won't move it right now" marker, so it's visually clear
+/// which side of the screen will respond to Up/Down.
 fn draw_cat_row(
     canvas: &mut Canvas<Window>,
     fonts: &mut FpFontCache,
@@ -205,22 +212,42 @@ fn draw_cat_row(
     index: usize,
     label: &str,
     list_top: f32,
-    selected: bool,
+    current: bool,
+    focused: bool,
 ) -> Result<(), String> {
+    let hot = current && focused;
     let y = list_top + index as f32 * (CAT_ROW_H + CAT_ROW_GAP);
-    if selected {
+    if hot {
         let tint = Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 36);
         let clear = Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 0);
         geometry::fill_horizontal_gradient_rect(canvas, scale, SIDE_PAD, y, SIDEBAR_W, CAT_ROW_H, tint, clear);
     }
-    let bar_color = if selected { theme::ACCENT } else { Color::RGBA(255, 255, 255, 18) };
+    let bar_color = if hot {
+        theme::ACCENT
+    } else if current {
+        Color::RGBA(255, 255, 255, 90)
+    } else {
+        Color::RGBA(255, 255, 255, 18)
+    };
     geometry::fill_skewed_rect(canvas, scale, SIDE_PAD, y, 6.0, CAT_ROW_H, -11.0, bar_color);
 
-    let num_color = if selected { theme::ACCENT } else { Color::RGB(0x34, 0x34, 0x3a) };
+    let num_color = if hot {
+        theme::ACCENT
+    } else if current {
+        Color::RGB(0x8a, 0x8a, 0x92)
+    } else {
+        Color::RGB(0x34, 0x34, 0x3a)
+    };
     let (nx, ny) = scale.point(SIDE_PAD + 22.0, y + CAT_ROW_H / 2.0 - 7.0);
     fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(13.0), &format!("{:02}", index + 1), nx, ny, num_color)?;
 
-    let label_color = if selected { theme::TEXT } else { Color::RGB(0x5a, 0x5a, 0x62) };
+    let label_color = if hot {
+        theme::TEXT
+    } else if current {
+        Color::RGB(0x9a, 0x9a, 0xa2)
+    } else {
+        Color::RGB(0x5a, 0x5a, 0x62)
+    };
     let (lx, ly) = scale.point(SIDE_PAD + 22.0 + 30.0, y + CAT_ROW_H / 2.0 - 13.0);
     fonts.draw(canvas, FpFont::SairaCondensedBlack, scale.font_px(26.0), label, lx, ly, label_color)?;
     Ok(())
@@ -241,6 +268,8 @@ fn draw_cabinet_box(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scale:
     Ok(())
 }
 
+/// `focused`: mirrors `draw_cat_row`'s — true when Up/Down currently drive
+/// this content panel rather than the category sidebar.
 #[allow(clippy::too_many_arguments)]
 fn draw_row(
     canvas: &mut Canvas<Window>,
@@ -252,11 +281,16 @@ fn draw_row(
     hint: &str,
     value: RowValue,
     selected: bool,
+    focused: bool,
 ) -> Result<(), String> {
     canvas.set_draw_color(Color::RGBA(255, 255, 255, 15));
     canvas.fill_rect(Some(scale.rect(x, y + ROW_H - 1.0, 1360.0, 1.0)))?;
     if selected {
-        canvas.set_draw_color(theme::ACCENT);
+        canvas.set_draw_color(if focused {
+            theme::ACCENT
+        } else {
+            Color::RGBA(255, 255, 255, 90)
+        });
         canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
         canvas.fill_rect(Some(scale.rect(x, y, 3.0, ROW_H)))?;
     }

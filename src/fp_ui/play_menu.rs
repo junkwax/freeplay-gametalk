@@ -40,6 +40,7 @@ pub fn draw(
     cursor: usize,
     username: &str,
 ) -> Result<(), String> {
+    chrome::draw_background_accents(canvas, scale, SKEW_DEG)?;
     chrome::draw_header(canvas, fonts, scale, username, true, None)?;
 
     let eyebrow_y = LIST_TOP - 44.0;
@@ -47,7 +48,7 @@ pub fn draw(
     canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
     canvas.fill_rect(Some(scale.rect(LIST_X, eyebrow_y + 8.0, 34.0, 3.0)))?;
     let (ex, ey) = scale.point(LIST_X + 48.0, eyebrow_y);
-    fonts.draw(
+    fonts.draw_tracked(
         canvas,
         FpFont::ChakraPetchSemiBold,
         scale.font_px(14.0),
@@ -55,6 +56,7 @@ pub fn draw(
         ex,
         ey,
         theme::ACCENT,
+        scale.len(7.0).round() as i32,
     )?;
 
     for (i, (label, sub)) in ITEMS.iter().enumerate() {
@@ -63,15 +65,18 @@ pub fn draw(
 
     draw_watermark(canvas, fonts, scale)?;
 
-    // Bottom-right "MORTAL KOMBAT / ARCADE · 1993 · PLAY MODES" label.
+    // Bottom-right "MORTAL KOMBAT / ARCADE · 1993 · PLAY MODES" label —
+    // same tracked treatment as Main Menu's equivalent caption.
     let mk_size = 32.0;
-    let (mkw, mkh) = fonts.text_size(FpFont::SairaCondensedBold, scale.font_px(mk_size), "MORTAL KOMBAT");
+    let mk_track = scale.len(11.0).round() as i32;
+    let (mkw, mkh) = fonts.text_size_tracked(FpFont::SairaCondensedBold, scale.font_px(mk_size), "MORTAL KOMBAT", mk_track);
     let (mkx, mky) = scale.point(theme::VW - 96.0 - (mkw as f32 / scale.s), theme::VH - 96.0 - (mkh as f32 / scale.s) - 8.0);
-    fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(mk_size), "MORTAL KOMBAT", mkx, mky, Color::RGB(0xde, 0xde, 0xd8))?;
+    fonts.draw_tracked(canvas, FpFont::SairaCondensedBold, scale.font_px(mk_size), "MORTAL KOMBAT", mkx, mky, Color::RGB(0xde, 0xde, 0xd8), mk_track)?;
     let sub = "ARCADE \u{b7} 1993 \u{b7} PLAY MODES";
-    let (subw, _) = fonts.text_size(FpFont::ChakraPetchMedium, scale.font_px(14.0), sub);
+    let sub_track = scale.len(6.0).round() as i32;
+    let (subw, _) = fonts.text_size_tracked(FpFont::ChakraPetchMedium, scale.font_px(14.0), sub, sub_track);
     let (subx, suby) = scale.point(theme::VW - 96.0 - (subw as f32 / scale.s), theme::VH - 96.0);
-    fonts.draw(canvas, FpFont::ChakraPetchMedium, scale.font_px(14.0), sub, subx, suby, Color::RGB(0x5e, 0x5e, 0x66))?;
+    fonts.draw_tracked(canvas, FpFont::ChakraPetchMedium, scale.font_px(14.0), sub, subx, suby, Color::RGB(0x5e, 0x5e, 0x66), sub_track)?;
 
     chrome::draw_footer(
         canvas,
@@ -111,39 +116,69 @@ fn draw_row(
     let num_color = if selected { theme::ACCENT } else { Color::RGB(0x34, 0x34, 0x3a) };
     let num = format!("{:02}", index + 1);
     let (nx, ny) = scale.point(LIST_X + BAR_W + LABEL_GAP, y + ROW_H / 2.0 - 8.0);
-    fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(17.0), &num, nx, ny, num_color)?;
+    fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(16.0), &num, nx, ny, num_color)?;
 
-    let label_color = if selected { theme::TEXT } else { Color::RGB(0x4a, 0x4a, 0x52) };
+    // Same label sizes/font/italic treatment and true visible-pixel
+    // centering as `main_menu::draw_row` (see its doc comment on why
+    // `visible_span`, not `size_of`, drives the vertical layout) — this
+    // screen used to run a fixed 62pt non-italic label with its own
+    // measured-glyph-height centering, which both looked and behaved
+    // differently from the Main Menu row directly above it in the
+    // navigation flow.
+    let label_size = if selected { 52.0 } else { 42.0 };
+    let label_color = if selected { theme::TEXT } else { Color::RGB(0x6a, 0x6a, 0x72) };
+    let label_font = if selected { FpFont::SairaCondensedBlack } else { FpFont::SairaCondensedBold };
     let label_text = label.to_uppercase();
     let sub_text = sub.to_uppercase();
     let label_x = LIST_X + BAR_W + LABEL_GAP + 30.0 + LABEL_GAP;
-    let label_size = 62.0;
+    let label_px = scale.font_px(label_size);
+    let sub_px = scale.font_px(15.0);
 
-    let label_h_px = fonts.text_size(FpFont::SairaCondensedBlack, scale.font_px(label_size), &label_text).1 as f32
-        / scale.s;
-    let sub_h_px = if selected {
-        fonts.text_size(FpFont::SairaSemiBold, scale.font_px(15.0), &sub_text).1 as f32 / scale.s
+    let (label_inset, label_vis_h) = fonts.visible_span(label_font, label_px, &label_text);
+    let label_vis_h_l = label_vis_h as f32 / scale.s;
+    let gap = 14.0;
+    let (sub_inset, sub_vis_h) = if selected {
+        fonts.visible_span(FpFont::SairaSemiBold, sub_px, &sub_text)
     } else {
-        0.0
+        (0, 0)
     };
-    let gap = if selected { 5.0 } else { 0.0 };
-    let block_h = label_h_px + gap + sub_h_px;
+    let sub_vis_h_l = sub_vis_h as f32 / scale.s;
+    let block_h = if selected { label_vis_h_l + gap + sub_vis_h_l } else { label_vis_h_l };
     let block_top = y + (ROW_H - block_h) / 2.0;
 
-    let (lx, ly) = scale.point(label_x, block_top);
-    fonts.draw(canvas, FpFont::SairaCondensedBlack, scale.font_px(label_size), &label_text, lx, ly, label_color)?;
+    let (lx, ly) = scale.point(label_x, block_top - label_inset as f32 / scale.s);
+    fonts.draw_italic(canvas, label_font, label_px, &label_text, lx, ly, label_color)?;
 
     if selected {
-        let (sx, sy) = scale.point(label_x, block_top + label_h_px + gap);
+        let sub_visual_top = block_top + label_vis_h_l + gap;
+        let (sx, sy) = scale.point(label_x, sub_visual_top - sub_inset as f32 / scale.s);
         fonts.draw(
             canvas,
             FpFont::SairaSemiBold,
-            scale.font_px(15.0),
+            sub_px,
             &sub_text,
             sx,
             sy,
             Color::RGB(0x8a, 0x8a, 0x92),
         )?;
+
+        // Selected-row chevron, same treatment as `main_menu::draw_row`'s.
+        let chev_cx = LIST_X + 730.0 - 20.0;
+        let chev_cy = y + ROW_H / 2.0;
+        let skew = SKEW_DEG.to_radians().tan();
+        let half_w = 9.0;
+        let half_h = 13.0;
+        let shift = |dy: f32| skew * dy;
+        geometry::fill_triangle(
+            canvas,
+            scale,
+            [
+                (chev_cx - half_w + shift(-half_h), chev_cy - half_h),
+                (chev_cx - half_w + shift(half_h), chev_cy + half_h),
+                (chev_cx + half_w, chev_cy),
+            ],
+            theme::ACCENT,
+        );
     }
 
     Ok(())

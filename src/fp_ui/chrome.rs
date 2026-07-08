@@ -16,6 +16,46 @@ pub const HEADER_H: f32 = 104.0;
 pub const FOOTER_H: f32 = 86.0;
 const SIDE_PAD: f32 = 56.0;
 
+/// Decorative background layer, drawn first (behind everything else, before
+/// `draw_header`): a neutral-gray glow fading down from the top of the
+/// screen, and a thin skewed accent line running down the middle of the
+/// content area. Shared across every fp_ui screen that wants this
+/// background treatment (currently the Main Menu and Play submenu) rather
+/// than duplicated per screen — `skew_deg` is passed in since each screen
+/// already has its own skew-angle constant matching its other angled
+/// elements (bars, chips) and this line should match them.
+///
+/// The glow's color/height were originally guessed (and guessed warm/red);
+/// sampling actual pixel values from a headless render of the reference
+/// mockup showed it's close to neutral gray (R\u{2248}G\u{2248}B, if anything
+/// a hair cool) and fades out gradually over roughly the top 80% of the
+/// screen, not the ~450px band this used to stop at — a plain top-heavy
+/// vertical fade, not angled despite reading that way next to the diagonal
+/// line beside it.
+pub fn draw_background_accents(canvas: &mut Canvas<Window>, scale: &Scale, skew_deg: f32) -> Result<(), String> {
+    geometry::fill_vertical_gradient_rect(
+        canvas,
+        scale,
+        0.0,
+        0.0,
+        theme::VW,
+        theme::VH * 0.85,
+        Color::RGBA(0x28, 0x28, 0x30, 45),
+        Color::RGBA(0x28, 0x28, 0x30, 0),
+    );
+    geometry::fill_skewed_rect(
+        canvas,
+        scale,
+        800.0,
+        0.0,
+        1.5,
+        theme::VH,
+        skew_deg,
+        Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 40),
+    );
+    Ok(())
+}
+
 pub struct FooterPrompt {
     pub glyph: &'static str,
     pub label: &'static str,
@@ -105,17 +145,21 @@ pub fn draw_header(
         1,
     )))?;
 
-    // Left: wordmark + build tag.
+    // Left: wordmark + build tag. Prefers the real logo (rasterized from
+    // freeplay-frontend/assets/freeplay-wordmark.svg — a hand-drawn skewed
+    // letterform with a layered red chromatic-ghost effect no font can
+    // reproduce); falls back to plain text if the asset isn't next to the
+    // binary, same graceful-degradation pattern as the SDL_ttf fallback.
     let (x, y) = scale.point(SIDE_PAD, HEADER_H / 2.0 - 28.0);
-    let (word_w, _) = fonts.draw(
-        canvas,
-        FpFont::SairaCondensedBlack,
-        scale.font_px(56.0),
-        "FREEPLAY",
-        x,
-        y,
-        theme::TEXT,
-    )?;
+    let logo_h = scale.len(46.0).round().max(1.0) as u32;
+    let word_w = match fonts.draw_logo(canvas, x, y, logo_h) {
+        Some(w) => w,
+        None => {
+            fonts
+                .draw(canvas, FpFont::SairaCondensedBlack, scale.font_px(56.0), "FREEPLAY", x, y, theme::TEXT)?
+                .0
+        }
+    };
     let (bx, by) = scale.point(SIDE_PAD + (word_w as f32 / scale.s) + 20.0, HEADER_H / 2.0 - 7.0);
     fonts.draw(
         canvas,
@@ -275,6 +319,38 @@ pub fn draw_footer(
             canvas.fill_rect(Some(scale.rect(badge_x, badge_y, badge_w, badge_h)))?;
             let (tx, ty) = scale.point(badge_x + pad_x, badge_y + pad_y);
             fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(14.0), text, tx, ty, Color::RGB(255, 255, 255))?;
+
+            // "CREDIT ∞" and the "SELECT · ABOUT" hint sit to the left of the
+            // FREE PLAY badge — present in the mockup's footer but dropped
+            // from an earlier pass here, which only ever drew the badge.
+            let mut cursor_x = badge_x - 32.0;
+            let credit = "CREDIT \u{221e}";
+            let (cw, _) = fonts.text_size(FpFont::ChakraPetchSemiBold, scale.font_px(13.0), credit);
+            cursor_x -= cw as f32 / scale.s;
+            let (crx, cry) = scale.point(cursor_x, row_cy - 7.0);
+            fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(13.0), credit, crx, cry, theme::DIM)?;
+
+            cursor_x -= 28.0;
+            let about = "ABOUT";
+            let (aw, _) = fonts.text_size(FpFont::SairaCondensedSemiBold, scale.font_px(13.0), about);
+            cursor_x -= aw as f32 / scale.s;
+            let (ax, ay) = scale.point(cursor_x, row_cy - 7.0);
+            fonts.draw(canvas, FpFont::SairaCondensedSemiBold, scale.font_px(13.0), about, ax, ay, theme::DIM)?;
+
+            cursor_x -= 10.0;
+            let select = "SELECT";
+            let (sw, sh) = fonts.text_size(FpFont::ChakraPetchSemiBold, scale.font_px(12.0), select);
+            let pill_pad_x = 10.0;
+            let pill_pad_y = 4.0;
+            let pill_w = (sw as f32 / scale.s) + pill_pad_x * 2.0;
+            let pill_h = (sh as f32 / scale.s) + pill_pad_y * 2.0;
+            cursor_x -= pill_w;
+            let pill_y = row_cy - pill_h / 2.0;
+            canvas.set_draw_color(Color::RGBA(255, 255, 255, 12));
+            canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
+            canvas.draw_rect(scale.rect(cursor_x, pill_y, pill_w, pill_h))?;
+            let (slx, sly) = scale.point(cursor_x + pill_pad_x, pill_y + pill_pad_y);
+            fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(12.0), select, slx, sly, theme::DIM)?;
         }
         FooterRight::Text(s) => {
             let (tw, _) = fonts.text_size(FpFont::ChakraPetchSemiBold, scale.font_px(13.0), s);
