@@ -1,6 +1,7 @@
-//! Main Menu — matches the mockup's `menuDefs`/`isMenu` branch exactly: 5
-//! rows (Play, Online, Network News, Rankings, Settings), not the real
-//! app's full 9-item `crate::menu::MAIN_ITEMS`. The other 4 legacy items
+//! Main Menu — matches the mockup's `menuDefs`/`isMenu` branch, minus its
+//! "Network News" row (hidden for now — see `super::MAIN_ITEM_COUNT`'s doc
+//! comment; still fully built in `bandwidth.rs`, just not linked from here),
+//! and not the real app's full 9-item `crate::menu::MAIN_ITEMS`. The other 4 legacy items
 //! (Arcade/Lab/Replays/Drones) live one level down in `play_menu.rs`'s
 //! submenu, matching the mockup's own `playMenuDefs`; Controls folds into
 //! Settings' categories (a follow-up item — see `settings.rs`'s module
@@ -39,11 +40,11 @@ const LIST_X: f32 = 56.0;
 const LIST_TOP: f32 = 158.0; // header (104) + this screen's top:54 offset
 const LABEL_GAP: f32 = 26.0; // bar -> number -> label gap, per rowStyle
 
-/// (label, sub-label) — verbatim from the mockup's own `menuDefs`.
-pub const ITEMS: [(&str, &str); 5] = [
+/// (label, sub-label) — verbatim from the mockup's own `menuDefs`, minus
+/// its "Network News" row (see this module's doc comment).
+pub const ITEMS: [(&str, &str); 4] = [
     ("PLAY", "Start a local freeplay match"),
     ("ONLINE", "Find, host or join a netplay match"),
-    ("NETWORK NEWS", "The wire \u{b7} bulletins \u{b7} line notices"),
     ("RANKINGS", "National top 100 \u{b7} season ladder"),
     ("SETTINGS", "Controls \u{b7} video \u{b7} audio \u{b7} netcode"),
 ];
@@ -85,7 +86,8 @@ pub fn draw(
 
     draw_last_match_card(canvas, fonts, scale, ITEMS.len() as f32, profile, cursor == ITEMS.len() + 1)?;
     draw_your_stats_panel(canvas, fonts, scale, username, profile, cursor == ITEMS.len())?;
-    draw_ticker(canvas, fonts, scale)?;
+    // The wire ticker is disabled for now along with the Network News row it
+    // quotes — see `draw_ticker`'s doc comment.
 
     chrome::draw_footer(
         canvas,
@@ -463,12 +465,16 @@ fn draw_cabinet_title(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scal
     Ok(())
 }
 
-/// Bottom wire ticker, directly above the footer. The mockup scrolls this
-/// via a CSS `animation: fp-ticker 30s linear infinite` marquee; reproducing
-/// that in SDL would need a per-frame time input this draw call doesn't
-/// take (every other fp_ui screen is a pure function of its `FpScreen`
-/// state, not wall-clock time), so this renders one static line instead of
-/// a scrolling one — same text, no motion.
+/// Bottom wire ticker, directly above the footer. Not called right now —
+/// disabled along with the Network News row it quotes (see
+/// `super::MAIN_ITEM_COUNT`'s doc comment) — kept rather than deleted since
+/// it's meant to come back once/if a real bulletin backend exists. The
+/// mockup scrolls this via a CSS `animation: fp-ticker 30s linear infinite`
+/// marquee; reproducing that in SDL would need a per-frame time input this
+/// draw call doesn't take (every other fp_ui screen is a pure function of
+/// its `FpScreen` state, not wall-clock time), so this renders one static
+/// line instead of a scrolling one — same text, no motion.
+#[allow(dead_code)]
 fn draw_ticker(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scale: &Scale) -> Result<(), String> {
     let h = 46.0;
     let y = theme::VH - chrome::FOOTER_H - h;

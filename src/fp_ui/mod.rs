@@ -36,18 +36,23 @@ use crate::font::FpFontCache;
 use sdl2::render::Canvas;
 use sdl2::video::Window;
 
-/// fp_ui's own Main Menu cursor space — 5 rows matching the mockup's
-/// `menuDefs` (Play/Online/Network News/Rankings/Settings), decoupled from
-/// `crate::menu::MAIN_ITEMS`'s 9-item legacy ordering. Only used for
-/// `FpScreen::Main { cursor }` and "return to Main at row X" transitions;
-/// never sent to `main.rs` as an `ActivateMainItem` payload (those still
-/// carry *legacy* indices — see `LEGACY_*_INDEX` below).
+/// fp_ui's own Main Menu cursor space — 4 rows (Play/Online/Rankings/
+/// Settings), decoupled from `crate::menu::MAIN_ITEMS`'s 9-item legacy
+/// ordering. Only used for `FpScreen::Main { cursor }` and "return to Main
+/// at row X" transitions; never sent to `main.rs` as an `ActivateMainItem`
+/// payload (those still carry *legacy* indices — see `LEGACY_*_INDEX`
+/// below).
+///
+/// The mockup's own 5th row, "Network News", is hidden for now rather than
+/// removed outright — it's still fully built (`bandwidth.rs`, reachable via
+/// `--test-screen fp:bandwidth`), just unreachable from the live menu, since
+/// it's admittedly-fabricated static content (no bulletin backend exists
+/// anywhere in this app) that shouldn't sit next to real data-backed rows.
 const MAIN_PLAY_INDEX: usize = 0;
 const MAIN_ONLINE_INDEX: usize = 1;
-const MAIN_NETWORK_NEWS_INDEX: usize = 2;
-const MAIN_RANKINGS_INDEX: usize = 3;
-const MAIN_SETTINGS_INDEX: usize = 4;
-const MAIN_ITEM_COUNT: usize = 5;
+const MAIN_RANKINGS_INDEX: usize = 2;
+const MAIN_SETTINGS_INDEX: usize = 3;
+const MAIN_ITEM_COUNT: usize = 4;
 /// Sentinel `cursor` value (one past the last real row) meaning "the YOUR
 /// STATS panel is focused" rather than any of the 5 menu rows — reached via
 /// `FpNav::Right` from any row, `FpNav::Left` to return. Kept as a sentinel
@@ -258,10 +263,6 @@ pub fn nav(screen: &mut FpScreen, input: FpNav) -> FpResult {
                     *screen = FpScreen::lobby();
                     FpResult::Stay
                 }
-                c if c == MAIN_NETWORK_NEWS_INDEX => {
-                    *screen = FpScreen::Bandwidth;
-                    FpResult::Stay
-                }
                 c if c == MAIN_RANKINGS_INDEX => {
                     *screen = FpScreen::Rankings;
                     FpResult::Stay
@@ -310,8 +311,12 @@ pub fn nav(screen: &mut FpScreen, input: FpNav) -> FpResult {
             _ => FpResult::Stay,
         },
         FpScreen::Bandwidth => match input {
+            // Not reachable from the live Main Menu right now (see
+            // `MAIN_ITEM_COUNT`'s doc comment) — only via `--test-screen
+            // fp:bandwidth` — so there's no "row it came from" to return
+            // to; Back just goes to the top of the menu.
             FpNav::Back => {
-                *screen = FpScreen::Main { cursor: MAIN_NETWORK_NEWS_INDEX };
+                *screen = FpScreen::main();
                 FpResult::Stay
             }
             FpNav::Info => {
