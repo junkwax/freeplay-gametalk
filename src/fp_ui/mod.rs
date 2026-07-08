@@ -21,6 +21,7 @@ pub mod layout;
 mod lobby;
 mod main_menu;
 mod play_menu;
+mod profile;
 mod quit;
 pub mod rankings;
 pub mod settings;
@@ -67,11 +68,6 @@ const MAIN_LAST_MATCH_INDEX: usize = MAIN_ITEM_COUNT + 1;
 const LEGACY_ARCADE_INDEX: usize = 1;
 const LEGACY_LAB_INDEX: usize = 2;
 const LEGACY_REPLAYS_INDEX: usize = 3;
-/// Reached by confirming while the "YOUR STATS" panel is focused
-/// (`MAIN_STATS_INDEX`) — the mockup's own header avatar chip is a
-/// mouse-only affordance with no documented gamepad binding, so this is a
-/// new gesture rather than a mirror of anything in the mockup itself.
-const LEGACY_PROFILE_INDEX: usize = 4;
 
 /// fp_ui's own PlayMenu cursor space (Arcade/Lab/Replays/Drones).
 const PLAY_ARCADE_INDEX: usize = 0;
@@ -100,6 +96,14 @@ pub enum FpScreen {
     /// unconditionally at startup (`main_leaderboard` in `main.rs`) rather
     /// than opening a second fetch pipeline — see `rankings.rs`.
     Rankings,
+    /// Native Profile screen (rating card, win/loss/streak stats, recent
+    /// match history) — reached from the Main Menu's "YOUR STATS" panel.
+    /// Reads the same `ProfileScreenState` the caller already fetches for
+    /// that panel (`main.rs`'s `main_profile`), same reasoning as
+    /// `Rankings`. Unlike Lab/Replays/Drones/Controls, this does *not*
+    /// delegate to the legacy bitmap-font Profile screen — see
+    /// `profile.rs`'s module doc for why a native one exists here now.
+    Profile,
     /// Static build info + keybindings, reachable from any fp_ui screen via
     /// the Info gesture (Y / Triangle) as well as the Main Menu footer icon.
     About,
@@ -241,7 +245,8 @@ pub fn nav(screen: &mut FpScreen, input: FpNav) -> FpResult {
                 FpResult::Stay
             }
             FpNav::Confirm if *cursor == MAIN_STATS_INDEX => {
-                FpResult::ActivateMainItem(LEGACY_PROFILE_INDEX)
+                *screen = FpScreen::Profile;
+                FpResult::Stay
             }
             FpNav::Confirm if *cursor == MAIN_LAST_MATCH_INDEX => FpResult::WatchLastMatchReplay,
             FpNav::Confirm => match *cursor {
@@ -329,6 +334,17 @@ pub fn nav(screen: &mut FpScreen, input: FpNav) -> FpResult {
         FpScreen::About => match input {
             FpNav::Back => {
                 *screen = FpScreen::main();
+                FpResult::Stay
+            }
+            _ => FpResult::Stay,
+        },
+        FpScreen::Profile => match input {
+            FpNav::Back => {
+                *screen = FpScreen::Main { cursor: MAIN_STATS_INDEX };
+                FpResult::Stay
+            }
+            FpNav::Info => {
+                *screen = FpScreen::About;
                 FpResult::Stay
             }
             _ => FpResult::Stay,
@@ -472,6 +488,7 @@ pub fn draw(
         FpScreen::PlayMenu { cursor } => play_menu::draw(canvas, fonts, &scale, *cursor, username)?,
         FpScreen::Bandwidth => bandwidth::draw(canvas, fonts, &scale, username)?,
         FpScreen::Rankings => rankings::draw(canvas, fonts, &scale, username, leaderboard)?,
+        FpScreen::Profile => profile::draw(canvas, fonts, &scale, username, profile)?,
         FpScreen::About => about::draw(canvas, fonts, &scale, username)?,
         FpScreen::Settings { cat, row, fields, sidebar_focus } => {
             settings::draw(canvas, fonts, &scale, fields, *cat, *row, *sidebar_focus, username)?

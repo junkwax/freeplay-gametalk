@@ -647,6 +647,7 @@ pub fn test_state(name: &str) -> Option<AppState> {
         "fp:bandwidth" => return Some(AppState::FpUi(crate::fp_ui::FpScreen::Bandwidth)),
         "fp:rankings" => return Some(AppState::FpUi(crate::fp_ui::FpScreen::Rankings)),
         "fp:about" => return Some(AppState::FpUi(crate::fp_ui::FpScreen::About)),
+        "fp:profile" => return Some(AppState::FpUi(crate::fp_ui::FpScreen::Profile)),
         "fp:settings" => {
             return Some(AppState::FpUi(crate::fp_ui::FpScreen::settings_from_cfg(
                 &crate::config::load(),
@@ -5261,7 +5262,7 @@ fn chrono_prelude(secs: i64) -> String {
     }
 }
 
-fn estimate_rank(rating: i32) -> &'static str {
+pub(crate) fn estimate_rank(rating: i32) -> &'static str {
     if rating < 300 {
         "Beginner"
     } else if rating < 600 {

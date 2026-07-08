@@ -273,7 +273,7 @@ fn format_result_line(row: &HistoryRow) -> String {
 /// string if it doesn't start with a recognizable date, rather than a
 /// dependency like `chrono` just for this one label (see `chrome.rs`'s
 /// clock, which makes the same call for the header time-of-day).
-fn short_date(iso: &str) -> String {
+pub(super) fn short_date(iso: &str) -> String {
     let bytes = iso.as_bytes();
     if bytes.len() < 10 || bytes[4] != b'-' || bytes[7] != b'-' {
         return iso.to_string();
