@@ -129,7 +129,7 @@ fn draw_row(
     // produced overlapping label/sub text at first pass.
     let label_h_px = fonts.text_size(label_font, scale.font_px(label_size), &label_text).1 as f32 / scale.s;
     let sub_h_px = if selected {
-        fonts.text_size(FpFont::SairaCondensedSemiBold, scale.font_px(15.0), &sub_text).1 as f32 / scale.s
+        fonts.text_size(FpFont::SairaSemiBold, scale.font_px(15.0), &sub_text).1 as f32 / scale.s
     } else {
         0.0
     };
@@ -144,7 +144,7 @@ fn draw_row(
         let (sx, sy) = scale.point(label_x, block_top + label_h_px + gap);
         fonts.draw(
             canvas,
-            FpFont::SairaCondensedSemiBold,
+            FpFont::SairaSemiBold,
             scale.font_px(15.0),
             &sub_text,
             sx,

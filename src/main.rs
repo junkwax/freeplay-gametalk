@@ -2822,6 +2822,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     state = AppState::Menu(MenuScreen::Main { cursor });
                                 }
                                 fp_ui::FpResult::ExitGame => break 'running,
+                                fp_ui::FpResult::SettingsChanged => {
+                                    if let AppState::FpUi(fp_ui::FpScreen::Settings { fields, .. }) = &state {
+                                        if cfg.fullscreen != fields.fullscreen {
+                                            let mode = if fields.fullscreen {
+                                                FullscreenType::Desktop
+                                            } else {
+                                                FullscreenType::Off
+                                            };
+                                            let _ = canvas.window_mut().set_fullscreen(mode);
+                                        }
+                                        cfg.fullscreen = fields.fullscreen;
+                                        cfg.render_profile = fields.render_profile;
+                                        cfg.video_filter = fields.video_filter;
+                                        cfg.crt_corner_bend = fields.crt_corner_bend;
+                                        cfg.aspect_mode = fields.aspect_mode;
+                                        cfg.scorebar_style = fields.scorebar_style;
+                                        cfg.volume_percent = fields.volume_percent;
+                                        cfg.audio_buffer = fields.audio_buffer;
+                                        cfg.input_delay = fields.input_delay;
+                                        cfg.runahead = fields.runahead;
+                                        cfg.runahead_online = fields.runahead_online;
+                                        cfg.discord_rpc_enabled = fields.discord_rpc_enabled;
+                                        config::save(&cfg);
+                                    }
+                                }
                             }
                         }
                     }
@@ -3148,6 +3173,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         runahead: cfg.runahead,
                                         runahead_online: cfg.runahead_online,
                                     });
+                                    if cfg.new_ui {
+                                        state = AppState::FpUi(fp_ui::FpScreen::settings_from_cfg(&cfg));
+                                    }
                                 }
                                 NavResult::OpenTraining => {
                                     state = AppState::Menu(MenuScreen::Training {

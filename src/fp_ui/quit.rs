@@ -67,7 +67,7 @@ pub fn draw(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scale: &Scale,
     let (tx, ty) = scale.point(text_x, content_y);
     fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(38.0), title, tx, ty, theme::TEXT)?;
     let (sx, sy) = scale.point(text_x, content_y + 44.0);
-    fonts.draw(canvas, FpFont::SairaCondensedSemiBold, scale.font_px(15.0), subtitle, sx, sy, Color::RGB(0x8a, 0x8a, 0x92))?;
+    fonts.draw(canvas, FpFont::SairaSemiBold, scale.font_px(15.0), subtitle, sx, sy, Color::RGB(0x8a, 0x8a, 0x92))?;
 
     // Buttons.
     let btn_y = content_y + icon_row_h + 30.0;
@@ -90,7 +90,7 @@ pub fn draw(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scale: &Scale,
         &[
             chrome::FooterPrompt { glyph: "\u{2194}", label: "Choose", color: Color::RGB(0xcf, 0xcf, 0xc9) },
             chrome::PROMPT_SELECT,
-            chrome::FooterPrompt { glyph: "\u{25CB}", label: "Cancel", color: theme::BTN_CIRCLE },
+            chrome::FooterPrompt { glyph: "O", label: "Cancel", color: theme::BTN_CIRCLE },
         ],
         56.0,
         row_cy,

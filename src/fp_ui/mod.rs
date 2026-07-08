@@ -18,16 +18,19 @@ pub mod input;
 pub mod layout;
 mod main_menu;
 mod quit;
+pub mod settings;
 pub mod theme;
 
 pub use input::{event_to_fp_nav, FpNav};
 pub use layout::Scale;
+pub use settings::SettingsFields;
 
 use crate::font::FpFontCache;
+use crate::menu::{MAIN_ITEMS, MAIN_SETTINGS_INDEX};
 use sdl2::render::Canvas;
 use sdl2::video::Window;
 
-/// All fp_ui screens. Play, Settings, and Lobby land in steps 4-6.
+/// All fp_ui screens. Lobby and Play land in steps 5-6.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FpScreen {
     Main { cursor: usize },
@@ -36,11 +39,24 @@ pub enum FpScreen {
     /// the modal (and the screen underneath if Cancel is chosen) still
     /// shows the row the player quit from selected.
     Quit { choice: usize, menu_cursor: usize },
+    /// `fields` mirrors the relevant `Config` fields directly; every
+    /// adjustment writes straight into this copy, and `FpResult::SettingsChanged`
+    /// tells the caller to sync it into the real `Config` and persist
+    /// (`"changes saved automatically"`, per the mockup's footer).
+    Settings { cat: usize, row: usize, fields: SettingsFields },
 }
 
 impl FpScreen {
     pub fn main() -> Self {
         FpScreen::Main { cursor: 0 }
+    }
+
+    pub fn settings_from_cfg(cfg: &crate::config::Config) -> Self {
+        FpScreen::Settings {
+            cat: 0,
+            row: 0,
+            fields: SettingsFields::from_cfg(cfg),
+        }
     }
 }
 
@@ -48,8 +64,9 @@ impl FpScreen {
 /// screen in place.
 pub enum FpResult {
     Stay,
-    /// Confirm on a Main Menu row (any but Quit). `cursor` is the same
-    /// index space as `menu::MAIN_ITEMS` — the caller sets
+    /// Confirm on a Main Menu row (any but Settings/Quit, which this module
+    /// handles itself). `cursor` is the same index space as
+    /// `menu::MAIN_ITEMS` — the caller sets
     /// `state = AppState::Menu(MenuScreen::Main { cursor })` and lets the
     /// existing legacy `nav_accept` dispatch take it from there (ROM-present
     /// checks, screen construction, session/profile/replay side effects),
@@ -58,6 +75,11 @@ pub enum FpResult {
     /// EXIT GAME confirmed on the Quit overlay. The caller breaks the main
     /// loop exactly like the legacy `NavResult::Quit`.
     ExitGame,
+    /// A Settings row changed. The caller reads `FpScreen::Settings`'s
+    /// current `fields` out of `state`, copies them into `Config`, applies
+    /// any that need a live side effect (fullscreen), and calls
+    /// `config::save`.
+    SettingsChanged,
 }
 
 pub fn nav(screen: &mut FpScreen, input: FpNav) -> FpResult {
@@ -68,11 +90,11 @@ pub fn nav(screen: &mut FpScreen, input: FpNav) -> FpResult {
                 FpResult::Stay
             }
             FpNav::Down => {
-                *cursor = (*cursor + 1).min(crate::menu::MAIN_ITEMS.len() - 1);
+                *cursor = (*cursor + 1).min(MAIN_ITEMS.len() - 1);
                 FpResult::Stay
             }
             FpNav::Confirm => {
-                if *cursor == crate::menu::MAIN_ITEMS.len() - 1 {
+                if *cursor == MAIN_ITEMS.len() - 1 {
                     // Quit is always the last item — open the overlay
                     // instead of delegating to legacy's instant-exit.
                     *screen = FpScreen::Quit { choice: 0, menu_cursor: *cursor };
@@ -102,6 +124,39 @@ pub fn nav(screen: &mut FpScreen, input: FpNav) -> FpResult {
             }
             _ => FpResult::Stay,
         },
+        FpScreen::Settings { cat, row, fields } => match input {
+            FpNav::Up => {
+                *row = row.saturating_sub(1);
+                FpResult::Stay
+            }
+            FpNav::Down => {
+                *row = (*row + 1).min(settings::rows_in_cat(*cat) - 1);
+                FpResult::Stay
+            }
+            FpNav::PrevTab => {
+                *cat = (*cat + settings::CATS.len() - 1) % settings::CATS.len();
+                *row = 0;
+                FpResult::Stay
+            }
+            FpNav::NextTab => {
+                *cat = (*cat + 1) % settings::CATS.len();
+                *row = 0;
+                FpResult::Stay
+            }
+            FpNav::Left => {
+                fields.adjust(*cat, *row, -1);
+                FpResult::SettingsChanged
+            }
+            FpNav::Right => {
+                fields.adjust(*cat, *row, 1);
+                FpResult::SettingsChanged
+            }
+            FpNav::Back => {
+                *screen = FpScreen::Main { cursor: MAIN_SETTINGS_INDEX };
+                FpResult::Stay
+            }
+            _ => FpResult::Stay,
+        },
     }
 }
 
@@ -127,6 +182,9 @@ pub fn draw(
         FpScreen::Quit { choice, menu_cursor } => {
             main_menu::draw(canvas, fonts, &scale, *menu_cursor, username)?;
             quit::draw(canvas, fonts, &scale, *choice)?;
+        }
+        FpScreen::Settings { cat, row, fields } => {
+            settings::draw(canvas, fonts, &scale, fields, *cat, *row, username)?
         }
     }
 

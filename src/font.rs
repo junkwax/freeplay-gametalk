@@ -434,6 +434,13 @@ pub enum FpFont {
     SairaCondensedBold,
     SairaCondensedExtraBold,
     SairaCondensedBlack,
+    /// Plain (non-condensed) Saira — body text/hints/sub-labels, per the
+    /// handoff doc's font table (`font-family:'Saira'`, distinct from the
+    /// condensed family used for headings/menu labels).
+    SairaRegular,
+    SairaMedium,
+    SairaSemiBold,
+    SairaBold,
     ChakraPetchMedium,
     ChakraPetchSemiBold,
     ChakraPetchBold,
@@ -447,6 +454,10 @@ impl FpFont {
             FpFont::SairaCondensedBold => "SairaCondensed-Bold.ttf",
             FpFont::SairaCondensedExtraBold => "SairaCondensed-ExtraBold.ttf",
             FpFont::SairaCondensedBlack => "SairaCondensed-Black.ttf",
+            FpFont::SairaRegular => "Saira-Regular.ttf",
+            FpFont::SairaMedium => "Saira-Medium.ttf",
+            FpFont::SairaSemiBold => "Saira-SemiBold.ttf",
+            FpFont::SairaBold => "Saira-Bold.ttf",
             FpFont::ChakraPetchMedium => "ChakraPetch-Medium.ttf",
             FpFont::ChakraPetchSemiBold => "ChakraPetch-SemiBold.ttf",
             FpFont::ChakraPetchBold => "ChakraPetch-Bold.ttf",

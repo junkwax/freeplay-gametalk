@@ -444,6 +444,10 @@ impl Default for AppState {
 pub const MAIN_ITEMS: [&str; 9] = [
     "Online", "Arcade", "Lab", "Replays", "Profile", "Controls", "Settings", "About", "Quit",
 ];
+/// Index of "Settings" within `MAIN_ITEMS` — `crate::fp_ui` special-cases it
+/// (opens its own Settings screen rather than delegating to legacy) the same
+/// way it special-cases the last index for Quit.
+pub const MAIN_SETTINGS_INDEX: usize = 6;
 const LAB_MENU_ITEMS: [&str; 2] = ["Start Lab", "Load Drones"];
 
 const SETTINGS_ITEMS: [&str; 18] = [
@@ -638,6 +642,11 @@ pub fn test_state(name: &str) -> Option<AppState> {
                 choice: 0,
                 menu_cursor: MAIN_ITEMS.len() - 1,
             }))
+        }
+        "fp:settings" => {
+            return Some(AppState::FpUi(crate::fp_ui::FpScreen::settings_from_cfg(
+                &crate::config::load(),
+            )))
         }
         "profile" => {
             return Some(AppState::Menu(MenuScreen::Profile {

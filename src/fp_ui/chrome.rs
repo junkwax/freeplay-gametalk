@@ -35,7 +35,11 @@ pub const PROMPT_SELECT: FooterPrompt = FooterPrompt {
 };
 #[allow(dead_code)] // used starting with the Play/Settings/Lobby steps
 pub const PROMPT_BACK: FooterPrompt = FooterPrompt {
-    glyph: "\u{25CB}",
+    // "O" rather than the Unicode circle glyph (U+25CB) — missing from
+    // Saira Condensed Bold, rendering as a tofu box. The chip's own
+    // stroked-circle outline already reads as "Circle button", so a plain
+    // letter inside it isn't a legibility loss.
+    glyph: "O",
     label: "Back",
     color: theme::BTN_CIRCLE,
 };
