@@ -1288,6 +1288,117 @@ fn write_local_crash_log(summary: &str, location: &str) {
     println!("[crash] wrote {path}");
 }
 
+/// Catches native crashes (access violations, stack overflows, ...) that
+/// bypass Rust's panic machinery entirely — an `unwrap`/`panic!` always
+/// leaves a trace via `install_panic_incident_hook`'s hook, but a bad
+/// pointer dereference inside `unsafe` FFI code (the libretro core, GL
+/// calls in `gl_crt.rs`, ...) just terminates the process with nothing
+/// printed and no `crash_*.log` written — exactly what made an earlier
+/// "settings crash" report (traced to changing the CRT shader filter)
+/// impossible to diagnose from the logs alone. `SetUnhandledExceptionFilter`
+/// is the OS-level catch-all below any Rust-level handling; it runs on the
+/// crashing thread just before Windows tears the process down, so a plain
+/// synchronous file write here is safe (this is not a POSIX signal handler
+/// with async-signal-safety constraints).
+#[cfg(windows)]
+fn install_native_crash_handler() {
+    use std::ffi::c_void;
+
+    #[repr(C)]
+    struct ExceptionRecord {
+        exception_code: u32,
+        _exception_flags: u32,
+        _exception_record: *mut c_void,
+        exception_address: *mut c_void,
+        _number_parameters: u32,
+        _exception_information: [usize; 15],
+    }
+
+    #[repr(C)]
+    struct ExceptionPointers {
+        exception_record: *mut ExceptionRecord,
+        _context_record: *mut c_void,
+    }
+
+    const GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT: u32 = 0x2;
+    const GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS: u32 = 0x4;
+
+    extern "system" {
+        fn SetUnhandledExceptionFilter(
+            filter: unsafe extern "system" fn(*mut ExceptionPointers) -> i32,
+        ) -> *mut c_void;
+        fn GetModuleHandleExW(flags: u32, module_name: *const u16, module: *mut *mut c_void) -> i32;
+        fn GetModuleFileNameW(module: *mut c_void, filename: *mut u16, size: u32) -> u32;
+    }
+
+    fn module_at(addr: *mut c_void) -> String {
+        unsafe {
+            let mut handle: *mut c_void = std::ptr::null_mut();
+            let flags = GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT | GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS;
+            if GetModuleHandleExW(flags, addr as *const u16, &mut handle) == 0 || handle.is_null() {
+                return "<unknown module>".to_string();
+            }
+            let mut buf = [0u16; 512];
+            let len = GetModuleFileNameW(handle, buf.as_mut_ptr(), buf.len() as u32);
+            if len == 0 {
+                return "<unknown module>".to_string();
+            }
+            String::from_utf16_lossy(&buf[..len as usize])
+        }
+    }
+
+    fn exception_name(code: u32) -> &'static str {
+        match code {
+            0xC0000005 => "ACCESS_VIOLATION",
+            0xC00000FD => "STACK_OVERFLOW",
+            0xC0000094 => "INT_DIVIDE_BY_ZERO",
+            0x80000003 => "BREAKPOINT",
+            0xC000001D => "ILLEGAL_INSTRUCTION",
+            _ => "UNKNOWN",
+        }
+    }
+
+    unsafe extern "system" fn handler(info: *mut ExceptionPointers) -> i32 {
+        const EXCEPTION_CONTINUE_SEARCH: i32 = 0;
+        if let Some(info) = info.as_ref() {
+            if let Some(rec) = info.exception_record.as_ref() {
+                let code = rec.exception_code;
+                let addr = rec.exception_address;
+                let module = module_at(addr);
+                let unix = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let path = format!("crash_native_{unix}.log");
+                use std::io::Write;
+                if let Ok(mut f) = std::fs::File::create(&path) {
+                    let _ = writeln!(f, "Freeplay native crash report");
+                    let _ = writeln!(f, "version: {}", version::footer_string());
+                    let _ = writeln!(
+                        f,
+                        "exception: {} (0x{code:08X}) at address {addr:?}",
+                        exception_name(code)
+                    );
+                    let _ = writeln!(f, "faulting module: {module}");
+                    let _ = writeln!(
+                        f,
+                        "\nPlease attach this file (and freeplay-net.log if present) to an issue at"
+                    );
+                    let _ = writeln!(f, "https://github.com/junkwax/freeplay-gametalk/issues");
+                }
+            }
+        }
+        EXCEPTION_CONTINUE_SEARCH
+    }
+
+    unsafe {
+        SetUnhandledExceptionFilter(handler);
+    }
+}
+
+#[cfg(not(windows))]
+fn install_native_crash_handler() {}
+
 fn install_panic_incident_hook() {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -1312,6 +1423,25 @@ fn install_panic_incident_hook() {
     }));
 }
 
+/// `gl_crt.rs`'s CRT shader mixes a GLSL `#version 120` program with legacy
+/// immediate-mode calls (`glBegin`/`glVertex2f`/`glTexCoord2f`/`glEnd`) and
+/// never requested a specific GL context profile — left to the driver's
+/// default, which on some GPU/driver stacks is (or negotiates to) a core
+/// profile that has *removed* those immediate-mode entry points. Calling
+/// through them there is undefined behavior at the driver level: an access
+/// violation with no Rust panic and no `crash_*.log`, since it happens
+/// entirely inside the FFI call — this was the root cause behind a
+/// "changing shader settings crashes the game" report that left no trace
+/// to investigate. Explicitly requesting a compatibility profile (and the
+/// 2.1 version matching `#version 120`) keeps those calls legal; if the
+/// driver can't honor it, window/context creation fails immediately and
+/// visibly instead of crashing on the first shader-rendered frame.
+fn request_compat_gl_profile(video_subsystem: &sdl2::VideoSubsystem) {
+    let gl_attr = video_subsystem.gl_attr();
+    gl_attr.set_context_profile(sdl2::video::GLProfile::Compatibility);
+    gl_attr.set_context_version(2, 1);
+}
+
 fn run_render_probe() -> Result<(), Box<dyn std::error::Error>> {
     let cfg = config::load();
     println!(
@@ -1326,6 +1456,7 @@ fn run_render_probe() -> Result<(), Box<dyn std::error::Error>> {
     window_builder.position_centered().hidden();
     if shader_requested {
         window_builder.opengl();
+        request_compat_gl_profile(&video_subsystem);
     }
     let mut window = window_builder.build()?;
     set_app_window_icon(&mut window);
@@ -1439,6 +1570,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     window_builder.position_centered().resizable();
     if cfg.video_filter.uses_opengl_shader() {
         window_builder.opengl();
+        request_compat_gl_profile(&video_subsystem);
     }
     let mut window = window_builder.build()?;
     set_app_window_icon(&mut window);
@@ -1519,6 +1651,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     crate::rpc::set_discord_client_id(cfg.discord_client_id.clone());
     incident::set_guest_device_id(cfg.guest_device_id.clone());
     install_panic_incident_hook();
+    install_native_crash_handler();
     let mut state = menu::main_menu_state(cfg.new_ui);
     // Debug: `--test-screen online:chat` (or :players/:lobbies/:watch/:play)
     // jumps straight into a hub section with sample data so layout/fonts can be
