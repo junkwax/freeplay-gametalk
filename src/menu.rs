@@ -23,12 +23,29 @@ pub const DEFAULT_NETPLAY_PORT: u16 = 7000;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AppState {
     Menu(MenuScreen),
+    /// New angular/red UI rebuild (`crate::fp_ui`) — Main/Play/Settings/
+    /// Lobby/Quit only; every other screen routes to `Menu(MenuScreen::_)`
+    /// via `main_menu_state` and `MenuScreen`'s own navigation, never
+    /// replacing them; see `crate::fp_ui` module docs.
+    FpUi(crate::fp_ui::FpScreen),
     Playing,
     Rebinding {
         action: Action,
         player: Player,
         came_from: MenuScreen,
     },
+}
+
+/// The app's "main menu" state: the new fp_ui Main Menu when `new_ui` is on,
+/// otherwise the legacy `Menu(MenuScreen::Main)`. Centralizes every "return
+/// to the main menu" transition so flipping `new_ui` doesn't require hunting
+/// down each call site individually.
+pub fn main_menu_state(new_ui: bool) -> AppState {
+    if new_ui {
+        AppState::FpUi(crate::fp_ui::FpScreen::main())
+    } else {
+        AppState::Menu(MenuScreen::Main { cursor: 0 })
+    }
 }
 
 /// All menu screens. Direct-IP Host/Join screens were removed when Find Match
@@ -1482,7 +1499,7 @@ impl AppState {
         }
     }
 
-    pub fn nav_back(&mut self) {
+    pub fn nav_back(&mut self, new_ui: bool) {
         // In the Online hub, Back closes the format chooser, then returns from
         // content to the rail, then from the rail out to the main menu. (The
         // incoming-challenge modal's decline is handled in main.rs, before
@@ -1501,7 +1518,7 @@ impl AppState {
                 *focus = HubFocus::Rail;
                 return;
             }
-            *self = AppState::Menu(MenuScreen::Main { cursor: 0 });
+            *self = main_menu_state(new_ui);
             return;
         }
         match self {
@@ -1521,7 +1538,7 @@ impl AppState {
             | AppState::Menu(MenuScreen::Training { .. })
             | AppState::Menu(MenuScreen::LiveMatches { .. })
             | AppState::Menu(MenuScreen::Spectate { .. }) => {
-                *self = AppState::Menu(MenuScreen::Main { cursor: 0 });
+                *self = main_menu_state(new_ui);
             }
             AppState::Menu(MenuScreen::TextEdit { came_from, .. }) => {
                 *self = AppState::Menu((**came_from).clone());
@@ -1844,6 +1861,9 @@ pub fn draw(
             )?;
         }
         AppState::Playing => {}
+        // Drawn by `crate::fp_ui::draw` from main.rs instead — the caller
+        // branches on `AppState::FpUi` before ever reaching this function.
+        AppState::FpUi(_) => {}
     }
 
     draw_version_footer(canvas, font, w, h)?;

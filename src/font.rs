@@ -412,3 +412,185 @@ fn overlay_font_candidates() -> Vec<String> {
         .map(String::from)
         .collect()
 }
+
+// --- fp_ui scale-aware font cache ---
+//
+// Separate from `Font` above: the legacy menu draws at a handful of fixed
+// integer `scale` multipliers of a base point size, which suits pixel-art
+// bitmap glyphs. fp_ui instead computes a continuous point size every frame
+// from `layout::Scale::font_px` (window_px = logical_px * s) and needs a
+// cache keyed on that exact pixel size — re-rasterizing on resize rather
+// than stretching a texture rendered at a stale size (blurry, and the
+// classic tell that a "responsive" UI isn't actually scale-aware).
+
+/// Bundled fp_ui font family/weight pairs (`assets/fonts/`), each shipped
+/// under the SIL Open Font License (see the `OFL-*.txt` files alongside the
+/// TTFs).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[allow(dead_code)] // most weights land with the screens that use them (steps 2-6)
+pub enum FpFont {
+    SairaCondensedMedium,
+    SairaCondensedSemiBold,
+    SairaCondensedBold,
+    SairaCondensedExtraBold,
+    SairaCondensedBlack,
+    ChakraPetchMedium,
+    ChakraPetchSemiBold,
+    ChakraPetchBold,
+}
+
+impl FpFont {
+    fn filename(self) -> &'static str {
+        match self {
+            FpFont::SairaCondensedMedium => "SairaCondensed-Medium.ttf",
+            FpFont::SairaCondensedSemiBold => "SairaCondensed-SemiBold.ttf",
+            FpFont::SairaCondensedBold => "SairaCondensed-Bold.ttf",
+            FpFont::SairaCondensedExtraBold => "SairaCondensed-ExtraBold.ttf",
+            FpFont::SairaCondensedBlack => "SairaCondensed-Black.ttf",
+            FpFont::ChakraPetchMedium => "ChakraPetch-Medium.ttf",
+            FpFont::ChakraPetchSemiBold => "ChakraPetch-SemiBold.ttf",
+            FpFont::ChakraPetchBold => "ChakraPetch-Bold.ttf",
+        }
+    }
+}
+
+#[derive(Hash, PartialEq, Eq)]
+struct FpCacheKey {
+    font: FpFont,
+    px: u16,
+    text: String,
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+}
+
+/// Scale-aware glyph/text cache for the fp_ui screen set. One `sdl2::ttf`
+/// font per `(family, pixel size)` actually loaded, and one cached texture
+/// per `(family, pixel size, text, color)` — both keyed on the *pixel* size
+/// computed by `layout::Scale::font_px`, so a window resize naturally misses
+/// the cache and re-rasterizes at the new size instead of stretching.
+pub struct FpFontCache<'ttf, 'tc> {
+    ctx: &'ttf Sdl2TtfContext,
+    tc: &'tc TextureCreator<WindowContext>,
+    fonts: HashMap<(FpFont, u16), sdl2::ttf::Font<'ttf, 'static>>,
+    cache: HashMap<FpCacheKey, (Texture<'tc>, u32, u32)>,
+    /// The `layout::Scale::s` factor as of the last `begin_frame` call. A
+    /// screen typically requests a dozen-plus distinct pixel sizes (one per
+    /// element), so eviction can't key on a single "keep this px" value —
+    /// instead the whole cache is dropped in one shot whenever the window's
+    /// scale factor itself changes.
+    last_scale_bits: Option<u32>,
+}
+
+impl<'ttf, 'tc> FpFontCache<'ttf, 'tc> {
+    pub fn new(tc: &'tc TextureCreator<WindowContext>, ctx: &'ttf Sdl2TtfContext) -> Self {
+        Self {
+            ctx,
+            tc,
+            fonts: HashMap::new(),
+            cache: HashMap::new(),
+            last_scale_bits: None,
+        }
+    }
+
+    /// Call once per draw with the current `layout::Scale::s`. Clears every
+    /// cached font and texture the first time `s` differs from the previous
+    /// call, so a resize re-rasterizes every size at the new scale instead
+    /// of stretching textures rendered at a stale one.
+    pub fn begin_frame(&mut self, s: f32) {
+        let bits = s.to_bits();
+        if self.last_scale_bits != Some(bits) {
+            self.fonts.clear();
+            self.cache.clear();
+            self.last_scale_bits = Some(bits);
+        }
+    }
+
+    fn ensure_font(&mut self, font: FpFont, px: u16) -> Result<(), String> {
+        if self.fonts.contains_key(&(font, px)) {
+            return Ok(());
+        }
+        let candidates = [
+            format!("assets/fonts/{}", font.filename()),
+            format!("src/assets/fonts/{}", font.filename()),
+            font.filename().to_string(),
+        ];
+        let candidate_refs: Vec<&str> = candidates.iter().map(String::as_str).collect();
+        let path = resolve_font(&candidate_refs)
+            .ok_or_else(|| format!("{} not found in assets/fonts/", font.filename()))?;
+        let loaded = self.ctx.load_font(&path, px).map_err(|e| e.to_string())?;
+        self.fonts.insert((font, px), loaded);
+        Ok(())
+    }
+
+    /// Draw `text` at logical-derived pixel size `px`, top-left at `(x, y)`
+    /// in window space. Returns the rendered texture's `(w, h)` in pixels so
+    /// callers can lay out adjacent elements without a separate measure
+    /// pass.
+    pub fn draw(
+        &mut self,
+        canvas: &mut Canvas<Window>,
+        font: FpFont,
+        px: u16,
+        text: &str,
+        x: i32,
+        y: i32,
+        color: Color,
+    ) -> Result<(u32, u32), String> {
+        if text.is_empty() {
+            return Ok((0, 0));
+        }
+        self.ensure_font(font, px)?;
+        let key = FpCacheKey {
+            font,
+            px,
+            text: text.to_string(),
+            r: color.r,
+            g: color.g,
+            b: color.b,
+            a: color.a,
+        };
+        if !self.cache.contains_key(&key) {
+            let ttf_font = &self.fonts[&(font, px)];
+            let surf = ttf_font
+                .render(text)
+                .blended(color)
+                .map_err(|e| e.to_string())?;
+            let w = surf.width();
+            let h = surf.height();
+            let tex = self
+                .tc
+                .create_texture_from_surface(&surf)
+                .map_err(|e| e.to_string())?;
+            self.cache.insert(
+                FpCacheKey {
+                    font,
+                    px,
+                    text: text.to_string(),
+                    r: color.r,
+                    g: color.g,
+                    b: color.b,
+                    a: color.a,
+                },
+                (tex, w, h),
+            );
+        }
+        let (tex, w, h) = self.cache.get(&key).unwrap();
+        canvas.copy(tex, None, Rect::new(x, y, *w, *h))?;
+        Ok((*w, *h))
+    }
+
+    /// Measure `text` at pixel size `px` without drawing it.
+    #[allow(dead_code)] // used starting with the Main Menu step (right-aligned labels)
+    pub fn text_size(&mut self, font: FpFont, px: u16, text: &str) -> (u32, u32) {
+        if text.is_empty() {
+            return (0, 0);
+        }
+        if self.ensure_font(font, px).is_err() {
+            return (0, 0);
+        }
+        self.fonts[&(font, px)].size_of(text).unwrap_or((0, 0))
+    }
+
+}

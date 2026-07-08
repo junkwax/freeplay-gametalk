@@ -13,6 +13,7 @@ mod discord_webhook;
 mod doctor;
 mod drone;
 mod font;
+mod fp_ui;
 mod frame_timer;
 mod ghost;
 mod gl_crt;
@@ -1502,6 +1503,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
     let mut font = Font::new(&texture_creator, ttf_ctx.as_ref())?;
+    let mut fp_fonts = ttf_ctx
+        .as_ref()
+        .map(|ctx| font::FpFontCache::new(&texture_creator, ctx));
+    if cfg.new_ui && fp_fonts.is_none() {
+        println!("[fp_ui] SDL2_ttf unavailable; falling back to the legacy UI despite new_ui=true");
+    }
 
     let mut event_pump = sdl_context.event_pump()?;
 
@@ -1512,7 +1519,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     crate::rpc::set_discord_client_id(cfg.discord_client_id.clone());
     incident::set_guest_device_id(cfg.guest_device_id.clone());
     install_panic_incident_hook();
-    let mut state = AppState::default();
+    let mut state = menu::main_menu_state(cfg.new_ui);
     // Debug: `--test-screen online:chat` (or :players/:lobbies/:watch/:play)
     // jumps straight into a hub section with sample data so layout/fonts can be
     // checked without the live server. `--test-osk` also shows the chat keyboard.
@@ -2606,7 +2613,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         username_check_rx = None;
                         username_check_silent = false;
                         username_check_started_at = None;
-                        state = AppState::Menu(MenuScreen::Main { cursor: 0 });
+                        state = menu::main_menu_state(cfg.new_ui);
                     }
                 }
 
@@ -2797,6 +2804,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                         _ => {}
+                    }
+                }
+
+                _ if matches!(state, AppState::FpUi(_)) => {
+                    if let AppState::FpUi(screen) = &mut state {
+                        if let Some(nav) = fp_ui::event_to_fp_nav(&event) {
+                            match fp_ui::nav(screen, nav) {
+                                fp_ui::FpResult::Stay => {}
+                                fp_ui::FpResult::EnterLegacyAbout => {
+                                    state = AppState::Menu(MenuScreen::About);
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -3196,7 +3216,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         let code = value.trim().to_uppercase();
                                         if code.is_empty() {
                                             state =
-                                                AppState::Menu(MenuScreen::Main { cursor: 0 });
+                                                menu::main_menu_state(cfg.new_ui);
                                         } else {
                                             matchmaking::set_guest_profile(
                                                 cfg.player_username.clone(),
@@ -3981,9 +4001,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         matchmaking::leave_lobby(id);
                                     }
                                     lobby_view_rx = None;
-                                    state = AppState::Menu(menu::MenuScreen::Main { cursor: 0 });
+                                    state = menu::main_menu_state(cfg.new_ui);
                                 } else {
-                                    state.nav_back();
+                                    state.nav_back(cfg.new_ui);
                                 }
                             }
                             MenuNav::ToggleMenu => {}
@@ -4519,7 +4539,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ..
                     } if net_session.is_none() && match_replay_playback.is_none() => {
                         input::clear_all_inputs();
-                        state = AppState::Menu(MenuScreen::Main { cursor: 0 });
+                        state = menu::main_menu_state(cfg.new_ui);
                     }
                     Event::KeyDown {
                         keycode: Some(Keycode::F9),
@@ -6239,7 +6259,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     Err(e) => {
                                         println!("[mm] bad peer addr from matchmaking: {e}");
                                         mm_rx = None;
-                                        state = AppState::Menu(MenuScreen::Main { cursor: 0 });
+                                        state = menu::main_menu_state(cfg.new_ui);
                                         break;
                                     }
                                 };
@@ -6495,7 +6515,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             Err(std::sync::mpsc::TryRecvError::Empty) => break,
                             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                                 mm_rx = None;
-                                state = AppState::Menu(MenuScreen::Main { cursor: 0 });
+                                state = menu::main_menu_state(cfg.new_ui);
                                 break;
                             }
                         }
@@ -6504,20 +6524,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 canvas.set_logical_size(0, 0)?;
                 let (win_w, win_h) = canvas.output_size().unwrap_or((1200, 762));
-                menu::draw(
-                    &state,
-                    &cfg.bindings,
-                    &mut canvas,
-                    &mut font,
-                    win_w as i32,
-                    win_h as i32,
-                    rom_present.check(),
-                    discord_user.as_deref(),
-                    &main_leaderboard,
-                    toast_payload(&toast),
-                    menu_input_pad,
-                )
-                .map_err(|e| format!("menu draw: {e}"))?;
+                if let (AppState::FpUi(screen), Some(fpf)) = (&state, fp_fonts.as_mut()) {
+                    fp_ui::draw(screen, &mut canvas, fpf, win_w as i32, win_h as i32)
+                        .map_err(|e| format!("fp_ui draw: {e}"))?;
+                } else {
+                    menu::draw(
+                        &state,
+                        &cfg.bindings,
+                        &mut canvas,
+                        &mut font,
+                        win_w as i32,
+                        win_h as i32,
+                        rom_present.check(),
+                        discord_user.as_deref(),
+                        &main_leaderboard,
+                        toast_payload(&toast),
+                        menu_input_pad,
+                    )
+                    .map_err(|e| format!("menu draw: {e}"))?;
+                }
                 if net_stats_visible
                     && matches!(state, AppState::Menu(MenuScreen::Matchmaking { .. }))
                 {
@@ -6537,7 +6562,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 canvas.set_logical_size(menu::LOGICAL_W as u32, menu::LOGICAL_H as u32)?;
             }
 
-            AppState::Menu(_) | AppState::Rebinding { .. } => {
+            AppState::Menu(_) | AppState::Rebinding { .. } | AppState::FpUi(_) => {
                 if matches!(
                     state,
                     AppState::Menu(menu::MenuScreen::TestIp { editing: true, .. })
@@ -7377,20 +7402,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 canvas.set_logical_size(0, 0)?;
                 let (win_w, win_h) = canvas.output_size().unwrap_or((1200, 762));
-                menu::draw(
-                    &state,
-                    &cfg.bindings,
-                    &mut canvas,
-                    &mut font,
-                    win_w as i32,
-                    win_h as i32,
-                    rom_present.check(),
-                    discord_user.as_deref(),
-                    &main_leaderboard,
-                    toast_payload(&toast),
-                    menu_input_pad,
-                )
-                .map_err(|e| format!("menu draw: {e}"))?;
+                if let (AppState::FpUi(screen), Some(fpf)) = (&state, fp_fonts.as_mut()) {
+                    fp_ui::draw(screen, &mut canvas, fpf, win_w as i32, win_h as i32)
+                        .map_err(|e| format!("fp_ui draw: {e}"))?;
+                } else {
+                    menu::draw(
+                        &state,
+                        &cfg.bindings,
+                        &mut canvas,
+                        &mut font,
+                        win_w as i32,
+                        win_h as i32,
+                        rom_present.check(),
+                        discord_user.as_deref(),
+                        &main_leaderboard,
+                        toast_payload(&toast),
+                        menu_input_pad,
+                    )
+                    .map_err(|e| format!("menu draw: {e}"))?;
+                }
                 canvas.present();
                 canvas.set_logical_size(menu::LOGICAL_W as u32, menu::LOGICAL_H as u32)?;
             }

@@ -120,6 +120,14 @@ pub struct Config {
     /// specials. Valid range: 0–8.
     #[serde(default = "default_input_delay")]
     pub input_delay: u32,
+    /// Renders the new angular/red `fp_ui` screen set (Main Menu, Play,
+    /// Settings, Lobby, Quit) instead of the legacy `menu` screens. Off by
+    /// default: every screen the new set doesn't cover yet (Lab, Replays,
+    /// Ghost Select, Profile, Controls, non-Quick-Match Online tabs) always
+    /// stays on the legacy screens regardless of this flag — see
+    /// `crate::fp_ui` module docs.
+    #[serde(default)]
+    pub new_ui: bool,
 }
 
 impl Default for Config {
