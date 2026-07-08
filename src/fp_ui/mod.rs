@@ -17,6 +17,7 @@ pub mod geometry;
 pub mod input;
 pub mod layout;
 mod main_menu;
+mod quit;
 pub mod theme;
 
 pub use input::{event_to_fp_nav, FpNav};
@@ -26,11 +27,15 @@ use crate::font::FpFontCache;
 use sdl2::render::Canvas;
 use sdl2::video::Window;
 
-/// All fp_ui screens. `Main` is the only one implemented so far — Play,
-/// Settings, Lobby, and Quit land in steps 3-6.
+/// All fp_ui screens. Play, Settings, and Lobby land in steps 4-6.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FpScreen {
     Main { cursor: usize },
+    /// Quit confirmation, rendered on top of the Main Menu rather than
+    /// replacing it. `menu_cursor` is preserved so the dimmed menu behind
+    /// the modal (and the screen underneath if Cancel is chosen) still
+    /// shows the row the player quit from selected.
+    Quit { choice: usize, menu_cursor: usize },
 }
 
 impl FpScreen {
@@ -43,13 +48,16 @@ impl FpScreen {
 /// screen in place.
 pub enum FpResult {
     Stay,
-    /// Confirm on a Main Menu row. `cursor` is the same index space as
-    /// `menu::MAIN_ITEMS` — the caller sets
+    /// Confirm on a Main Menu row (any but Quit). `cursor` is the same
+    /// index space as `menu::MAIN_ITEMS` — the caller sets
     /// `state = AppState::Menu(MenuScreen::Main { cursor })` and lets the
     /// existing legacy `nav_accept` dispatch take it from there (ROM-present
     /// checks, screen construction, session/profile/replay side effects),
     /// rather than reimplementing any of that here.
     ActivateMainItem(usize),
+    /// EXIT GAME confirmed on the Quit overlay. The caller breaks the main
+    /// loop exactly like the legacy `NavResult::Quit`.
+    ExitGame,
 }
 
 pub fn nav(screen: &mut FpScreen, input: FpNav) -> FpResult {
@@ -63,7 +71,35 @@ pub fn nav(screen: &mut FpScreen, input: FpNav) -> FpResult {
                 *cursor = (*cursor + 1).min(crate::menu::MAIN_ITEMS.len() - 1);
                 FpResult::Stay
             }
-            FpNav::Confirm => FpResult::ActivateMainItem(*cursor),
+            FpNav::Confirm => {
+                if *cursor == crate::menu::MAIN_ITEMS.len() - 1 {
+                    // Quit is always the last item — open the overlay
+                    // instead of delegating to legacy's instant-exit.
+                    *screen = FpScreen::Quit { choice: 0, menu_cursor: *cursor };
+                    FpResult::Stay
+                } else {
+                    FpResult::ActivateMainItem(*cursor)
+                }
+            }
+            _ => FpResult::Stay,
+        },
+        FpScreen::Quit { choice, menu_cursor } => match input {
+            FpNav::Left | FpNav::Right => {
+                *choice = 1 - *choice;
+                FpResult::Stay
+            }
+            FpNav::Confirm => {
+                if *choice == 1 {
+                    FpResult::ExitGame
+                } else {
+                    *screen = FpScreen::Main { cursor: *menu_cursor };
+                    FpResult::Stay
+                }
+            }
+            FpNav::Back => {
+                *screen = FpScreen::Main { cursor: *menu_cursor };
+                FpResult::Stay
+            }
             _ => FpResult::Stay,
         },
     }
@@ -88,6 +124,10 @@ pub fn draw(
 
     match screen {
         FpScreen::Main { cursor } => main_menu::draw(canvas, fonts, &scale, *cursor, username)?,
+        FpScreen::Quit { choice, menu_cursor } => {
+            main_menu::draw(canvas, fonts, &scale, *menu_cursor, username)?;
+            quit::draw(canvas, fonts, &scale, *choice)?;
+        }
     }
 
     Ok(())

@@ -2821,6 +2821,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 fp_ui::FpResult::ActivateMainItem(cursor) => {
                                     state = AppState::Menu(MenuScreen::Main { cursor });
                                 }
+                                fp_ui::FpResult::ExitGame => break 'running,
                             }
                         }
                     }

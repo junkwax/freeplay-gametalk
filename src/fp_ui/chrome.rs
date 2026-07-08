@@ -196,28 +196,21 @@ pub enum FooterRight<'a> {
     Text(&'a str),
 }
 
-pub fn draw_footer(
+/// Draw a left-to-right row of button-prompt chips starting at logical
+/// `(x, row_cy)` (`row_cy` is the row's vertical center). Shared by the
+/// normal footer and the Quit overlay, which redraws this row with
+/// different prompts on top of the dim backdrop.
+pub fn draw_prompt_row(
     canvas: &mut Canvas<Window>,
     fonts: &mut FpFontCache,
     scale: &Scale,
     prompts: &[FooterPrompt],
-    right: FooterRight,
+    x: f32,
+    row_cy: f32,
 ) -> Result<(), String> {
-    let top_y = theme::VH - FOOTER_H;
-    let (_, border_y) = scale.point(0.0, top_y);
-    canvas.set_draw_color(Color::RGBA(255, 255, 255, 18));
-    canvas.fill_rect(Some(sdl2::rect::Rect::new(
-        0,
-        border_y,
-        scale.rect(0.0, 0.0, theme::VW, 1.0).width().max(1),
-        1,
-    )))?;
-
-    let mut x = SIDE_PAD;
+    let mut x = x;
     let chip_d = 34.0;
-    let row_cy = top_y + FOOTER_H / 2.0;
     for p in prompts {
-        fill_circle(canvas, scale, x + chip_d / 2.0, row_cy, chip_d / 2.0, Color::RGBA(0, 0, 0, 0));
         stroke_circle(canvas, scale, x + chip_d / 2.0, row_cy, chip_d / 2.0, p.color);
         let (gw, gh) = fonts.text_size(FpFont::SairaCondensedBold, scale.font_px(15.0), p.glyph);
         let (gx, gy) = scale.point(
@@ -237,6 +230,28 @@ pub fn draw_footer(
         )?;
         x += chip_d + 10.0 + (lw as f32 / scale.s) + 26.0;
     }
+    Ok(())
+}
+
+pub fn draw_footer(
+    canvas: &mut Canvas<Window>,
+    fonts: &mut FpFontCache,
+    scale: &Scale,
+    prompts: &[FooterPrompt],
+    right: FooterRight,
+) -> Result<(), String> {
+    let top_y = theme::VH - FOOTER_H;
+    let (_, border_y) = scale.point(0.0, top_y);
+    canvas.set_draw_color(Color::RGBA(255, 255, 255, 18));
+    canvas.fill_rect(Some(sdl2::rect::Rect::new(
+        0,
+        border_y,
+        scale.rect(0.0, 0.0, theme::VW, 1.0).width().max(1),
+        1,
+    )))?;
+
+    let row_cy = top_y + FOOTER_H / 2.0;
+    draw_prompt_row(canvas, fonts, scale, prompts, SIDE_PAD, row_cy)?;
 
     match right {
         FooterRight::Menu => {

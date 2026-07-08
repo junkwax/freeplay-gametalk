@@ -632,6 +632,13 @@ pub fn test_state(name: &str) -> Option<AppState> {
             }))
         }
         "main" => return Some(AppState::Menu(MenuScreen::Main { cursor: 0 })),
+        "fp:main" => return Some(AppState::FpUi(crate::fp_ui::FpScreen::Main { cursor: 0 })),
+        "fp:quit" => {
+            return Some(AppState::FpUi(crate::fp_ui::FpScreen::Quit {
+                choice: 0,
+                menu_cursor: MAIN_ITEMS.len() - 1,
+            }))
+        }
         "profile" => {
             return Some(AppState::Menu(MenuScreen::Profile {
                 state: ProfileScreenState::Empty {
