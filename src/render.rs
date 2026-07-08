@@ -535,19 +535,28 @@ fn frame_destination(
     match aspect {
         crate::config::AspectMode::Stretch => Some(Rect::new(0, 0, out_w, out_h)),
         crate::config::AspectMode::Integer => {
+            // `.max(1)` can force scale=1 even when the window is smaller
+            // than the native frame in one dimension (e.g. a narrow
+            // windowed-mode width) — in that case w/h legitimately exceed
+            // out_w/out_h, so the centering offset must be signed (a
+            // negative x/y just means the image is cropped at the edges,
+            // which SDL handles fine) rather than u32 subtraction, which
+            // would underflow.
             let scale = (out_w / frame_w).min(out_h / frame_h).max(1);
             let w = frame_w * scale;
             let h = frame_h * scale;
-            let x = ((out_w - w) / 2) as i32;
-            let y = ((out_h - h) / 2) as i32;
+            let x = (out_w as i32 - w as i32) / 2;
+            let y = (out_h as i32 - h as i32) / 2;
             Some(Rect::new(x, y, w, h))
         }
         crate::config::AspectMode::Fit => {
             let scale = (out_w as f32 / frame_w as f32).min(out_h as f32 / frame_h as f32);
             let w = (frame_w as f32 * scale).round().max(1.0) as u32;
             let h = (frame_h as f32 * scale).round().max(1.0) as u32;
-            let x = ((out_w - w) / 2) as i32;
-            let y = ((out_h - h) / 2) as i32;
+            // Signed for the same reason as the Integer branch above:
+            // rounding can push w/h a pixel past out_w/out_h.
+            let x = (out_w as i32 - w as i32) / 2;
+            let y = (out_h as i32 - h as i32) / 2;
             Some(Rect::new(x, y, w, h))
         }
     }
