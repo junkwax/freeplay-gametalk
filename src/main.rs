@@ -2847,6 +2847,92 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         config::save(&cfg);
                                     }
                                 }
+                                fp_ui::FpResult::StartFindMatch => {
+                                    let value = config::sanitize_username(&cfg.player_username)
+                                        .unwrap_or_else(config::default_username);
+                                    cfg.player_username = value.clone();
+                                    if cfg.player_username_confirmed {
+                                        // Already confirmed once — mirrors legacy's
+                                        // NavResult::OpenUsernameEntry exactly.
+                                        config::save(&cfg);
+                                        shutdown_for_online_start!("find-match queue");
+                                        start_find_match_queue(
+                                            &cfg,
+                                            &mut mm_rx,
+                                            &mut state,
+                                            value,
+                                            &mut discord_user,
+                                            &mut discord_id,
+                                        );
+                                    } else {
+                                        config::save(&cfg);
+                                        state = AppState::Menu(MenuScreen::MatchUsername {
+                                            value,
+                                            status: "This is your name — edit it or press Enter to claim it".into(),
+                                            checking: false,
+                                        });
+                                    }
+                                }
+                                fp_ui::FpResult::CreatePrivateLobby => {
+                                    // Mirrors legacy's NavResult::CreateLobby(format, true)
+                                    // with a fixed default format — fp_ui's Host/Join tab
+                                    // doesn't expose a format picker.
+                                    matchmaking::set_guest_profile(
+                                        cfg.player_username.clone(),
+                                        cfg.stats_email.clone(),
+                                        cfg.guest_device_id.clone(),
+                                    );
+                                    let host_name = if cfg.player_username.trim().is_empty() {
+                                        "Player".to_string()
+                                    } else {
+                                        format!("{}'s lobby", cfg.player_username)
+                                    };
+                                    let (tx, rx) = std::sync::mpsc::channel();
+                                    lobby_view_rx = Some(rx);
+                                    let format = menu::ChallengeFormat::UnrankedVs;
+                                    matchmaking::create_lobby(
+                                        tx,
+                                        host_name,
+                                        format.ranked(),
+                                        true,
+                                        format.wire().to_string(),
+                                    );
+                                    state = AppState::Menu(MenuScreen::Lobby {
+                                        id: String::new(),
+                                        view: None,
+                                        status: "Creating private lobby...".into(),
+                                        thumb: None,
+                                    });
+                                }
+                                fp_ui::FpResult::OpenJoinCode => {
+                                    // Mirrors legacy's NavResult::OpenJoinCode. `came_from`
+                                    // lands back on legacy Main (not fp_ui) if cancelled —
+                                    // a known small rough edge, see the Step 5 commit notes.
+                                    state = AppState::Menu(MenuScreen::TextEdit {
+                                        title: "JOIN LOBBY".into(),
+                                        label: "Enter the 6-character invite code".into(),
+                                        value: String::new(),
+                                        field: menu::EditField::JoinCode,
+                                        came_from: Box::new(menu::MenuScreen::Main { cursor: 0 }),
+                                    });
+                                }
+                                fp_ui::FpResult::JoinLobby(lobby_id) => {
+                                    // Mirrors legacy's NavResult::JoinLobby(id).
+                                    matchmaking::set_guest_profile(
+                                        cfg.player_username.clone(),
+                                        cfg.stats_email.clone(),
+                                        cfg.guest_device_id.clone(),
+                                    );
+                                    let (tx, rx) = std::sync::mpsc::channel();
+                                    lobby_view_rx = Some(rx);
+                                    matchmaking::join_lobby(tx, lobby_id.clone(), false);
+                                    state = AppState::Menu(MenuScreen::Lobby {
+                                        id: lobby_id,
+                                        view: None,
+                                        status: "Joining lobby...".into(),
+                                        thumb: None,
+                                    });
+                                }
                             }
                         }
                     }
@@ -3874,7 +3960,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         Instant::now() + Duration::from_millis(2200),
                                     ));
                                 }
-                                NavResult::Stay => {}
+                                NavResult::Stay => {
+                                    // "Online" (Main Menu item 0) landed in legacy's
+                                    // OnlineHub/Play tab via ActivateMainItem's
+                                    // delegation — hand off to fp_ui's own Lobby
+                                    // screen instead when the new UI is on, same
+                                    // pattern as OpenSettings just above.
+                                    if cfg.new_ui {
+                                        if let AppState::Menu(MenuScreen::OnlineHub {
+                                            tab: menu::OnlineTab::Play,
+                                            ..
+                                        }) = &state
+                                        {
+                                            state = AppState::FpUi(fp_ui::FpScreen::lobby());
+                                        }
+                                    }
+                                }
                                 NavResult::LoadGhost(path) => {
                                     ensure_core_loaded(
                                         &mut core,
@@ -6804,13 +6905,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
 
-                if matches!(
+                if (matches!(
                     state,
                     AppState::Menu(menu::MenuScreen::OnlineHub {
                         tab: menu::OnlineTab::Lobbies,
                         ..
                     })
-                ) && lobby_list_rx.is_none()
+                ) || matches!(
+                    state,
+                    AppState::FpUi(fp_ui::FpScreen::Lobby { tab: 2, .. })
+                )) && lobby_list_rx.is_none()
                     && Instant::now() >= lobby_list_next_refresh
                 {
                     let (tx, rx) = std::sync::mpsc::channel();
@@ -6820,13 +6924,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 if let Some(rx) = &lobby_list_rx {
-                    if let AppState::Menu(menu::MenuScreen::OnlineHub {
-                        ref mut status,
-                        ref mut lobbies,
-                        ref mut cursor,
-                        ..
-                    }) = state
-                    {
+                    // Same arrival handling either way — fp_ui's Server
+                    // Browser tab mirrors legacy OnlineHub's Lobbies tab
+                    // fields exactly (status/lobbies/cursor) rather than a
+                    // second fetch pipeline.
+                    let target = match &mut state {
+                        AppState::Menu(menu::MenuScreen::OnlineHub {
+                            status,
+                            lobbies,
+                            cursor,
+                            ..
+                        }) => Some((status, lobbies, cursor)),
+                        AppState::FpUi(fp_ui::FpScreen::Lobby {
+                            status,
+                            lobbies,
+                            cursor,
+                            ..
+                        }) => Some((status, lobbies, cursor)),
+                        _ => None,
+                    };
+                    if let Some((status, lobbies, cursor)) = target {
                         match rx.try_recv() {
                             Ok(matchmaking::LobbyListUpdate::Loaded(list)) => {
                                 *lobbies = list.into_iter().map(lobby_room_to_preview).collect();

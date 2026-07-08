@@ -67,15 +67,23 @@ fn fill(canvas: &mut Canvas<Window>, verts: &[SdlVertex; 6]) {
 }
 
 /// The 4 corners of a `skewX(deg)` parallelogram for a logical rect at
-/// `(x, y, w, h)`, per the handoff doc's formula, then converted to window
-/// space. `skew = tan(deg in radians)`; each corner's x shifts by
-/// `skew * (that corner's y)`.
+/// `(x, y, w, h)`, then converted to window space. `skew = tan(deg in
+/// radians)`; each corner's x shifts by `skew * (local y - h/2)` — local to
+/// the shape's own vertical center, matching CSS `transform: skewX()`'s
+/// default transform-origin (the element's own center), NOT the canvas
+/// origin. The handoff doc's own formula (`skew * that corner's absolute
+/// y`) was tried first and produces a net sideways drift proportional to a
+/// shape's absolute Y position — harmless near the top of the screen, badly
+/// wrong for anything positioned further down (a menu row near the bottom
+/// of a 1080-tall canvas would shift ~170px left of its intended x).
 fn skewed_corners(scale: &Scale, x: f32, y: f32, w: f32, h: f32, skew_deg: f32) -> [(f32, f32); 4] {
     let skew = skew_deg.to_radians().tan();
-    let tl = scale.point(x + skew * y, y);
-    let tr = scale.point(x + w + skew * y, y);
-    let bl = scale.point(x + skew * (y + h), y + h);
-    let br = scale.point(x + w + skew * (y + h), y + h);
+    let top_shift = skew * (-h / 2.0);
+    let bottom_shift = skew * (h / 2.0);
+    let tl = scale.point(x + top_shift, y);
+    let tr = scale.point(x + w + top_shift, y);
+    let bl = scale.point(x + bottom_shift, y + h);
+    let br = scale.point(x + w + bottom_shift, y + h);
     [
         (tl.0 as f32, tl.1 as f32),
         (tr.0 as f32, tr.1 as f32),

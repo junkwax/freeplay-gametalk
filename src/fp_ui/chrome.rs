@@ -29,7 +29,9 @@ pub const PROMPT_NAVIGATE: FooterPrompt = FooterPrompt {
     color: Color::RGB(0xcf, 0xcf, 0xc9),
 };
 pub const PROMPT_SELECT: FooterPrompt = FooterPrompt {
-    glyph: "\u{2715}",
+    // "X" rather than the Unicode multiplication-X glyph (U+2715) — also
+    // missing from Saira Condensed Bold, same issue as PROMPT_BACK's U+25CB.
+    glyph: "X",
     label: "Select",
     color: theme::BTN_CROSS,
 };

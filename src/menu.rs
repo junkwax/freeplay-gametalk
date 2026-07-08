@@ -312,7 +312,7 @@ impl ChallengeFormat {
         ChallengeFormat::RankedFt10,
     ];
 
-    fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             ChallengeFormat::UnrankedVs => "Unranked VS",
             ChallengeFormat::RankedFt3 => "Ranked FT3",
@@ -647,6 +647,44 @@ pub fn test_state(name: &str) -> Option<AppState> {
             return Some(AppState::FpUi(crate::fp_ui::FpScreen::settings_from_cfg(
                 &crate::config::load(),
             )))
+        }
+        "fp:lobby" => return Some(AppState::FpUi(crate::fp_ui::FpScreen::lobby())),
+        "fp:lobby:host" => {
+            return Some(AppState::FpUi(crate::fp_ui::FpScreen::Lobby {
+                tab: 1,
+                host_join_focus: 0,
+                cursor: 0,
+                lobbies: Vec::new(),
+                status: String::new(),
+            }))
+        }
+        "fp:lobby:browser" => {
+            return Some(AppState::FpUi(crate::fp_ui::FpScreen::Lobby {
+                tab: 2,
+                host_join_focus: 0,
+                cursor: 0,
+                lobbies: vec![
+                    LobbyPreview {
+                        id: "abc123".into(),
+                        name: "Test Lobby".into(),
+                        host: "Phantom_9847".into(),
+                        format: ChallengeFormat::UnrankedVs,
+                        players: 1,
+                        private: false,
+                        status: "OPEN".into(),
+                    },
+                    LobbyPreview {
+                        id: "def456".into(),
+                        name: "Ranked Room".into(),
+                        host: "ScorpionPit".into(),
+                        format: ChallengeFormat::RankedFt5,
+                        players: 2,
+                        private: false,
+                        status: "IN GAME".into(),
+                    },
+                ],
+                status: String::new(),
+            }))
         }
         "profile" => {
             return Some(AppState::Menu(MenuScreen::Profile {
