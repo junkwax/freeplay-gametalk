@@ -17,36 +17,58 @@ pub const FOOTER_H: f32 = 86.0;
 const SIDE_PAD: f32 = 56.0;
 
 /// Decorative background layer, drawn first (behind everything else, before
-/// `draw_header`): a neutral-gray glow fading down from the top of the
-/// screen, and a thin skewed accent line running down the middle of the
-/// content area. Shared across every fp_ui screen that wants this
-/// background treatment (currently the Main Menu and Play submenu) rather
-/// than duplicated per screen — `skew_deg` is passed in since each screen
-/// already has its own skew-angle constant matching its other angled
-/// elements (bars, chips) and this line should match them.
+/// `draw_header`): the mockup's actual stage background — a soft radial
+/// glow off-center toward the upper right, plus a vignette darkening the
+/// edges — and a thin skewed accent line running down the content area.
+/// Shared across every fp_ui screen that wants this background treatment
+/// (currently the Main Menu and Play submenu) rather than duplicated per
+/// screen — `skew_deg` is passed in since each screen already has its own
+/// skew-angle constant matching its other angled elements (bars, chips) and
+/// this line should match them.
 ///
-/// The glow's color/height were originally guessed (and guessed warm/red);
-/// sampling actual pixel values from a headless render of the reference
-/// mockup showed it's close to neutral gray (R\u{2248}G\u{2248}B, if anything
-/// a hair cool) and fades out gradually over roughly the top 80% of the
-/// screen, not the ~450px band this used to stop at — a plain top-heavy
-/// vertical fade, not angled despite reading that way next to the diagonal
-/// line beside it.
+/// A previous pass here approximated this as a flat top-to-bottom vertical
+/// fade (guessed, then "corrected" by sampling pixels near the screen's
+/// vertical centerline — which still looked plausibly like a vertical fade
+/// since that's close to the glow's own peak column). Reading the mockup's
+/// actual CSS (`radial-gradient(120% 120% at 78% 18%, #121217 0%, #0a0a0d
+/// 42%, #060608 100%)`) shows it's really an off-center radial glow, not a
+/// vertical one — a flat vertical rect can never reproduce that, which is
+/// why it read as "small and angled to the left" next to the skewed accent
+/// line (the rect contributed no horizontal shape of its own, so the line
+/// was the only thing giving an angled impression). SDL2 has no native
+/// radial-gradient primitive, so `geometry::fill_radial_gradient`
+/// approximates it with a Gouraud-shaded triangle fan (2-stop instead of
+/// the CSS's 3, but the 3 stops are all close, near-black values, so the
+/// visual difference is negligible).
 pub fn draw_background_accents(canvas: &mut Canvas<Window>, scale: &Scale, skew_deg: f32) -> Result<(), String> {
-    geometry::fill_vertical_gradient_rect(
+    // Radius covers well past the farthest corner (bottom-left, ~1740px from
+    // the 78%/18% center) so the fade reaches the base color before the
+    // canvas edge, matching the CSS version's 120%-sized ellipse.
+    geometry::fill_radial_gradient(
         canvas,
         scale,
-        0.0,
-        0.0,
-        theme::VW,
-        theme::VH * 0.85,
-        Color::RGBA(0x28, 0x28, 0x30, 45),
-        Color::RGBA(0x28, 0x28, 0x30, 0),
+        theme::VW * 0.78,
+        theme::VH * 0.18,
+        1800.0,
+        Color::RGB(0x12, 0x12, 0x17),
+        Color::RGB(0x06, 0x06, 0x08),
+    );
+    // Vignette: darkens the edges, transparent through the center ~55% of
+    // the radius (`radial-gradient(130% 130% at 50% 45%, transparent 55%,
+    // rgba(0,0,0,.55) 100%)`).
+    geometry::fill_radial_gradient(
+        canvas,
+        scale,
+        theme::VW * 0.5,
+        theme::VH * 0.45,
+        1900.0,
+        Color::RGBA(0, 0, 0, 0),
+        Color::RGBA(0, 0, 0, 140),
     );
     geometry::fill_skewed_rect(
         canvas,
         scale,
-        800.0,
+        780.0,
         0.0,
         1.5,
         theme::VH,

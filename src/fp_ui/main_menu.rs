@@ -37,7 +37,20 @@ const ROW_GAP: f32 = 4.0;
 const BAR_W: f32 = 8.0;
 const SKEW_DEG: f32 = -9.0;
 const LIST_X: f32 = 56.0;
-const LIST_TOP: f32 = 158.0; // header (104) + this screen's top:54 offset
+// Header (104) + this screen's own container `top:54` offset — the top of
+// the eyebrow ("ARCADE * FREEPLAY ONLINE"), not the row list. The row list
+// sits well below this: the eyebrow's own row height plus its CSS
+// `margin-bottom:30px` before the first item starts — see `ROWS_TOP`.
+const LIST_TOP: f32 = 158.0;
+// LIST_TOP plus the eyebrow row's height and its margin-bottom, measured
+// from a headless render of the reference mockup (the selected row's solid
+// accent bar spans logical y~214-306, i.e. row 0 begins at 214, not at
+// LIST_TOP) rather than guessed — a previous pass here used LIST_TOP
+// directly as the row list's own top and drew the eyebrow *above* it
+// (`LIST_TOP - 44.0`), which inverted the real relationship and packed
+// everything tight against the header instead of leaving the mockup's
+// breathing room between header -> eyebrow -> first row.
+const ROWS_TOP: f32 = LIST_TOP + 56.0;
 const LABEL_GAP: f32 = 26.0; // bar -> number -> label gap, per rowStyle
 
 /// (label, sub-label) — verbatim from the mockup's own `menuDefs`, minus
@@ -64,7 +77,7 @@ pub fn draw(
     draw_cabinet_title(canvas, fonts, scale)?;
 
     // Eyebrow: accent bar + "ARCADE * FREEPLAY ONLINE".
-    let eyebrow_y = LIST_TOP - 44.0;
+    let eyebrow_y = LIST_TOP;
     canvas.set_draw_color(theme::ACCENT);
     canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
     canvas.fill_rect(Some(scale.rect(LIST_X, eyebrow_y + 8.0, 30.0, 3.0)))?;
@@ -109,7 +122,7 @@ fn draw_row(
     sub: &str,
     selected: bool,
 ) -> Result<(), String> {
-    let y = LIST_TOP + index as f32 * (ROW_H + ROW_GAP);
+    let y = ROWS_TOP + index as f32 * (ROW_H + ROW_GAP);
 
     if selected {
         let tint = Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 36); // ~86% transparent
@@ -208,7 +221,7 @@ fn draw_last_match_card(
     profile: &ProfileScreenState,
     focused: bool,
 ) -> Result<(), String> {
-    let y = LIST_TOP + item_count * (ROW_H + ROW_GAP) + 42.0;
+    let y = ROWS_TOP + item_count * (ROW_H + ROW_GAP) + 42.0;
     let h = 78.0;
     let w = 620.0;
     canvas.set_draw_color(Color::RGBA(14, 14, 18, 178));

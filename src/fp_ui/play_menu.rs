@@ -22,7 +22,11 @@ const ROW_GAP: f32 = 4.0;
 const BAR_W: f32 = 8.0;
 const SKEW_DEG: f32 = -11.0;
 const LIST_X: f32 = 56.0;
-const LIST_TOP: f32 = 158.0; // header (104) + this screen's top:54 offset
+// Header (104) + this screen's own container `top:54` offset — the top of
+// the eyebrow, not the row list. See `main_menu.rs`'s identical constants
+// (same doc comment there) for how `ROWS_TOP`'s offset was measured.
+const LIST_TOP: f32 = 158.0;
+const ROWS_TOP: f32 = LIST_TOP + 56.0;
 const LABEL_GAP: f32 = 26.0;
 
 /// (label, sub-label) — verbatim from the mockup's `playMenuDefs`.
@@ -43,7 +47,7 @@ pub fn draw(
     chrome::draw_background_accents(canvas, scale, SKEW_DEG)?;
     chrome::draw_header(canvas, fonts, scale, username, true, None)?;
 
-    let eyebrow_y = LIST_TOP - 44.0;
+    let eyebrow_y = LIST_TOP;
     canvas.set_draw_color(theme::ACCENT);
     canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
     canvas.fill_rect(Some(scale.rect(LIST_X, eyebrow_y + 8.0, 34.0, 3.0)))?;
@@ -98,7 +102,7 @@ fn draw_row(
     sub: &str,
     selected: bool,
 ) -> Result<(), String> {
-    let y = LIST_TOP + index as f32 * (ROW_H + ROW_GAP);
+    let y = ROWS_TOP + index as f32 * (ROW_H + ROW_GAP);
 
     if selected {
         let tint = Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 36);

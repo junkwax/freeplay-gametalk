@@ -197,32 +197,29 @@ pub fn fill_triangle(canvas: &mut Canvas<Window>, scale: &Scale, points: [(f32, 
     fill_triangles(canvas, &verts);
 }
 
-/// Fill an axis-aligned logical rect `(x, y, w, h)` with a vertical color
-/// gradient (`top` at y, `bottom` at y+h) — used for the Main Menu's top
-/// background glow.
-pub fn fill_vertical_gradient_rect(
-    canvas: &mut Canvas<Window>,
-    scale: &Scale,
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
-    top: Color,
-    bottom: Color,
-) {
-    let tl = scale.point(x, y);
-    let tr = scale.point(x + w, y);
-    let bl = scale.point(x, y + h);
-    let br = scale.point(x + w, y + h);
+/// Fill a soft radial glow (logical center/radius) — `inner` at the center
+/// fading to `outer` at `r`, via a Gouraud-shaded triangle fan (same
+/// structure as `fill_circle`, just with the center vertex and perimeter
+/// ring colored differently so SDL interpolates a gradient across each
+/// triangle instead of a flat fill). Used to approximate the mockup's CSS
+/// `radial-gradient(...)` background glows, which SDL2 has no native
+/// primitive for.
+pub fn fill_radial_gradient(canvas: &mut Canvas<Window>, scale: &Scale, cx: f32, cy: f32, r: f32, inner: Color, outer: Color) {
     canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
-    let verts = [
-        vertex(tl.0 as f32, tl.1 as f32, top),
-        vertex(tr.0 as f32, tr.1 as f32, top),
-        vertex(br.0 as f32, br.1 as f32, bottom),
-        vertex(tl.0 as f32, tl.1 as f32, top),
-        vertex(br.0 as f32, br.1 as f32, bottom),
-        vertex(bl.0 as f32, bl.1 as f32, bottom),
-    ];
+    let center = scale.point(cx, cy);
+    let center_v = vertex(center.0 as f32, center.1 as f32, inner);
+    let mut perim = Vec::with_capacity(CIRCLE_SEGMENTS + 1);
+    for i in 0..=CIRCLE_SEGMENTS {
+        let a = std::f32::consts::TAU * i as f32 / CIRCLE_SEGMENTS as f32;
+        let p = scale.point(cx + a.cos() * r, cy + a.sin() * r);
+        perim.push(vertex(p.0 as f32, p.1 as f32, outer));
+    }
+    let mut verts = Vec::with_capacity(CIRCLE_SEGMENTS * 3);
+    for i in 0..CIRCLE_SEGMENTS {
+        verts.push(center_v);
+        verts.push(perim[i]);
+        verts.push(perim[i + 1]);
+    }
     fill_triangles(canvas, &verts);
 }
 
