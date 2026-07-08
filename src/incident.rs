@@ -43,6 +43,7 @@ pub const KIND_HOLE_PUNCH_FAILED: &str = "hole_punch_failed";
 pub const KIND_TURN_FALLBACK_FAILED: &str = "turn_fallback_failed";
 pub const KIND_GGRS_DISCONNECTED: &str = "ggrs_disconnected";
 pub const KIND_GGRS_NEVER_SYNCED: &str = "ggrs_never_synced";
+pub const KIND_GGRS_DESYNC: &str = "ggrs_desync_detected";
 pub const KIND_MATCH_ENDED_EARLY: &str = "match_ended_early";
 pub const KIND_SCORE_REJECTED: &str = "score_rejected";
 pub const KIND_PANIC: &str = "panic";

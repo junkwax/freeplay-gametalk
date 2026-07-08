@@ -5696,6 +5696,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if !intentional_quit && !completed_set {
                             let kind = if reason.contains("disconnected") {
                                 incident::KIND_GGRS_DISCONNECTED
+                            } else if reason.contains("desync") {
+                                incident::KIND_GGRS_DESYNC
                             } else if reason.contains("timed out") || reason.contains("no progress")
                             {
                                 if net_frame_counter < 60 {

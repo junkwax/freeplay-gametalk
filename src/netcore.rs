@@ -408,6 +408,48 @@ pub fn step_netplay_frame(
                 if let Some(f) = net_log.as_mut() {
                     let _ = writeln!(f, "{line}");
                 }
+
+                // Dump current savestate + SYSTEM_RAM for offline byte-diffing
+                // against the peer's own dump. This is "now", not exactly the
+                // state AT `frame` — the checksum event lags the actual frame
+                // by network RTT — but the session tears down immediately
+                // after, so it's within a handful of frames and still
+                // localizes the divergence when compared side-by-side.
+                let tag = if local_handle == 0 { "host" } else { "join" };
+                if let Some(state) = core.save_state() {
+                    let path = format!("desync_{tag}_frame{frame}.state");
+                    match std::fs::write(&path, &state) {
+                        Ok(()) => {
+                            let m = format!(
+                                "[net] dumped desync savestate ({} bytes) to {}",
+                                state.len(),
+                                path
+                            );
+                            println!("{m}");
+                            if let Some(f) = net_log.as_mut() {
+                                let _ = writeln!(f, "{m}");
+                            }
+                        }
+                        Err(e) => println!("[net] failed to write {path}: {e}"),
+                    }
+                }
+                if let Some(ram) = memory::snapshot(core) {
+                    let path = format!("desync_{tag}_frame{frame}.ram");
+                    match std::fs::write(&path, &ram) {
+                        Ok(()) => {
+                            let m = format!(
+                                "[net] dumped desync SYSTEM_RAM ({} bytes) to {}",
+                                ram.len(),
+                                path
+                            );
+                            println!("{m}");
+                            if let Some(f) = net_log.as_mut() {
+                                let _ = writeln!(f, "{m}");
+                            }
+                        }
+                        Err(e) => println!("[net] failed to write {path}: {e}"),
+                    }
+                }
             }
         }
     }

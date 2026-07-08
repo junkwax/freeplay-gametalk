@@ -236,6 +236,19 @@ pub fn audio_enabled() -> bool {
     av_mode() == AvMode::Normal
 }
 
+/// Diagnostic kill switch (env `FREEPLAY_NO_AV_SKIP=1`): make the
+/// GET_AUDIO_VIDEO_ENABLE answer always report video+audio enabled,
+/// regardless of `AvMode`. This is an A/B lever for the desync
+/// investigation — it never lets FBNeo see the video-disabled bit clear, so
+/// `pBurnDraw` is never NULLed on resim/fast-forward frames. If desyncs stop
+/// reproducing with this set, the T-Unit driver's null-draw path is
+/// implicated. Debug-only: forcing audio presentation on resim frames will
+/// produce audible glitches, which is expected and irrelevant to the test.
+fn no_av_skip() -> bool {
+    static FLAG: OnceLock<bool> = OnceLock::new();
+    *FLAG.get_or_init(|| crate::config::env_value("FREEPLAY_NO_AV_SKIP").is_some())
+}
+
 /// Compatibility wrappers: most call sites only toggle between fully
 /// presenting and fully silent.
 pub fn set_silent(on: bool) {
@@ -367,10 +380,10 @@ extern "C" fn environment_cb(cmd: u32, data: *mut c_void) -> bool {
                 //        throwaway instance of 2-instance runahead.
                 if !data.is_null() {
                     let mut flags: i32 = 0b100;
-                    if video_enabled() {
+                    if video_enabled() || no_av_skip() {
                         flags |= 0b001;
                     }
-                    if audio_enabled() {
+                    if audio_enabled() || no_av_skip() {
                         flags |= 0b010;
                     }
                     *(data as *mut i32) = flags;
