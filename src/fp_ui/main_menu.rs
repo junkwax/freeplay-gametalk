@@ -69,12 +69,13 @@ pub fn draw(
     cursor: usize,
     username: &str,
     profile: &ProfileScreenState,
+    rom_present: bool,
 ) -> Result<(), String> {
     chrome::draw_background_accents(canvas, scale, SKEW_DEG)?;
     chrome::draw_header(canvas, fonts, scale, username, true, None)?;
 
-    draw_ghost_watermark(canvas, fonts, scale)?;
-    draw_cabinet_title(canvas, fonts, scale)?;
+    draw_ghost_watermark(canvas, fonts, scale, rom_present)?;
+    draw_cabinet_title(canvas, fonts, scale, rom_present)?;
 
     // Eyebrow: accent bar + "ARCADE * FREEPLAY ONLINE".
     let eyebrow_y = LIST_TOP;
@@ -94,7 +95,12 @@ pub fn draw(
     )?;
 
     for (i, (label, sub)) in ITEMS.iter().enumerate() {
-        draw_row(canvas, fonts, scale, i, label, sub, i == cursor)?;
+        // PLAY (row 0) is the only row gated on a ROM being present —
+        // Arcade/Lab/Replays/Drones all end up calling ensure_core_loaded,
+        // which hard-fails without one, so there's nothing else under it
+        // to individually disable.
+        let disabled = i == 0 && !rom_present;
+        draw_row(canvas, fonts, scale, i, label, sub, i == cursor, disabled)?;
     }
 
     draw_last_match_card(canvas, fonts, scale, ITEMS.len() as f32, profile, cursor == ITEMS.len() + 1)?;
@@ -121,8 +127,13 @@ fn draw_row(
     label: &str,
     sub: &str,
     selected: bool,
+    disabled: bool,
 ) -> Result<(), String> {
     let y = ROWS_TOP + index as f32 * (ROW_H + ROW_GAP);
+    // Disabled (no ROM found) always reads as dim/inactive, even while the
+    // cursor sits on it for keyboard nav feedback — Confirm is a no-op
+    // there (see `nav`'s Main arm), so it shouldn't look inviting.
+    let selected = selected && !disabled;
 
     if selected {
         let tint = Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 36); // ~86% transparent
@@ -143,10 +154,16 @@ fn draw_row(
     fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(16.0), &num, nx, ny, num_color)?;
 
     let label_size = if selected { 52.0 } else { 42.0 };
-    let label_color = if selected { theme::TEXT } else { Color::RGB(0x6a, 0x6a, 0x72) };
+    let label_color = if disabled {
+        Color::RGB(0x3a, 0x3a, 0x3e)
+    } else if selected {
+        theme::TEXT
+    } else {
+        Color::RGB(0x6a, 0x6a, 0x72)
+    };
     let label_font = if selected { FpFont::SairaCondensedBlack } else { FpFont::SairaCondensedBold };
     let label_text = label.to_uppercase();
-    let sub_text = sub.to_uppercase();
+    let sub_text = if disabled { "NO ROM FOUND".to_string() } else { sub.to_uppercase() };
     let label_x = LIST_X + BAR_W + LABEL_GAP + 30.0 + LABEL_GAP;
     let label_px = scale.font_px(label_size);
     let sub_px = scale.font_px(15.0);
@@ -161,17 +178,23 @@ fn draw_row(
     let (label_inset, label_vis_h) = fonts.visible_span(label_font, label_px, &label_text);
     let label_vis_h_l = label_vis_h as f32 / scale.s;
     let gap = 14.0;
-    let (sub_inset, sub_vis_h) = if selected {
+    let (sub_inset, sub_vis_h) = if selected || disabled {
         fonts.visible_span(FpFont::SairaSemiBold, sub_px, &sub_text)
     } else {
         (0, 0)
     };
     let sub_vis_h_l = sub_vis_h as f32 / scale.s;
-    let block_h = if selected { label_vis_h_l + gap + sub_vis_h_l } else { label_vis_h_l };
+    let block_h = if selected || disabled { label_vis_h_l + gap + sub_vis_h_l } else { label_vis_h_l };
     let block_top = y + (ROW_H - block_h) / 2.0;
 
     let (lx, ly) = scale.point(label_x, block_top - label_inset as f32 / scale.s);
     fonts.draw_italic(canvas, label_font, label_px, &label_text, lx, ly, label_color)?;
+
+    if disabled {
+        let sub_visual_top = block_top + label_vis_h_l + gap;
+        let (sx, sy) = scale.point(label_x, sub_visual_top - sub_inset as f32 / scale.s);
+        fonts.draw(canvas, FpFont::SairaSemiBold, sub_px, &sub_text, sx, sy, Color::RGB(0x5a, 0x2a, 0x2a))?;
+    }
 
     if selected {
         let sub_visual_top = block_top + label_vis_h_l + gap;
@@ -241,19 +264,32 @@ fn draw_last_match_card(
     fonts.draw_tracked(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(11.0), "LAST MATCH", lx, ly, theme::MUTE, scale.len(4.0).round() as i32)?;
 
     let (main_text, sub_text) = last_match_text(profile);
+    let main_px = scale.font_px(20.0);
     let (mx, my) = scale.point(text_x, y + 32.0);
     let (main_w, _) = fonts.draw(
         canvas,
         FpFont::SairaCondensedBold,
-        scale.font_px(20.0),
+        main_px,
         &main_text,
         mx,
         my,
         Color::RGB(0xf2, 0xf2, 0xee),
     )?;
     if !sub_text.is_empty() {
-        let (sx, sy) = scale.point(text_x + (main_w as f32 / scale.s) + 10.0, y + 35.0);
-        fonts.draw(canvas, FpFont::ChakraPetchMedium, scale.font_px(15.0), &sub_text, sx, sy, Color::RGB(0x5e, 0x5e, 0x66))?;
+        // Baseline-align the smaller date/score text against the main
+        // line's own visible glyph bottom (`visible_span`, not a flat
+        // guessed offset — a fixed +3px gap looked fine for one font-size
+        // pairing but drifted noticeably out of line here, same root cause
+        // `visible_span` was already introduced for elsewhere in this
+        // screen). All-caps text with no descenders on either run, so
+        // aligning visible bottoms approximates true baseline alignment.
+        let sub_px = scale.font_px(15.0);
+        let (main_inset, main_vis_h) = fonts.visible_span(FpFont::SairaCondensedBold, main_px, &main_text);
+        let main_bottom = y + 32.0 + (main_inset + main_vis_h) as f32 / scale.s;
+        let (sub_inset, sub_vis_h) = fonts.visible_span(FpFont::ChakraPetchMedium, sub_px, &sub_text);
+        let sub_top = main_bottom - (sub_inset + sub_vis_h) as f32 / scale.s;
+        let (sx, sy) = scale.point(text_x + (main_w as f32 / scale.s) + 10.0, sub_top);
+        fonts.draw(canvas, FpFont::ChakraPetchMedium, sub_px, &sub_text, sx, sy, Color::RGB(0x5e, 0x5e, 0x66))?;
     }
     Ok(())
 }
@@ -462,32 +498,36 @@ fn stat_values(profile: &ProfileScreenState) -> (String, String, String) {
 /// exist in the current mockup; that box has been replaced by the real
 /// "LAST MATCH" card (`draw_last_match_card`), which is what actually sits
 /// below the item list in this version of the markup.
-fn draw_cabinet_title(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scale: &Scale) -> Result<(), String> {
+fn draw_cabinet_title(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scale: &Scale, rom_present: bool) -> Result<(), String> {
     let bottom = theme::VH - chrome::FOOTER_H - 96.0;
-    let title = "MORTAL KOMBAT";
+    // No ROM found: don't claim MK2 is loaded and ready to play — real
+    // data only, same reasoning as the "?" watermark next to this.
+    let title = if rom_present { "MORTAL KOMBAT" } else { "NO ROM FOUND" };
     let title_track = scale.len(11.0).round() as i32;
     let (tw, th) = fonts.text_size_tracked(FpFont::SairaCondensedBold, scale.font_px(32.0), title, title_track);
     let (tx, ty) = scale.point(theme::VW - 96.0 - (tw as f32 / scale.s), bottom - (th as f32 / scale.s));
     fonts.draw_tracked(canvas, FpFont::SairaCondensedBold, scale.font_px(32.0), title, tx, ty, Color::RGB(0xde, 0xde, 0xd8), title_track)?;
 
-    let sub = "ARCADE \u{b7} 1993 \u{b7} NETPLAY FREEPLAY";
+    let sub = if rom_present {
+        "ARCADE \u{b7} 1993 \u{b7} NETPLAY FREEPLAY"
+    } else {
+"PLACE mk2.zip NEXT TO THE EXE OR IN roms\\"
+    };
     let sub_track = scale.len(6.0).round() as i32;
     let (sw, _) = fonts.text_size_tracked(FpFont::ChakraPetchMedium, scale.font_px(14.0), sub, sub_track);
     let (sx, sy) = scale.point(theme::VW - 96.0 - (sw as f32 / scale.s), bottom + 8.0);
     fonts.draw_tracked(canvas, FpFont::ChakraPetchMedium, scale.font_px(14.0), sub, sx, sy, Color::RGB(0x5e, 0x5e, 0x66), sub_track)?;
 
-    // ROM identity line — no real MK2 arcade board revision is tracked or
-    // detectable anywhere in this app (unlike the mockup's invented "ROM rev
-    // L3.1"), so rather than fabricate a revision string this shows the two
-    // pieces of real data this app actually has about what's running: the
-    // ROM zip's own FNV hash and the FBNeo core build tag (the same two
-    // values folded into `matchmaking::rom_short_hash()` for netplay
-    // compatibility matching), not app version (already shown in the header).
-    let rom_line = format!("ROM {} \u{b7} CORE {}", crate::matchmaking::rom_fnv_hash(), crate::retro::core_compat_tag());
-    let (rw, _) = fonts.text_size(FpFont::ChakraPetchMedium, scale.font_px(12.0), &rom_line);
-    let (rx, ry) = scale.point(theme::VW - 96.0 - (rw as f32 / scale.s), bottom + 28.0);
-    fonts.draw(canvas, FpFont::ChakraPetchMedium, scale.font_px(12.0), &rom_line, rx, ry, Color::RGB(0x3a, 0x3a, 0x42))?;
+    // ROM identity line (FNV hash + core build tag) hidden for now per
+    // direct user feedback ("not needed right now") — kept as a function,
+    // not deleted, in case it comes back; same "hidden not deleted"
+    // treatment as Network News elsewhere in fp_ui.
     Ok(())
+}
+
+#[allow(dead_code)]
+fn rom_identity_line() -> String {
+    format!("ROM {} \u{b7} CORE {}", crate::matchmaking::rom_fnv_hash(), crate::retro::core_compat_tag())
 }
 
 /// Bottom wire ticker, directly above the footer. Not called right now —
@@ -526,9 +566,14 @@ fn draw_ticker(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scale: &Sca
 /// the same glyph in accent color at several small offsets behind the
 /// near-black fill — a cheap poor-man's outline, not a true vector stroke,
 /// but it reads as a colored rim at this glyph's size.
-fn draw_ghost_watermark(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scale: &Scale) -> Result<(), String> {
+fn draw_ghost_watermark(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scale: &Scale, rom_present: bool) -> Result<(), String> {
+    // No ROM found: "?" instead of the "II" mark, matching legacy's own
+    // "hard-fail rather than pretend the game is there" stance — this
+    // screen otherwise implies MK2 is loaded and ready (the "II" mark, the
+    // "MORTAL KOMBAT" caption below it) when it may not actually be.
+    let text = if rom_present { "II" } else { "?" };
     let px = scale.font_px(720.0);
-    let (w, h) = fonts.text_size(FpFont::SairaCondensedBlack, px, "II");
+    let (w, h) = fonts.text_size(FpFont::SairaCondensedBlack, px, text);
     let (x, y) = scale.point(
         theme::VW + 30.0 - (w as f32 / scale.s),
         theme::VH / 2.0 - (h as f32 / scale.s) / 2.0,
@@ -536,8 +581,8 @@ fn draw_ghost_watermark(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, sc
     let stroke_color = Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 82);
     let r = scale.len(1.0).round().max(1.0) as i32;
     for (dx, dy) in [(-r, -r), (0, -r), (r, -r), (-r, 0), (r, 0), (-r, r), (0, r), (r, r)] {
-        fonts.draw_italic(canvas, FpFont::SairaCondensedBlack, px, "II", x + dx, y + dy, stroke_color)?;
+        fonts.draw_italic(canvas, FpFont::SairaCondensedBlack, px, text, x + dx, y + dy, stroke_color)?;
     }
-    fonts.draw_italic(canvas, FpFont::SairaCondensedBlack, px, "II", x, y, Color::RGB(0x0c, 0x0c, 0x11))?;
+    fonts.draw_italic(canvas, FpFont::SairaCondensedBlack, px, text, x, y, Color::RGB(0x0c, 0x0c, 0x11))?;
     Ok(())
 }

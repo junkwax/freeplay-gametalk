@@ -78,10 +78,8 @@ pub fn draw(
     let (subx, suby) = scale.point(theme::VW - 96.0 - (subw as f32 / scale.s), bottom + 8.0);
     fonts.draw_tracked(canvas, FpFont::ChakraPetchMedium, scale.font_px(14.0), sub, subx, suby, Color::RGB(0x5e, 0x5e, 0x66), sub_track)?;
 
-    let rom_line = format!("ROM {} \u{b7} CORE {}", crate::matchmaking::rom_fnv_hash(), crate::retro::core_compat_tag());
-    let (rw, _) = fonts.text_size(FpFont::ChakraPetchMedium, scale.font_px(12.0), &rom_line);
-    let (rx, ry) = scale.point(theme::VW - 96.0 - (rw as f32 / scale.s), bottom + 28.0);
-    fonts.draw(canvas, FpFont::ChakraPetchMedium, scale.font_px(12.0), &rom_line, rx, ry, Color::RGB(0x3a, 0x3a, 0x42))?;
+    // ROM identity line hidden for now, same as Main Menu's — see its
+    // doc comment.
 
     chrome::draw_footer(
         canvas,

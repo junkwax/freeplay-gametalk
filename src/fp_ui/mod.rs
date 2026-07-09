@@ -301,7 +301,7 @@ pub enum FpResult {
     LoadRemoteReplay(String),
 }
 
-pub fn nav(screen: &mut FpScreen, input: FpNav) -> FpResult {
+pub fn nav(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult {
     match screen {
         FpScreen::Main { cursor } => match input {
             FpNav::Up => {
@@ -342,7 +342,15 @@ pub fn nav(screen: &mut FpScreen, input: FpNav) -> FpResult {
             FpNav::Confirm if *cursor == MAIN_LAST_MATCH_INDEX => FpResult::WatchLastMatchReplay,
             FpNav::Confirm => match *cursor {
                 c if c == MAIN_PLAY_INDEX => {
-                    *screen = FpScreen::PlayMenu { cursor: 0 };
+                    // Nothing under Play works without the ROM (Arcade/Lab/
+                    // Replays/Drones all end up calling ensure_core_loaded,
+                    // which hard-fails without it) — block entry here
+                    // rather than letting the player pick a row that can
+                    // only silently fail deeper in, matching the dimmed
+                    // row `main_menu::draw_row` shows for the same reason.
+                    if rom_present {
+                        *screen = FpScreen::PlayMenu { cursor: 0 };
+                    }
                     FpResult::Stay
                 }
                 c if c == MAIN_ONLINE_INDEX => {
@@ -672,6 +680,7 @@ pub fn draw(
     bindings: &crate::input::Bindings,
     stats_email: &str,
     discord_connected: bool,
+    rom_present: bool,
 ) -> Result<(), String> {
     let scale = Scale::compute(win_w, win_h);
     fonts.begin_frame(scale.s);
@@ -679,9 +688,9 @@ pub fn draw(
     canvas.clear();
 
     match screen {
-        FpScreen::Main { cursor } => main_menu::draw(canvas, fonts, &scale, *cursor, username, profile)?,
+        FpScreen::Main { cursor } => main_menu::draw(canvas, fonts, &scale, *cursor, username, profile, rom_present)?,
         FpScreen::Quit { choice, menu_cursor } => {
-            main_menu::draw(canvas, fonts, &scale, *menu_cursor, username, profile)?;
+            main_menu::draw(canvas, fonts, &scale, *menu_cursor, username, profile, rom_present)?;
             quit::draw(canvas, fonts, &scale, *choice)?;
         }
         FpScreen::PlayMenu { cursor } => play_menu::draw(canvas, fonts, &scale, *cursor, username)?,

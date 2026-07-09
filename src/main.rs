@@ -1063,6 +1063,20 @@ fn scan_local_replay_entries() -> Vec<menu::ReplayEntry> {
         .collect()
 }
 
+/// Exiting replay review (Escape/Back, controller B, or natural playback
+/// completion) used to always land on the *legacy* ReplaySelect regardless
+/// of `cfg.new_ui` — the fp_ui Replays screen has no `came_from` to return
+/// to (review reuses `AppState::Playing`, not a dedicated state), so this
+/// picks the right screen shape to return to instead.
+fn replay_select_exit_state(new_ui: bool, status: impl Into<String>) -> AppState {
+    let status = Some(status.into());
+    if new_ui {
+        AppState::FpUi(fp_ui::FpScreen::ReplaySelect { cursor: 0, entries: Vec::new(), status })
+    } else {
+        AppState::Menu(MenuScreen::ReplaySelect { cursor: 0, entries: Vec::new(), status })
+    }
+}
+
 fn refresh_replay_select(state: &mut AppState, status: Option<String>) {
     let cursor_entries_status = match state {
         AppState::Menu(MenuScreen::ReplaySelect { cursor, entries, status: screen_status }) => {
@@ -1957,11 +1971,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if let Some(url) = startup_replay_url.take() {
         println!("[replay] Downloading remote replay: {url}");
-        state = AppState::Menu(MenuScreen::ReplaySelect {
-            cursor: 0,
-            entries: vec![],
-            status: Some("Downloading replay...".into()),
-        });
+        state = replay_select_exit_state(cfg.new_ui, "Downloading replay...");
         match download_remote_replay(&url) {
             Ok(path) => match ensure_core_loaded(&mut core, &mut audio_queue, &audio_subsystem) {
                 Ok(()) => {
@@ -3030,7 +3040,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 _ if matches!(state, AppState::FpUi(_)) || matches!(state, AppState::Menu(_)) => {
                     if let AppState::FpUi(screen) = &mut state {
                         if let Some(nav) = fp_ui::event_to_fp_nav(&event) {
-                            match fp_ui::nav(screen, nav) {
+                            match fp_ui::nav(screen, nav, rom_present.check()) {
                                 fp_ui::FpResult::Stay => {}
                                 fp_ui::FpResult::ActivateMainItem(cursor) => {
                                     state = AppState::Menu(MenuScreen::Main { cursor });
@@ -4738,11 +4748,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         replay_clip_in = None;
                         replay_clip_out = None;
                         input::clear_all_inputs();
-                        state = AppState::Menu(MenuScreen::ReplaySelect {
-                            cursor: 0,
-                            entries: vec![],
-                            status: Some("Replay stopped".into()),
-                        });
+                        state = replay_select_exit_state(cfg.new_ui, "Replay stopped");
                         refresh_replay_select(&mut state, Some("Replay stopped".into()));
                     }
                     Event::ControllerButtonDown {
@@ -4757,11 +4763,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         replay_clip_in = None;
                         replay_clip_out = None;
                         input::clear_all_inputs();
-                        state = AppState::Menu(MenuScreen::ReplaySelect {
-                            cursor: 0,
-                            entries: vec![],
-                            status: Some("Replay stopped".into()),
-                        });
+                        state = replay_select_exit_state(cfg.new_ui, "Replay stopped");
                         refresh_replay_select(&mut state, Some("Replay stopped".into()));
                     }
                     Event::KeyDown {
@@ -6106,11 +6108,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 replay_clip_in = None;
                                 replay_clip_out = None;
                                 input::clear_all_inputs();
-                                state = AppState::Menu(MenuScreen::ReplaySelect {
-                                    cursor: 0,
-                                    entries: vec![],
-                                    status: Some("Replay complete".into()),
-                                });
+                                state = replay_select_exit_state(cfg.new_ui, "Replay complete");
                                 refresh_replay_select(&mut state, Some("Replay complete".into()));
                             }
                         }
@@ -7164,6 +7162,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &cfg.bindings,
                         &cfg.stats_email,
                         discord_user.is_some(),
+                        rom_present.check(),
                     )
                     .map_err(|e| format!("fp_ui draw: {e}"))?;
                     // fp_ui screens have no toast param of their own (unlike
@@ -8169,6 +8168,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &cfg.bindings,
                         &cfg.stats_email,
                         discord_user.is_some(),
+                        rom_present.check(),
                     )
                     .map_err(|e| format!("fp_ui draw: {e}"))?;
                     // fp_ui screens have no toast param of their own (unlike
