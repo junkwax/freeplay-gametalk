@@ -1039,31 +1039,42 @@ fn enter_replay_review(
     *state = AppState::Playing;
 }
 
+/// Shared by `refresh_replay_select` (legacy) and the native
+/// `fp_ui::FpScreen::ReplaySelect` — same local `.ncrp` scan, two different
+/// chooser UIs.
+fn scan_local_replay_entries() -> Vec<menu::ReplayEntry> {
+    match_replay::list_online_replays()
+        .into_iter()
+        .map(|meta| menu::ReplayEntry {
+            filename: meta.filename,
+            path: meta.path,
+            remote_url: None,
+            p1_name: meta.p1_name,
+            p2_name: meta.p2_name,
+            p1_score: meta.p1_score,
+            p2_score: meta.p2_score,
+            winner: meta.winner,
+            frame_count: meta.frame_count,
+            duration: meta.duration,
+            recorded_at: String::new(),
+            note: meta.note,
+            bookmark_count: meta.bookmark_count,
+        })
+        .collect()
+}
+
 fn refresh_replay_select(state: &mut AppState, status: Option<String>) {
-    if let AppState::Menu(MenuScreen::ReplaySelect {
-        cursor,
-        entries,
-        status: screen_status,
-    }) = state
-    {
-        *entries = match_replay::list_online_replays()
-            .into_iter()
-            .map(|meta| menu::ReplayEntry {
-                filename: meta.filename,
-                path: meta.path,
-                remote_url: None,
-                p1_name: meta.p1_name,
-                p2_name: meta.p2_name,
-                p1_score: meta.p1_score,
-                p2_score: meta.p2_score,
-                winner: meta.winner,
-                frame_count: meta.frame_count,
-                duration: meta.duration,
-                recorded_at: String::new(),
-                note: meta.note,
-                bookmark_count: meta.bookmark_count,
-            })
-            .collect();
+    let cursor_entries_status = match state {
+        AppState::Menu(MenuScreen::ReplaySelect { cursor, entries, status: screen_status }) => {
+            Some((cursor, entries, screen_status))
+        }
+        AppState::FpUi(fp_ui::FpScreen::ReplaySelect { cursor, entries, status: screen_status }) => {
+            Some((cursor, entries, screen_status))
+        }
+        _ => None,
+    };
+    if let Some((cursor, entries, screen_status)) = cursor_entries_status {
+        *entries = scan_local_replay_entries();
         if entries.is_empty() {
             *cursor = 0;
         } else if *cursor >= entries.len() {
@@ -1080,6 +1091,10 @@ fn refresh_replay_select(state: &mut AppState, status: Option<String>) {
 }
 
 fn set_replay_select_status(state: &mut AppState, status: impl Into<String>) {
+    let status = status.into();
+    if let AppState::FpUi(fp_ui::FpScreen::ReplaySelect { status: screen_status, .. }) = state {
+        *screen_status = Some(status.clone());
+    }
     if let AppState::Menu(MenuScreen::ReplaySelect {
         status: screen_status,
         ..
@@ -3331,6 +3346,82 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         *status = Some(format!("Downloading {ghost_id}..."));
                                     }
                                     matchmaking::download_ghost(cfg.stats_url.clone(), ghost_id, local_path, tx);
+                                }
+                                fp_ui::FpResult::OpenReplaySelect => {
+                                    // Mirrors legacy's NavResult::OpenReplaySelect exactly;
+                                    // `refresh_replay_select` already branches on either
+                                    // screen shape (see its own definition).
+                                    refresh_replay_select(&mut state, Some("Loading public replays...".into()));
+                                    let (tx, rx) = std::sync::mpsc::channel();
+                                    public_replay_rx = Some(rx);
+                                    matchmaking::fetch_public_replays(cfg.stats_url.clone(), tx);
+                                }
+                                fp_ui::FpResult::LoadReplay(path) => {
+                                    // Mirrors legacy's NavResult::LoadReplay(path) exactly.
+                                    ensure_core_loaded(&mut core, &mut audio_queue, &audio_subsystem)?;
+                                    if let Some(c) = &core {
+                                        match prepare_replay_review(c, &path) {
+                                            Ok(pb) => enter_replay_review(
+                                                pb,
+                                                &mut match_replay_playback,
+                                                &mut replay_review_paused,
+                                                &mut replay_review_speed,
+                                                &mut replay_review_tick,
+                                                &mut replay_event_filter,
+                                                &mut replay_clip_in,
+                                                &mut replay_clip_out,
+                                                &mut ghost_playback,
+                                                &mut ghost_recording,
+                                                &mut drone_runner,
+                                                &mut input_history,
+                                                &mut clip_recorder,
+                                                &mut toast,
+                                                &mut state,
+                                            ),
+                                            Err(e) => {
+                                                println!("[replay] Load failed: {e}");
+                                                refresh_replay_select(&mut state, Some(format!("Error: {e}")));
+                                            }
+                                        }
+                                    }
+                                }
+                                fp_ui::FpResult::LoadRemoteReplay(url) => {
+                                    // Mirrors legacy's NavResult::LoadRemoteReplay(url).
+                                    set_replay_select_status(&mut state, "Downloading public replay...");
+                                    match download_remote_replay(&url) {
+                                        Ok(path) => {
+                                            ensure_core_loaded(&mut core, &mut audio_queue, &audio_subsystem)?;
+                                            if let Some(c) = &core {
+                                                match prepare_replay_review(c, &path) {
+                                                    Ok(pb) => enter_replay_review(
+                                                        pb,
+                                                        &mut match_replay_playback,
+                                                        &mut replay_review_paused,
+                                                        &mut replay_review_speed,
+                                                        &mut replay_review_tick,
+                                                        &mut replay_event_filter,
+                                                        &mut replay_clip_in,
+                                                        &mut replay_clip_out,
+                                                        &mut ghost_playback,
+                                                        &mut ghost_recording,
+                                                        &mut drone_runner,
+                                                        &mut input_history,
+                                                        &mut clip_recorder,
+                                                        &mut toast,
+                                                        &mut state,
+                                                    ),
+                                                    Err(e) => {
+                                                        println!("[replay] Load failed: {e}");
+                                                        set_replay_select_status(&mut state, format!("Error: {e}"));
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            println!("[replay] Remote download failed: {e}");
+                                            set_replay_select_status(&mut state, format!("Download failed: {e}"));
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -7861,12 +7952,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 // Drain the public replay index fetcher channel.
                 if let Some(rx) = &public_replay_rx {
-                    if let AppState::Menu(menu::MenuScreen::ReplaySelect {
-                        ref mut entries,
-                        ref mut status,
-                        ..
-                    }) = state
-                    {
+                    let entries_status = match &mut state {
+                        AppState::Menu(menu::MenuScreen::ReplaySelect { entries, status, .. }) => {
+                            Some((entries, status))
+                        }
+                        AppState::FpUi(fp_ui::FpScreen::ReplaySelect { entries, status, .. }) => {
+                            Some((entries, status))
+                        }
+                        _ => None,
+                    };
+                    if let Some((entries, status)) = entries_status {
                         match rx.try_recv() {
                             Ok(matchmaking::PublicReplayUpdate::Loaded(replays)) => {
                                 let loaded_count = replays.len();

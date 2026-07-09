@@ -26,6 +26,7 @@ mod play_menu;
 mod profile;
 mod quit;
 pub mod rankings;
+mod replay_select;
 pub mod settings;
 pub mod theme;
 
@@ -73,7 +74,6 @@ const MAIN_LAST_MATCH_INDEX: usize = MAIN_ITEM_COUNT + 1;
 /// inlined as magic numbers) since fp_ui's own Main Menu no longer mirrors
 /// legacy's ordering 1:1 the way it used to.
 const LEGACY_ARCADE_INDEX: usize = 1;
-const LEGACY_REPLAYS_INDEX: usize = 3;
 
 /// fp_ui's own PlayMenu cursor space (Arcade/Lab/Replays/Drones).
 const PLAY_ARCADE_INDEX: usize = 0;
@@ -109,6 +109,16 @@ pub enum FpScreen {
     GhostSelect {
         cursor: usize,
         entries: Vec<crate::menu::GhostEntry>,
+        status: Option<String>,
+    },
+    /// Replays — native redesign of legacy's `MenuScreen::ReplaySelect`.
+    /// Same populate/drain pattern as `GhostSelect` above (see
+    /// `FpResult::OpenReplaySelect`/`LoadReplay`/`LoadRemoteReplay`); the
+    /// replay *playback* viewer itself stays legacy, only this chooser
+    /// list is native. See `replay_select.rs`.
+    ReplaySelect {
+        cursor: usize,
+        entries: Vec<crate::menu::ReplayEntry>,
         status: Option<String>,
     },
     /// Static bulletin board ("the wire") — no backend exists for this
@@ -277,6 +287,18 @@ pub enum FpResult {
     /// Confirm on a community drone entry. Caller does exactly what
     /// legacy's `NavResult::DownloadGhost(ghost_id)` does.
     DownloadGhost(String),
+    /// Entered the (native) Replays screen. Caller does exactly what
+    /// legacy's `NavResult::OpenReplaySelect` does — scans local `.ncrp`
+    /// files and kicks off a `fetch_public_replays` for community replays —
+    /// targeting `FpScreen::ReplaySelect`'s fields instead of the legacy
+    /// screen's.
+    OpenReplaySelect,
+    /// Confirm on a local replay entry. Caller does exactly what legacy's
+    /// `NavResult::LoadReplay(path)` does.
+    LoadReplay(String),
+    /// Confirm on a community replay entry. Caller does exactly what
+    /// legacy's `NavResult::LoadRemoteReplay(url)` does.
+    LoadRemoteReplay(String),
 }
 
 pub fn nav(screen: &mut FpScreen, input: FpNav) -> FpResult {
@@ -364,7 +386,10 @@ pub fn nav(screen: &mut FpScreen, input: FpNav) -> FpResult {
                     *screen = FpScreen::LabMenu { cursor: 0 };
                     FpResult::Stay
                 }
-                c if c == PLAY_REPLAYS_INDEX => FpResult::ActivateMainItem(LEGACY_REPLAYS_INDEX),
+                c if c == PLAY_REPLAYS_INDEX => {
+                    *screen = FpScreen::ReplaySelect { cursor: 0, entries: Vec::new(), status: None };
+                    FpResult::OpenReplaySelect
+                }
                 _ => {
                     // Drones — jumps straight to the drone list, same shortcut
                     // legacy's own Play submenu gives this row (skipping the
@@ -421,6 +446,28 @@ pub fn nav(screen: &mut FpScreen, input: FpNav) -> FpResult {
             },
             FpNav::Back => {
                 *screen = FpScreen::LabMenu { cursor: 1 };
+                FpResult::Stay
+            }
+            _ => FpResult::Stay,
+        },
+        FpScreen::ReplaySelect { cursor, entries, .. } => match input {
+            FpNav::Up => {
+                *cursor = cursor.saturating_sub(1);
+                FpResult::Stay
+            }
+            FpNav::Down => {
+                *cursor = (*cursor + 1).min(entries.len().saturating_sub(1));
+                FpResult::Stay
+            }
+            FpNav::Confirm => match entries.get(*cursor) {
+                Some(entry) => match &entry.remote_url {
+                    Some(url) => FpResult::LoadRemoteReplay(url.clone()),
+                    None => FpResult::LoadReplay(entry.path.clone()),
+                },
+                None => FpResult::Stay,
+            },
+            FpNav::Back => {
+                *screen = FpScreen::PlayMenu { cursor: PLAY_REPLAYS_INDEX };
                 FpResult::Stay
             }
             _ => FpResult::Stay,
@@ -641,6 +688,9 @@ pub fn draw(
         FpScreen::LabMenu { cursor } => lab_menu::draw(canvas, fonts, &scale, *cursor, username)?,
         FpScreen::GhostSelect { cursor, entries, status } => {
             ghost_select::draw(canvas, fonts, &scale, *cursor, entries, status.as_deref(), username)?
+        }
+        FpScreen::ReplaySelect { cursor, entries, status } => {
+            replay_select::draw(canvas, fonts, &scale, *cursor, entries, status.as_deref(), username)?
         }
         FpScreen::Bandwidth => bandwidth::draw(canvas, fonts, &scale, username)?,
         FpScreen::Rankings => rankings::draw(canvas, fonts, &scale, username, leaderboard)?,
