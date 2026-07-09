@@ -648,6 +648,14 @@ pub fn test_state(name: &str) -> Option<AppState> {
             }))
         }
         "fp:playmenu" => return Some(AppState::FpUi(crate::fp_ui::FpScreen::PlayMenu { cursor: 0 })),
+        "fp:labmenu" => return Some(AppState::FpUi(crate::fp_ui::FpScreen::LabMenu { cursor: 0 })),
+        "fp:ghostselect" => {
+            return Some(AppState::FpUi(crate::fp_ui::FpScreen::GhostSelect {
+                cursor: 0,
+                entries: vec![],
+                status: None,
+            }))
+        }
         "fp:bandwidth" => return Some(AppState::FpUi(crate::fp_ui::FpScreen::Bandwidth)),
         "fp:rankings" => return Some(AppState::FpUi(crate::fp_ui::FpScreen::Rankings)),
         "fp:about" => return Some(AppState::FpUi(crate::fp_ui::FpScreen::About)),

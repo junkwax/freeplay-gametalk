@@ -726,6 +726,39 @@ fn stable_url_hash(url: &str) -> u64 {
     hash
 }
 
+/// Scan `ghosts/*.ncgh` (newest-first by the timestamp embedded in the
+/// filename) plus a legacy bare `ghost.bin`, if present. Shared by both the
+/// legacy `MenuScreen::GhostSelect` and the native `fp_ui::FpScreen::
+/// GhostSelect` screens — same local data, two different chooser UIs.
+fn scan_local_ghost_entries() -> Vec<menu::GhostEntry> {
+    let mut entries = Vec::new();
+    if let Ok(dir) = std::fs::read_dir("ghosts") {
+        let mut files: Vec<(String, String)> = dir
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().map(|x| x == "ncgh").unwrap_or(false))
+            .map(|e| {
+                let name = e.file_name().to_string_lossy().to_string();
+                let path = e.path().to_string_lossy().to_string();
+                (name, path)
+            })
+            .collect();
+        // Sort by timestamp descending (latest first)
+        fn extract_ts(name: &str) -> u64 {
+            let base = if name.ends_with(".ncgh") { &name[..name.len() - 5] } else { name };
+            base.rsplit('_').next().and_then(|s| s.parse().ok()).unwrap_or(0)
+        }
+        files.sort_by(|a, b| extract_ts(&b.0).cmp(&extract_ts(&a.0)));
+        entries = files
+            .into_iter()
+            .map(|(name, path)| menu::GhostEntry::Local { filename: name, path })
+            .collect();
+    }
+    if std::path::Path::new("ghost.bin").exists() {
+        entries.push(menu::GhostEntry::Local { filename: "ghost.bin".into(), path: "ghost.bin".into() });
+    }
+    entries
+}
+
 fn write_replay_summary(
     replay_path: &std::path::Path,
     p1_name: &str,
@@ -3228,6 +3261,76 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             status: "Opening Discord login...".into(),
                                         });
                                     }
+                                }
+                                fp_ui::FpResult::OpenGhostSelect => {
+                                    // Mirrors legacy's NavResult::OpenGhostSelect exactly,
+                                    // targeting the native FpScreen::GhostSelect's status
+                                    // field instead of the legacy screen's.
+                                    let (tx, rx) = std::sync::mpsc::channel();
+                                    ghost_list_rx = Some(rx);
+                                    if let AppState::FpUi(fp_ui::FpScreen::GhostSelect {
+                                        ref mut status, ..
+                                    }) = state
+                                    {
+                                        *status = if cfg.stats_url.trim().is_empty() {
+                                            None
+                                        } else {
+                                            Some("Loading shared drones...".into())
+                                        };
+                                    }
+                                    let rh = rom_fingerprint().1;
+                                    let rom_hash = format!("{:016x}", rh);
+                                    matchmaking::fetch_ghost_list(cfg.stats_url.clone(), rom_hash, tx);
+                                }
+                                fp_ui::FpResult::LoadGhost(path) => {
+                                    // Mirrors legacy's NavResult::LoadGhost(path) exactly.
+                                    ensure_core_loaded(&mut core, &mut audio_queue, &audio_subsystem)?;
+                                    if let Some(c) = &core {
+                                        match ghost::Playback::load(&path) {
+                                            Ok(pb) => {
+                                                if pb.prime(c) {
+                                                    println!(
+                                                        "[ghost] Loaded drone opponent: {} frames",
+                                                        pb.frame_count()
+                                                    );
+                                                    start_logic_ghost_opponent(
+                                                        pb,
+                                                        &mut ghost_port_mask,
+                                                        &mut ghost_playback,
+                                                        &mut drone_runner,
+                                                    );
+                                                    match_replay_playback = None;
+                                                    local_play_mode = LocalPlayMode::Lab;
+                                                    input::clear_all_inputs();
+                                                    auto_start_done = false;
+                                                    auto_start_frame = 0;
+                                                    state = AppState::Playing;
+                                                } else {
+                                                    println!("[ghost] Anchor state rejected by core.");
+                                                    state = AppState::FpUi(fp_ui::FpScreen::LabMenu { cursor: 1 });
+                                                }
+                                            }
+                                            Err(e) => {
+                                                println!("[ghost] Load failed: {e}");
+                                                state = AppState::FpUi(fp_ui::FpScreen::LabMenu { cursor: 1 });
+                                            }
+                                        }
+                                    } else {
+                                        state = AppState::FpUi(fp_ui::FpScreen::LabMenu { cursor: 1 });
+                                    }
+                                }
+                                fp_ui::FpResult::DownloadGhost(ghost_id) => {
+                                    // Mirrors legacy's NavResult::DownloadGhost(ghost_id).
+                                    let local_path = format!("ghosts/remote_{ghost_id}.ncgh");
+                                    let (tx, rx) = std::sync::mpsc::channel();
+                                    ghost_download_rx = Some(rx);
+                                    if let AppState::FpUi(fp_ui::FpScreen::GhostSelect {
+                                        ref mut status, ..
+                                    }) = state
+                                    {
+                                        *status = Some(format!("Downloading {ghost_id}..."));
+                                    }
+                                    matchmaking::download_ghost(cfg.stats_url.clone(), ghost_id, local_path, tx);
                                 }
                             }
                         }
@@ -7445,53 +7548,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
 
-                // Populate the Drone loader when entering the screen.
-                // Dedup: for recordings against the same peer (same IP prefix),
-                // keep only the most recent (highest timestamp filename).
+                // Populate the Drone loader when entering the screen (both the
+                // legacy screen and the native fp_ui one — see
+                // `scan_local_ghost_entries`).
                 if let AppState::Menu(menu::MenuScreen::GhostSelect {
                     ref mut entries, ..
                 }) = state
                 {
                     if entries.is_empty() {
-                        if let Ok(dir) = std::fs::read_dir("ghosts") {
-                            let mut files: Vec<(String, String)> = dir
-                                .filter_map(|e| e.ok())
-                                .filter(|e| {
-                                    e.path().extension().map(|x| x == "ncgh").unwrap_or(false)
-                                })
-                                .map(|e| {
-                                    let name = e.file_name().to_string_lossy().to_string();
-                                    let path = e.path().to_string_lossy().to_string();
-                                    (name, path)
-                                })
-                                .collect();
-                            // Sort by timestamp descending (latest first)
-                            fn extract_ts(name: &str) -> u64 {
-                                let base = if name.ends_with(".ncgh") {
-                                    &name[..name.len() - 5]
-                                } else {
-                                    name
-                                };
-                                base.rsplit('_')
-                                    .next()
-                                    .and_then(|s| s.parse().ok())
-                                    .unwrap_or(0)
-                            }
-                            files.sort_by(|a, b| extract_ts(&b.0).cmp(&extract_ts(&a.0)));
-                            *entries = files
-                                .into_iter()
-                                .map(|(name, path)| menu::GhostEntry::Local {
-                                    filename: name,
-                                    path,
-                                })
-                                .collect();
-                        }
-                        if std::path::Path::new("ghost.bin").exists() {
-                            entries.push(menu::GhostEntry::Local {
-                                filename: "ghost.bin".into(),
-                                path: "ghost.bin".into(),
-                            });
-                        }
+                        *entries = scan_local_ghost_entries();
+                    }
+                }
+                if let AppState::FpUi(fp_ui::FpScreen::GhostSelect {
+                    ref mut entries, ..
+                }) = state
+                {
+                    if entries.is_empty() {
+                        *entries = scan_local_ghost_entries();
                     }
                 }
 
@@ -7856,12 +7929,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 // Drain the ghost-list fetcher channel.
                 if let Some(rx) = &ghost_list_rx {
-                    if let AppState::Menu(menu::MenuScreen::GhostSelect {
-                        ref mut entries,
-                        ref mut download_status,
-                        ..
-                    }) = state
-                    {
+                    let entries_status = match &mut state {
+                        AppState::Menu(menu::MenuScreen::GhostSelect { entries, download_status, .. }) => {
+                            Some((entries, download_status))
+                        }
+                        AppState::FpUi(fp_ui::FpScreen::GhostSelect { entries, status, .. }) => {
+                            Some((entries, status))
+                        }
+                        _ => None,
+                    };
+                    if let Some((entries, download_status)) = entries_status {
                         match rx.try_recv() {
                             Ok(matchmaking::GhostListUpdate::Loaded(ghosts)) => {
                                 let loaded_count = ghosts.len();
@@ -7901,13 +7978,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 // Drain the ghost download channel.
                 if let Some(rx) = &ghost_download_rx {
-                    if let AppState::Menu(menu::MenuScreen::GhostSelect {
-                        ref mut cursor,
-                        ref mut entries,
-                        ref mut download_status,
-                        ..
-                    }) = state
-                    {
+                    let cursor_entries_status = match &mut state {
+                        AppState::Menu(menu::MenuScreen::GhostSelect { cursor, entries, download_status, .. }) => {
+                            Some((cursor, entries, download_status))
+                        }
+                        AppState::FpUi(fp_ui::FpScreen::GhostSelect { cursor, entries, status, .. }) => {
+                            Some((cursor, entries, status))
+                        }
+                        _ => None,
+                    };
+                    if let Some((cursor, entries, download_status)) = cursor_entries_status {
                         match rx.try_recv() {
                             Ok(matchmaking::GhostDownloadUpdate::Saved { local_path, .. }) => {
                                 ghost_download_rx = None;

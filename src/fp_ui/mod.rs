@@ -15,8 +15,10 @@
 pub mod about;
 pub mod bandwidth;
 pub mod chrome;
+mod ghost_select;
 pub mod geometry;
 pub mod input;
+mod lab_menu;
 pub mod layout;
 mod lobby;
 mod main_menu;
@@ -71,7 +73,6 @@ const MAIN_LAST_MATCH_INDEX: usize = MAIN_ITEM_COUNT + 1;
 /// inlined as magic numbers) since fp_ui's own Main Menu no longer mirrors
 /// legacy's ordering 1:1 the way it used to.
 const LEGACY_ARCADE_INDEX: usize = 1;
-const LEGACY_LAB_INDEX: usize = 2;
 const LEGACY_REPLAYS_INDEX: usize = 3;
 
 /// fp_ui's own PlayMenu cursor space (Arcade/Lab/Replays/Drones).
@@ -90,10 +91,26 @@ pub enum FpScreen {
     /// shows the row the player quit from selected.
     Quit { choice: usize, menu_cursor: usize },
     /// Play's submenu: Arcade / Lab / Replays / Drones. Arcade boots the ROM
-    /// directly (no character-select step — see `play_menu.rs`); Lab,
-    /// Replays and Drones delegate to their legacy screens for now (own
-    /// fp_ui visual language is follow-up work).
+    /// directly (no character-select step — see `play_menu.rs`); Replays
+    /// still delegates to its legacy screen (follow-up work). Lab and
+    /// Drones now have native *chooser/list* screens (`LabMenu`/
+    /// `GhostSelect` below) — the actual in-game Lab trainer overlay and
+    /// drone gameplay stay legacy, per explicit user direction: only the
+    /// menu system needed updating, not the in-game UI.
     PlayMenu { cursor: usize },
+    /// Lab's own 2-item chooser (Start Lab / Load Drones) — native
+    /// redesign of legacy's `MenuScreen::LabMenu`. See `lab_menu.rs`.
+    LabMenu { cursor: usize },
+    /// Load Drones — native redesign of legacy's `MenuScreen::GhostSelect`.
+    /// `entries`/`status` are populated/drained by `main.rs` exactly like
+    /// the legacy screen's own fields (`FpResult::OpenGhostSelect` kicks off
+    /// the same local-scan + remote-fetch this screen just displays). See
+    /// `ghost_select.rs`.
+    GhostSelect {
+        cursor: usize,
+        entries: Vec<crate::menu::GhostEntry>,
+        status: Option<String>,
+    },
     /// Static bulletin board ("the wire") — no backend exists for this
     /// content anywhere in the app; see `bandwidth.rs` module doc.
     Bandwidth,
@@ -248,6 +265,18 @@ pub enum FpResult {
     /// what legacy's `NavResult::ConnectDiscord` does (same rough edge as
     /// above: lands on legacy Settings/Matchmaking, not fp_ui).
     ToggleDiscordConnect,
+    /// Entered the (native) Load Drones screen. Caller does exactly what
+    /// legacy's `NavResult::OpenGhostSelect` does — scans `ghosts/` for
+    /// local `.ncgh` files and kicks off a `fetch_ghost_list` for community
+    /// recordings — targeting `FpScreen::GhostSelect`'s fields instead of
+    /// the legacy screen's.
+    OpenGhostSelect,
+    /// Confirm on a local drone entry. Caller does exactly what legacy's
+    /// `NavResult::LoadGhost(path)` does.
+    LoadGhost(String),
+    /// Confirm on a community drone entry. Caller does exactly what
+    /// legacy's `NavResult::DownloadGhost(ghost_id)` does.
+    DownloadGhost(String),
 }
 
 pub fn nav(screen: &mut FpScreen, input: FpNav) -> FpResult {
@@ -331,9 +360,18 @@ pub fn nav(screen: &mut FpScreen, input: FpNav) -> FpResult {
             }
             FpNav::Confirm => match *cursor {
                 c if c == PLAY_ARCADE_INDEX => FpResult::ActivateMainItem(LEGACY_ARCADE_INDEX),
-                c if c == PLAY_LAB_INDEX => FpResult::ActivateMainItem(LEGACY_LAB_INDEX),
+                c if c == PLAY_LAB_INDEX => {
+                    *screen = FpScreen::LabMenu { cursor: 0 };
+                    FpResult::Stay
+                }
                 c if c == PLAY_REPLAYS_INDEX => FpResult::ActivateMainItem(LEGACY_REPLAYS_INDEX),
-                _ => FpResult::ActivateLabMenuItem(1), // Drones = LabMenu row 1 ("Load Drones")
+                _ => {
+                    // Drones — jumps straight to the drone list, same shortcut
+                    // legacy's own Play submenu gives this row (skipping the
+                    // Lab chooser, since there's nothing to choose here).
+                    *screen = FpScreen::GhostSelect { cursor: 0, entries: Vec::new(), status: None };
+                    FpResult::OpenGhostSelect
+                }
             },
             FpNav::Back => {
                 *screen = FpScreen::Main { cursor: MAIN_PLAY_INDEX };
@@ -341,6 +379,48 @@ pub fn nav(screen: &mut FpScreen, input: FpNav) -> FpResult {
             }
             FpNav::Info => {
                 *screen = FpScreen::About;
+                FpResult::Stay
+            }
+            _ => FpResult::Stay,
+        },
+        FpScreen::LabMenu { cursor } => match input {
+            FpNav::Up => {
+                *cursor = cursor.saturating_sub(1);
+                FpResult::Stay
+            }
+            FpNav::Down => {
+                *cursor = (*cursor + 1).min(lab_menu::ITEMS.len() - 1);
+                FpResult::Stay
+            }
+            FpNav::Confirm if *cursor == 0 => FpResult::ActivateLabMenuItem(0), // Start Lab
+            FpNav::Confirm => {
+                // Load Drones — same OpenGhostSelect side effect the Play
+                // submenu's Drones row triggers directly.
+                *screen = FpScreen::GhostSelect { cursor: 0, entries: Vec::new(), status: None };
+                FpResult::OpenGhostSelect
+            }
+            FpNav::Back => {
+                *screen = FpScreen::PlayMenu { cursor: PLAY_LAB_INDEX };
+                FpResult::Stay
+            }
+            _ => FpResult::Stay,
+        },
+        FpScreen::GhostSelect { cursor, entries, .. } => match input {
+            FpNav::Up => {
+                *cursor = cursor.saturating_sub(1);
+                FpResult::Stay
+            }
+            FpNav::Down => {
+                *cursor = (*cursor + 1).min(entries.len().saturating_sub(1));
+                FpResult::Stay
+            }
+            FpNav::Confirm => match entries.get(*cursor) {
+                Some(crate::menu::GhostEntry::Local { path, .. }) => FpResult::LoadGhost(path.clone()),
+                Some(crate::menu::GhostEntry::Remote(meta)) => FpResult::DownloadGhost(meta.ghost_id.clone()),
+                None => FpResult::Stay,
+            },
+            FpNav::Back => {
+                *screen = FpScreen::LabMenu { cursor: 1 };
                 FpResult::Stay
             }
             _ => FpResult::Stay,
@@ -558,6 +638,10 @@ pub fn draw(
             quit::draw(canvas, fonts, &scale, *choice)?;
         }
         FpScreen::PlayMenu { cursor } => play_menu::draw(canvas, fonts, &scale, *cursor, username)?,
+        FpScreen::LabMenu { cursor } => lab_menu::draw(canvas, fonts, &scale, *cursor, username)?,
+        FpScreen::GhostSelect { cursor, entries, status } => {
+            ghost_select::draw(canvas, fonts, &scale, *cursor, entries, status.as_deref(), username)?
+        }
         FpScreen::Bandwidth => bandwidth::draw(canvas, fonts, &scale, username)?,
         FpScreen::Rankings => rankings::draw(canvas, fonts, &scale, username, leaderboard)?,
         FpScreen::Profile => profile::draw(canvas, fonts, &scale, username, profile)?,
