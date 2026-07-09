@@ -90,13 +90,14 @@ pub fn draw(
     let (subx, suby) = scale.point(theme::VW - 96.0 - (subw as f32 / scale.s), bottom + 8.0);
     fonts.draw_tracked(canvas, FpFont::ChakraPetchMedium, scale.font_px(14.0), sub, subx, suby, Color::RGB(0x5e, 0x5e, 0x66), sub_track)?;
 
-    // Same real build-info line as Main Menu's equivalent caption (no real
-    // MK2 ROM revision is tracked in this app, so this is our own build
-    // version rather than a fabricated ROM revision).
-    let build = crate::version::footer_string();
-    let (buildw, _) = fonts.text_size(FpFont::ChakraPetchMedium, scale.font_px(12.0), &build);
-    let (buildx, buildy) = scale.point(theme::VW - 96.0 - (buildw as f32 / scale.s), bottom + 28.0);
-    fonts.draw(canvas, FpFont::ChakraPetchMedium, scale.font_px(12.0), &build, buildx, buildy, Color::RGB(0x3a, 0x3a, 0x42))?;
+    // Same real ROM-identity line as Main Menu's equivalent caption (ROM
+    // hash + core build tag — no real arcade board revision is tracked or
+    // detectable in this app, so this is real data rather than a fabricated
+    // "rev" string).
+    let rom_line = format!("ROM {} \u{b7} CORE {}", crate::matchmaking::rom_fnv_hash(), crate::retro::core_compat_tag());
+    let (rw, _) = fonts.text_size(FpFont::ChakraPetchMedium, scale.font_px(12.0), &rom_line);
+    let (rx, ry) = scale.point(theme::VW - 96.0 - (rw as f32 / scale.s), bottom + 28.0);
+    fonts.draw(canvas, FpFont::ChakraPetchMedium, scale.font_px(12.0), &rom_line, rx, ry, Color::RGB(0x3a, 0x3a, 0x42))?;
 
     chrome::draw_footer(
         canvas,

@@ -191,7 +191,11 @@ pub fn draw(
     let (tx, ty) = scale.point(SIDE_PAD, CONTENT_TOP + 26.0);
     fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(58.0), "SETTINGS", tx, ty, theme::TEXT)?;
 
-    let list_top = CONTENT_TOP + 26.0 + 70.0;
+    // The mockup's CSS puts a modest 28px margin-bottom under "SETTINGS"
+    // (not a big gap like Main Menu's header->row fix needed) — this was
+    // landing about 12px short of that, reading as slightly cramped right
+    // under the title; bumped from 70 to 82 to match.
+    let list_top = CONTENT_TOP + 26.0 + 82.0;
     for (i, label) in CATS.iter().enumerate() {
         draw_cat_row(canvas, fonts, scale, i, label, list_top, i == cat, sidebar_focus)?;
     }

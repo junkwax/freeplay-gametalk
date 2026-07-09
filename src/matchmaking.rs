@@ -1215,8 +1215,13 @@ fn base64_decode(s: &str) -> Option<Vec<u8>> {
 /// equality on this field, so folding the core tag in requires no server
 /// change; peers on mismatched cores simply never match, instead of
 /// desyncing at frame 30.
-fn rom_short_hash() -> String {
-    let rom = match crate::rom::read_rom_zip() {
+/// Short FNV hash of the ROM zip's bytes, or `"0"` if it can't be read.
+/// Split out of `rom_short_hash` so the UI (fp_ui's Main Menu/Play submenu
+/// caption) can show it directly, real data rather than an invented ROM
+/// revision string — this app has no way to detect the arcade board's own
+/// official revision, just the file it was actually given.
+pub(crate) fn rom_fnv_hash() -> String {
+    match crate::rom::read_rom_zip() {
         Some(bytes) => {
             let mut h: u64 = 0xcbf29ce484222325;
             for chunk in bytes.chunks(8) {
@@ -1228,8 +1233,11 @@ fn rom_short_hash() -> String {
             format!("{:08x}", (h >> 32) as u32)
         }
         None => "0".to_string(),
-    };
-    format!("{rom}@{}", crate::retro::core_compat_tag())
+    }
+}
+
+fn rom_short_hash() -> String {
+    format!("{}@{}", rom_fnv_hash(), crate::retro::core_compat_tag())
 }
 
 fn sha256_hex(input: &[u8]) -> String {

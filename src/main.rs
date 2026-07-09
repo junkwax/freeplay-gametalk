@@ -6949,6 +6949,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         discord_user.is_some(),
                     )
                     .map_err(|e| format!("fp_ui draw: {e}"))?;
+                    // fp_ui screens have no toast param of their own (unlike
+                    // legacy's `menu::draw`, which takes one directly) — a
+                    // toast set while in an FpUi state (e.g. "No local
+                    // replay found for this match" from
+                    // WatchLastMatchReplay) was silently never drawn,
+                    // reading as "nothing happened" to the user. Draw it
+                    // as an overlay on top with the same legacy bitmap font
+                    // legacy screens use for it.
+                    if let Some(toast) = toast_payload(&toast) {
+                        menu::draw_toast(&mut canvas, &mut font, &toast, win_w as i32, win_h as i32)
+                            .map_err(|e| format!("fp_ui toast overlay: {e}"))?;
+                    }
                 } else {
                     menu::draw(
                         &state,
@@ -7884,6 +7896,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         discord_user.is_some(),
                     )
                     .map_err(|e| format!("fp_ui draw: {e}"))?;
+                    // fp_ui screens have no toast param of their own (unlike
+                    // legacy's `menu::draw`, which takes one directly) — a
+                    // toast set while in an FpUi state (e.g. "No local
+                    // replay found for this match" from
+                    // WatchLastMatchReplay) was silently never drawn,
+                    // reading as "nothing happened" to the user. Draw it
+                    // as an overlay on top with the same legacy bitmap font
+                    // legacy screens use for it.
+                    if let Some(toast) = toast_payload(&toast) {
+                        menu::draw_toast(&mut canvas, &mut font, &toast, win_w as i32, win_h as i32)
+                            .map_err(|e| format!("fp_ui toast overlay: {e}"))?;
+                    }
                 } else {
                     menu::draw(
                         &state,
