@@ -664,16 +664,57 @@ struct RetroSystemInfo {
     block_extract: bool,
 }
 
+/// Plain `Library::new` resolves the *target* DLL fine against a relative
+/// path like `cores/fbneo_mk2_libretro.dll` (relative to CWD), but Windows'
+/// default search order does *not* then search that same `cores/` directory
+/// when resolving the DLL's *own* dependencies (`libwinpthread-1.dll`,
+/// bundled alongside it) — only the calling process's directory, the system
+/// directory, and `PATH`. On a dev machine with MSYS2/MinGW's `bin` in
+/// `PATH`, that happens to resolve the dependency anyway, masking the bug
+/// entirely; without it (a normal launch with no MSYS2 in `PATH`), it fails
+/// with `ERROR_MOD_NOT_FOUND` — and since that's a clean `Result::Err`
+/// (not a panic or an access violation), it silently unwinds out of the
+/// whole call stack with no crash log at all, just a vanishing window. This
+/// was reported as "loading Play -> Arcade crashed and shut down", 100%
+/// reproducible, root-caused by isolating `LoadLibraryEx` outside the app
+/// entirely (`cores/fbneo_mk2_libretro.dll` from the project root, default
+/// flags: `ERROR_MOD_NOT_FOUND`; the same call with
+/// `LOAD_WITH_ALTERED_SEARCH_PATH` set: succeeds). Passing that flag makes
+/// Windows search the target DLL's own directory for its dependencies too,
+/// independent of `PATH` or CWD.
+#[cfg(windows)]
+fn load_core_library(dll_path: &str) -> Result<Library, Box<dyn std::error::Error>> {
+    // `LOAD_WITH_ALTERED_SEARCH_PATH`'s behavior is documented as *undefined*
+    // when the path isn't fully qualified — confirmed empirically too (it
+    // silently didn't help against the relative `cores/...` path this app
+    // actually resolves). Canonicalize first so the flag has the absolute
+    // path it requires to do anything.
+    const LOAD_WITH_ALTERED_SEARCH_PATH: u32 = 0x0000_0008;
+    let absolute = std::fs::canonicalize(dll_path)?;
+    let lib = unsafe {
+        libloading::os::windows::Library::load_with_flags(&absolute, LOAD_WITH_ALTERED_SEARCH_PATH)?
+    };
+    Ok(lib.into())
+}
+
+#[cfg(not(windows))]
+fn load_core_library(dll_path: &str) -> Result<Library, Box<dyn std::error::Error>> {
+    Ok(unsafe { Library::new(dll_path)? })
+}
+
 pub unsafe fn load(dll_path: &str, rom_path: &str) -> Result<Core, Box<dyn std::error::Error>> {
     println!("Loading FBNeo Libretro Core...");
     crate::dlog!("retro", "core dll={dll_path}");
     crate::dlog!("retro", "rom zip={rom_path}");
     configure_environment_paths(dll_path, rom_path);
-    let lib = Library::new(dll_path)?;
+    crate::dlog!("retro", "about to Library::new");
+    let lib = load_core_library(dll_path)?;
+    crate::dlog!("retro", "Library::new ok");
 
     if let Ok(get_system_info) = lib.get::<Symbol<unsafe extern "C" fn(*mut RetroSystemInfo)>>(
         b"retro_get_system_info\0",
     ) {
+        crate::dlog!("retro", "about to call retro_get_system_info");
         let mut info = RetroSystemInfo {
             library_name: ptr::null(),
             library_version: ptr::null(),
@@ -682,6 +723,7 @@ pub unsafe fn load(dll_path: &str, rom_path: &str) -> Result<Core, Box<dyn std::
             block_extract: false,
         };
         get_system_info(&mut info);
+        crate::dlog!("retro", "retro_get_system_info returned");
         if !info.library_version.is_null() {
             let ver = std::ffi::CStr::from_ptr(info.library_version)
                 .to_string_lossy()
@@ -732,6 +774,7 @@ pub unsafe fn load(dll_path: &str, rom_path: &str) -> Result<Core, Box<dyn std::
         lib.get(b"retro_get_memory_data\0")?;
     let retro_get_memory_size: Symbol<unsafe extern "C" fn(u32) -> usize> =
         lib.get(b"retro_get_memory_size\0")?;
+    crate::dlog!("retro", "all symbols resolved");
 
     retro_set_environment(environment_cb);
     retro_set_video_refresh(video_refresh_cb);
@@ -739,8 +782,10 @@ pub unsafe fn load(dll_path: &str, rom_path: &str) -> Result<Core, Box<dyn std::
     retro_set_audio_sample_batch(audio_sample_batch_cb);
     retro_set_input_poll(input_poll_cb);
     retro_set_input_state(input_state_cb);
+    crate::dlog!("retro", "callbacks registered, about to call retro_init()");
 
     retro_init();
+    crate::dlog!("retro", "retro_init() returned");
 
     println!("Loading {rom_path}...");
     let rom_c = CString::new(rom_path)?;
@@ -750,7 +795,9 @@ pub unsafe fn load(dll_path: &str, rom_path: &str) -> Result<Core, Box<dyn std::
         size: 0,
         meta: ptr::null(),
     };
+    crate::dlog!("retro", "about to call retro_load_game");
     let load_ok = retro_load_game(&game_info);
+    crate::dlog!("retro", "retro_load_game returned {load_ok}");
     if !load_ok {
         // Booting anyway used to be allowed here, but a rejected romset means
         // FBNeo's driver-level CRC/layout validation failed — the machine is
