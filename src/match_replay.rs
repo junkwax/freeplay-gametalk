@@ -654,6 +654,36 @@ pub fn find_matching_local_replay(row: &crate::matchmaking::HistoryRow) -> Optio
         .map(|(_, path)| path)
 }
 
+/// Same matching logic as `find_matching_local_replay`, against the public
+/// replay index (`matchmaking::fetch_public_replays`) instead of local
+/// disk — the fallback when a match has no local `.ncrp` (different
+/// device, or predates local recording) but was still uploaded to
+/// freeplay-stats like every completed online match is
+/// (`replay_upload.rs`). `recorded_at` is the same server-side ISO8601
+/// format as `HistoryRow::played_at`, so the same parse/tolerance window
+/// applies.
+pub fn find_matching_remote_replay(
+    row: &crate::matchmaking::HistoryRow,
+    replays: &[crate::matchmaking::RemoteReplayMeta],
+) -> Option<crate::matchmaking::RemoteReplayMeta> {
+    let target_unix = parse_iso8601_unix(&row.played_at)?;
+    const TOLERANCE_SECS: i64 = 30 * 60;
+    replays
+        .iter()
+        .filter_map(|meta| {
+            let names_match = meta.p1_name.eq_ignore_ascii_case(&row.opponent_username)
+                || meta.p2_name.eq_ignore_ascii_case(&row.opponent_username);
+            if !names_match {
+                return None;
+            }
+            let recorded_unix = parse_iso8601_unix(&meta.recorded_at)?;
+            let diff = (recorded_unix - target_unix).abs();
+            (diff <= TOLERANCE_SECS).then_some((diff, meta))
+        })
+        .min_by_key(|(diff, _)| *diff)
+        .map(|(_, meta)| meta.clone())
+}
+
 /// "YYYY-MM-DDTHH:MM:SS..." (ISO8601, server-side) -> Unix seconds (UTC).
 /// Ignores fractional seconds and timezone offsets beyond a bare `Z` —
 /// good enough for matching against a replay's own recorded-at timestamp
@@ -1025,6 +1055,57 @@ mod tests {
         // No local replays directory / no matching file in the test
         // environment, so this must resolve to `None` rather than panic.
         assert_eq!(find_matching_local_replay(&row), None);
+    }
+
+    fn remote_meta(p1: &str, p2: &str, recorded_at: &str) -> crate::matchmaking::RemoteReplayMeta {
+        crate::matchmaking::RemoteReplayMeta {
+            filename: format!("{p1}_vs_{p2}.ncrp"),
+            url: format!("https://example.invalid/{p1}_vs_{p2}.ncrp"),
+            p1_name: p1.into(),
+            p2_name: p2.into(),
+            p1_score: Some(2),
+            p2_score: Some(1),
+            winner: p1.into(),
+            frame_count: 1000,
+            duration: "1:23".into(),
+            recorded_at: recorded_at.into(),
+        }
+    }
+
+    #[test]
+    fn find_matching_remote_replay_picks_closest_within_tolerance() {
+        let row = crate::matchmaking::HistoryRow {
+            opponent_username: "Opponent_Name".into(),
+            result: "won".into(),
+            our_score: 2,
+            opponent_score: 1,
+            played_at: "2026-06-13T14:32:00Z".into(),
+        };
+        let replays = vec![
+            // Wrong opponent, otherwise perfect time match — must be ignored.
+            remote_meta("Someone_Else", "Me", "2026-06-13T14:32:00Z"),
+            // Right opponent, just outside the 30-minute tolerance.
+            remote_meta("Opponent_Name", "Me", "2026-06-13T15:05:00Z"),
+            // Right opponent, within tolerance but further than the next one.
+            remote_meta("Opponent_Name", "Me", "2026-06-13T14:40:00Z"),
+            // Right opponent, closest match.
+            remote_meta("Opponent_Name", "Me", "2026-06-13T14:33:00Z"),
+        ];
+        let found = find_matching_remote_replay(&row, &replays).expect("should find a match");
+        assert_eq!(found.recorded_at, "2026-06-13T14:33:00Z");
+    }
+
+    #[test]
+    fn find_matching_remote_replay_returns_none_without_a_candidate() {
+        let row = crate::matchmaking::HistoryRow {
+            opponent_username: "Opponent_Name".into(),
+            result: "won".into(),
+            our_score: 2,
+            opponent_score: 1,
+            played_at: "2026-06-13T14:32:00Z".into(),
+        };
+        let replays = vec![remote_meta("Someone_Else", "Me", "2026-06-13T14:32:00Z")];
+        assert_eq!(find_matching_remote_replay(&row, &replays), None);
     }
 
     #[test]

@@ -1865,6 +1865,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         None;
     let mut public_replay_rx: Option<std::sync::mpsc::Receiver<matchmaking::PublicReplayUpdate>> =
         None;
+    // Dedicated to the Main Menu's LAST MATCH card falling back to the
+    // public replay index when no local `.ncrp` matches — kept separate
+    // from `public_replay_rx` above (the legacy Replays screen's online
+    // tab) so the two don't interpret each other's fetch results.
+    let mut last_match_remote_rx: Option<(
+        matchmaking::HistoryRow,
+        std::sync::mpsc::Receiver<matchmaking::PublicReplayUpdate>,
+    )> = None;
     let mut spectate_rx: Option<std::sync::mpsc::Receiver<matchmaking::SpectateUpdate>> = None;
     let mut spectate_last_update: Option<Instant> = None;
     let mut lobby_rx: Option<std::sync::mpsc::Receiver<matchmaking::LobbyUpdate>> = None;
@@ -3134,10 +3142,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             }
                                         }
                                         None => {
-                                            toast = Some((
-                                                "No local replay found for this match".into(),
-                                                Instant::now() + Duration::from_millis(2400),
-                                            ));
+                                            // No local file — every completed online match
+                                            // gets uploaded to freeplay-stats
+                                            // (`replay_upload.rs`), so check the public
+                                            // replay index before giving up; drained in
+                                            // the `last_match_remote_rx` poll below.
+                                            if let Some(row) = row {
+                                                toast = Some((
+                                                    "Checking remote replays\u{2026}".into(),
+                                                    Instant::now() + Duration::from_millis(2000),
+                                                ));
+                                                let (tx, rx) = std::sync::mpsc::channel();
+                                                matchmaking::fetch_public_replays(cfg.stats_url.clone(), tx);
+                                                last_match_remote_rx = Some((row, rx));
+                                            } else {
+                                                toast = Some((
+                                                    "No replay found for this match".into(),
+                                                    Instant::now() + Duration::from_millis(2400),
+                                                ));
+                                            }
                                         }
                                     }
                                 }
@@ -7576,6 +7599,83 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             main_profile_rx = None;
                         }
                     }
+                }
+
+                // Drain the LAST MATCH card's remote-replay fallback lookup
+                // (kicked off by `WatchLastMatchReplay` when no local file
+                // matched) — search the public replay index for the same
+                // opponent/time-window match `find_matching_local_replay`
+                // looks for locally, and download+play it if found.
+                let mut remote_replay_loaded: Option<(matchmaking::HistoryRow, Vec<matchmaking::RemoteReplayMeta>)> = None;
+                let mut remote_replay_error: Option<String> = None;
+                let mut remote_replay_disconnected = false;
+                if let Some((row, rx)) = &last_match_remote_rx {
+                    match rx.try_recv() {
+                        Ok(matchmaking::PublicReplayUpdate::Loaded(replays)) => {
+                            remote_replay_loaded = Some((row.clone(), replays));
+                        }
+                        Ok(matchmaking::PublicReplayUpdate::Error(e)) => remote_replay_error = Some(e),
+                        Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => remote_replay_disconnected = true,
+                    }
+                }
+                if remote_replay_loaded.is_some() || remote_replay_error.is_some() || remote_replay_disconnected {
+                    last_match_remote_rx = None;
+                }
+                if let Some((row, replays)) = remote_replay_loaded {
+                    match match_replay::find_matching_remote_replay(&row, &replays) {
+                        Some(meta) => match download_remote_replay(&meta.url) {
+                            Ok(path) => {
+                                ensure_core_loaded(&mut core, &mut audio_queue, &audio_subsystem)?;
+                                if let Some(c) = &core {
+                                    match prepare_replay_review(c, &path) {
+                                        Ok(pb) => enter_replay_review(
+                                            pb,
+                                            &mut match_replay_playback,
+                                            &mut replay_review_paused,
+                                            &mut replay_review_speed,
+                                            &mut replay_review_tick,
+                                            &mut replay_event_filter,
+                                            &mut replay_clip_in,
+                                            &mut replay_clip_out,
+                                            &mut ghost_playback,
+                                            &mut ghost_recording,
+                                            &mut drone_runner,
+                                            &mut input_history,
+                                            &mut clip_recorder,
+                                            &mut toast,
+                                            &mut state,
+                                        ),
+                                        Err(e) => {
+                                            println!("[replay] Remote last-match replay load failed: {e}");
+                                            toast = Some((
+                                                format!("Replay unavailable: {e}"),
+                                                Instant::now() + Duration::from_millis(3200),
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                toast = Some((
+                                    format!("Remote replay download failed: {e}"),
+                                    Instant::now() + Duration::from_millis(3200),
+                                ));
+                            }
+                        },
+                        None => {
+                            toast = Some((
+                                "No local or remote replay found for this match".into(),
+                                Instant::now() + Duration::from_millis(2400),
+                            ));
+                        }
+                    }
+                }
+                if let Some(e) = remote_replay_error {
+                    toast = Some((
+                        format!("Remote replay check failed: {e}"),
+                        Instant::now() + Duration::from_millis(3200),
+                    ));
                 }
 
                 // Drain the avatar download channel — decode and cache.
