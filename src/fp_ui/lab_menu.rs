@@ -193,8 +193,8 @@ fn draw_watermark(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scale: &
     let stroke_color = Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 82);
     let r = scale.len(1.0).round().max(1.0) as i32;
     for (dx, dy) in [(-r, -r), (0, -r), (r, -r), (-r, 0), (r, 0), (-r, r), (0, r), (r, r)] {
-        fonts.draw(canvas, FpFont::SairaCondensedBlack, px, "LAB", x + dx, y + dy, stroke_color)?;
+        fonts.draw_italic(canvas, FpFont::SairaCondensedBlack, px, "LAB", x + dx, y + dy, stroke_color)?;
     }
-    fonts.draw(canvas, FpFont::SairaCondensedBlack, px, "LAB", x, y, Color::RGB(0x0c, 0x0c, 0x11))?;
+    fonts.draw_italic(canvas, FpFont::SairaCondensedBlack, px, "LAB", x, y, Color::RGB(0x0c, 0x0c, 0x11))?;
     Ok(())
 }
