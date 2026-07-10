@@ -34,9 +34,12 @@ const LIST_TOP: f32 = 158.0;
 const ROWS_TOP: f32 = LIST_TOP + 56.0;
 const LABEL_GAP: f32 = 26.0;
 
-/// (label, sub-label) — verbatim from the mockup's `playMenuDefs`.
+/// (label, sub-label) — from the mockup's `playMenuDefs`, except Arcade's
+/// sub-label (the mockup's "12 fighters · 2-player" reads as a promise of
+/// character-select/roster depth this app doesn't have, since Arcade boots
+/// straight to the ROM with no fp_ui character-select step).
 const ITEMS: [(&str, &str); 4] = [
-    ("ARCADE", "Local versus \u{b7} 12 fighters \u{b7} 2-player"),
+    ("ARCADE", "Play offline arcade"),
     ("LAB", "Training tools \u{b7} hitbox \u{b7} dummy \u{b7} punish trainer"),
     ("REPLAYS", "Watch and manage recorded match files"),
     ("DRONES", "Load ghost input streams to train against"),
