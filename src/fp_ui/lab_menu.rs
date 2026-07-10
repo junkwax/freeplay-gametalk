@@ -41,7 +41,7 @@ pub fn draw(
     cursor: usize,
     username: &str,
 ) -> Result<(), String> {
-    chrome::draw_background_accents(canvas, scale, SKEW_DEG)?;
+    chrome::draw_background_accents(canvas, scale)?;
     chrome::draw_header(canvas, fonts, scale, username, true, None)?;
 
     let eyebrow_y = LIST_TOP;

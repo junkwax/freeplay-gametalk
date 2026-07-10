@@ -17,64 +17,106 @@ pub const FOOTER_H: f32 = 86.0;
 const SIDE_PAD: f32 = 56.0;
 
 /// Decorative background layer, drawn first (behind everything else, before
-/// `draw_header`): the mockup's actual stage background — a soft radial
-/// glow off-center toward the upper right, plus a vignette darkening the
-/// edges — and a thin skewed accent line running down the content area.
-/// Shared across every fp_ui screen that wants this background treatment
-/// (currently the Main Menu and Play submenu) rather than duplicated per
-/// screen — `skew_deg` is passed in since each screen already has its own
-/// skew-angle constant matching its other angled elements (bars, chips) and
-/// this line should match them.
+/// `draw_header`): the mockup's full layered stage background — a 3-stop
+/// radial glow off-center toward the upper right, a faint diagonal accent
+/// wash, a skewed light bar and red hairline down the content area, and a
+/// vignette darkening the edges on top of all of it. Shared across every
+/// fp_ui screen that wants this background treatment (currently the Main
+/// Menu and Play submenu) rather than duplicated per screen.
 ///
-/// A previous pass here approximated this as a flat top-to-bottom vertical
-/// fade (guessed, then "corrected" by sampling pixels near the screen's
-/// vertical centerline — which still looked plausibly like a vertical fade
-/// since that's close to the glow's own peak column). Reading the mockup's
-/// actual CSS (`radial-gradient(120% 120% at 78% 18%, #121217 0%, #0a0a0d
-/// 42%, #060608 100%)`) shows it's really an off-center radial glow, not a
-/// vertical one — a flat vertical rect can never reproduce that, which is
-/// why it read as "small and angled to the left" next to the skewed accent
-/// line (the rect contributed no horizontal shape of its own, so the line
-/// was the only thing giving an angled impression). SDL2 has no native
-/// radial-gradient primitive, so `geometry::fill_radial_gradient`
-/// approximates it with a Gouraud-shaded triangle fan (2-stop instead of
-/// the CSS's 3, but the 3 stops are all close, near-black values, so the
-/// visual difference is negligible).
-pub fn draw_background_accents(canvas: &mut Canvas<Window>, scale: &Scale, skew_deg: f32) -> Result<(), String> {
-    // Radius covers well past the farthest corner (bottom-left, ~1740px from
-    // the 78%/18% center) so the fade reaches the base color before the
-    // canvas edge, matching the CSS version's 120%-sized ellipse.
-    geometry::fill_radial_gradient(
+/// Two earlier passes here under-specified this: a flat top-to-bottom
+/// vertical fade (the glow is actually off-center, not vertical), then a
+/// 2-stop circular approximation of the radial glow/vignette (both are
+/// really CSS two-value-sized *ellipses* against the non-square 1920x1080
+/// box — a shared x/y radius distorts the shape — and the glow is a 3-stop
+/// gradient, not 2). `geometry::fill_radial_ellipse_gradient` now
+/// reproduces both properly (independent rx/ry, arbitrary stop count).
+/// Layer order matches the CSS stacking context back-to-front: stage base,
+/// diagonal wash, skewed light bar, skewed hairline, vignette on top of all
+/// of it. `skew_deg` was dropped as a parameter — the background's own
+/// skewed elements are a fixed -11deg per the CSS regardless of whatever
+/// skew angle the calling screen's foreground rows use.
+pub fn draw_background_accents(canvas: &mut Canvas<Window>, scale: &Scale) -> Result<(), String> {
+    const BG_SKEW_DEG: f32 = -11.0;
+
+    // Stage base: radial-gradient(120% 120% at 78% 18%, #121217 0%,
+    // #0a0a0d 42%, #060608 100%). Ellipse, not circle — 120% of a
+    // 1920x1080 box is not the same in both axes.
+    geometry::fill_radial_ellipse_gradient(
         canvas,
         scale,
         theme::VW * 0.78,
         theme::VH * 0.18,
-        1800.0,
-        Color::RGB(0x12, 0x12, 0x17),
-        Color::RGB(0x06, 0x06, 0x08),
+        theme::VW * 1.2,
+        theme::VH * 1.2,
+        &[
+            (0.0, Color::RGB(0x12, 0x12, 0x17)),
+            (0.42, Color::RGB(0x0a, 0x0a, 0x0d)),
+            (1.0, Color::RGB(0x06, 0x06, 0x08)),
+        ],
     );
-    // Vignette: darkens the edges, transparent through the center ~55% of
-    // the radius (`radial-gradient(130% 130% at 50% 45%, transparent 55%,
-    // rgba(0,0,0,.55) 100%)`).
-    geometry::fill_radial_gradient(
+
+    // Diagonal accent wash: linear-gradient(115deg, transparent 0%,
+    // transparent 60%, rgba(226,42,53,.05) 78%, transparent 80%) — the
+    // 0%-60% run is uniformly transparent, so only the 60/78/80 stops are
+    // reproduced.
+    let wash_clear = Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 0);
+    let wash_peak = Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 13); // .05 * 255
+    geometry::fill_linear_gradient_box(
+        canvas,
+        scale,
+        115.0,
+        &[(0.60, wash_clear), (0.78, wash_peak), (0.80, wash_clear)],
+    );
+
+    // Skewed light bar: rect(-200,-120, 560x1400) skewX(-11deg),
+    // linear-gradient(180deg, rgba(255,255,255,.018), rgba(255,255,255,0)).
+    geometry::fill_skewed_rect_vgradient(
+        canvas,
+        scale,
+        -200.0,
+        -120.0,
+        560.0,
+        1400.0,
+        BG_SKEW_DEG,
+        &[(0.0, Color::RGBA(255, 255, 255, 5)), (1.0, Color::RGBA(255, 255, 255, 0))],
+    );
+
+    // Skewed red hairline: rect(780,-120, 5x1400) skewX(-11deg),
+    // linear-gradient(180deg, transparent, accent@.5 35%, accent@.5 60%,
+    // transparent), the whole shape at 0.5 opacity — combined peak alpha
+    // 0.5 * 0.5 * 255 ≈ 64.
+    let hair_clear = Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 0);
+    let hair_peak = Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 64);
+    geometry::fill_skewed_rect_vgradient(
+        canvas,
+        scale,
+        780.0,
+        -120.0,
+        5.0,
+        1400.0,
+        BG_SKEW_DEG,
+        &[(0.0, hair_clear), (0.35, hair_peak), (0.60, hair_peak), (1.0, hair_clear)],
+    );
+
+    // Vignette: radial-gradient(130% 130% at 50% 45%, transparent 55%,
+    // rgba(0,0,0,.55) 100%) — drawn last, on top of everything above.
+    geometry::fill_radial_ellipse_gradient(
         canvas,
         scale,
         theme::VW * 0.5,
         theme::VH * 0.45,
-        1900.0,
-        Color::RGBA(0, 0, 0, 0),
-        Color::RGBA(0, 0, 0, 140),
+        theme::VW * 1.3,
+        theme::VH * 1.3,
+        &[(0.55, Color::RGBA(0, 0, 0, 0)), (1.0, Color::RGBA(0, 0, 0, 140))],
     );
-    geometry::fill_skewed_rect(
-        canvas,
-        scale,
-        780.0,
-        0.0,
-        1.5,
-        theme::VH,
-        skew_deg,
-        Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 40),
-    );
+
+    // Grain (repeating 1px diagonal lines, overlay blend, toggleable in the
+    // CSS) is deliberately not reproduced: SDL2's blend modes have no
+    // "overlay" compositing mode, so this would need a pre-rendered static
+    // noise texture rather than a geometry primitive — not worth it for a
+    // toggleable, barely-visible detail. Flag for follow-up if it's ever
+    // actually requested.
     Ok(())
 }
 

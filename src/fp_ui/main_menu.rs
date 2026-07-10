@@ -71,7 +71,7 @@ pub fn draw(
     profile: &ProfileScreenState,
     rom_present: bool,
 ) -> Result<(), String> {
-    chrome::draw_background_accents(canvas, scale, SKEW_DEG)?;
+    chrome::draw_background_accents(canvas, scale)?;
     chrome::draw_header(canvas, fonts, scale, username, true, None)?;
 
     draw_ghost_watermark(canvas, fonts, scale, rom_present)?;

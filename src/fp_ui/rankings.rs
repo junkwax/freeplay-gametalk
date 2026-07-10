@@ -24,7 +24,6 @@ use sdl2::video::Window;
 const SIDE_PAD: f32 = 56.0;
 const TOP: f32 = 38.0 + 104.0;
 const MAX_ROWS: usize = 10;
-const SKEW_DEG: f32 = -9.0;
 
 pub fn draw(
     canvas: &mut Canvas<Window>,
@@ -38,7 +37,7 @@ pub fn draw(
     // every screen gets it, not just Main Menu/Play submenu (the only two
     // that had picked it up so far). Rankings was missing it entirely,
     // rendering flat black instead.
-    chrome::draw_background_accents(canvas, scale, SKEW_DEG)?;
+    chrome::draw_background_accents(canvas, scale)?;
     chrome::draw_header(canvas, fonts, scale, username, true, None)?;
     draw_ghost_watermark(canvas, fonts, scale)?;
 

@@ -21,7 +21,6 @@ use sdl2::video::Window;
 
 const SIDE_PAD: f32 = 56.0;
 const TOP: f32 = 38.0 + 104.0;
-const SKEW_DEG: f32 = -9.0;
 const ROW_H: f32 = 64.0;
 
 pub fn draw(
@@ -33,7 +32,7 @@ pub fn draw(
     status: Option<&str>,
     username: &str,
 ) -> Result<(), String> {
-    chrome::draw_background_accents(canvas, scale, SKEW_DEG)?;
+    chrome::draw_background_accents(canvas, scale)?;
     chrome::draw_header(canvas, fonts, scale, username, true, None)?;
 
     canvas.set_draw_color(theme::ACCENT);

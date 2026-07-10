@@ -197,30 +197,165 @@ pub fn fill_triangle(canvas: &mut Canvas<Window>, scale: &Scale, points: [(f32, 
     fill_triangles(canvas, &verts);
 }
 
-/// Fill a soft radial glow (logical center/radius) — `inner` at the center
-/// fading to `outer` at `r`, via a Gouraud-shaded triangle fan (same
-/// structure as `fill_circle`, just with the center vertex and perimeter
-/// ring colored differently so SDL interpolates a gradient across each
-/// triangle instead of a flat fill). Used to approximate the mockup's CSS
-/// `radial-gradient(...)` background glows, which SDL2 has no native
-/// primitive for.
-pub fn fill_radial_gradient(canvas: &mut Canvas<Window>, scale: &Scale, cx: f32, cy: f32, r: f32, inner: Color, outer: Color) {
+/// Fill a soft radial glow as a multi-stop `(0.0-1.0 fraction of (rx,ry),
+/// color)` sequence (ascending, first stop at `0.0`) over an *ellipse*
+/// (`rx`/`ry` independent, matching CSS `radial-gradient(Wpct Hpct at ...)`'s
+/// two-value size against a non-square box — a single shared radius distorts
+/// the true shape whenever the box isn't square, e.g. 1920x1080). The
+/// innermost stop renders as a Gouraud-shaded triangle fan (like
+/// `fill_circle`); each subsequent stop renders as an annulus ring of quads
+/// between the previous and current stop's radius fraction, colored at each
+/// edge so SDL interpolates the fade across the ring. Used to approximate
+/// mockup CSS `radial-gradient(...)` background glows, which SDL2 has no
+/// native primitive for.
+pub fn fill_radial_ellipse_gradient(
+    canvas: &mut Canvas<Window>,
+    scale: &Scale,
+    cx: f32,
+    cy: f32,
+    rx: f32,
+    ry: f32,
+    stops: &[(f32, Color)],
+) {
     canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
-    let center = scale.point(cx, cy);
-    let center_v = vertex(center.0 as f32, center.1 as f32, inner);
-    let mut perim = Vec::with_capacity(CIRCLE_SEGMENTS + 1);
-    for i in 0..=CIRCLE_SEGMENTS {
-        let a = std::f32::consts::TAU * i as f32 / CIRCLE_SEGMENTS as f32;
-        let p = scale.point(cx + a.cos() * r, cy + a.sin() * r);
-        perim.push(vertex(p.0 as f32, p.1 as f32, outer));
+    let point_at = |t: f32, a: f32| scale.point(cx + a.cos() * rx * t, cy + a.sin() * ry * t);
+    for pair in stops.windows(2) {
+        let (t0, c0) = pair[0];
+        let (t1, c1) = pair[1];
+        if t0 <= 0.0 {
+            let center = scale.point(cx, cy);
+            let center_v = vertex(center.0 as f32, center.1 as f32, c0);
+            let mut perim = Vec::with_capacity(CIRCLE_SEGMENTS + 1);
+            for i in 0..=CIRCLE_SEGMENTS {
+                let a = std::f32::consts::TAU * i as f32 / CIRCLE_SEGMENTS as f32;
+                let p = point_at(t1, a);
+                perim.push(vertex(p.0 as f32, p.1 as f32, c1));
+            }
+            let mut verts = Vec::with_capacity(CIRCLE_SEGMENTS * 3);
+            for i in 0..CIRCLE_SEGMENTS {
+                verts.push(center_v);
+                verts.push(perim[i]);
+                verts.push(perim[i + 1]);
+            }
+            fill_triangles(canvas, &verts);
+        } else {
+            let mut verts = Vec::with_capacity(CIRCLE_SEGMENTS * 6);
+            for i in 0..CIRCLE_SEGMENTS {
+                let a0 = std::f32::consts::TAU * i as f32 / CIRCLE_SEGMENTS as f32;
+                let a1 = std::f32::consts::TAU * (i + 1) as f32 / CIRCLE_SEGMENTS as f32;
+                let o0 = point_at(t1, a0);
+                let o1 = point_at(t1, a1);
+                let i0 = point_at(t0, a0);
+                let i1 = point_at(t0, a1);
+                let o0v = vertex(o0.0 as f32, o0.1 as f32, c1);
+                let o1v = vertex(o1.0 as f32, o1.1 as f32, c1);
+                let i0v = vertex(i0.0 as f32, i0.1 as f32, c0);
+                let i1v = vertex(i1.0 as f32, i1.1 as f32, c0);
+                verts.push(o0v);
+                verts.push(o1v);
+                verts.push(i1v);
+                verts.push(o0v);
+                verts.push(i1v);
+                verts.push(i0v);
+            }
+            fill_triangles(canvas, &verts);
+        }
     }
-    let mut verts = Vec::with_capacity(CIRCLE_SEGMENTS * 3);
-    for i in 0..CIRCLE_SEGMENTS {
-        verts.push(center_v);
-        verts.push(perim[i]);
-        verts.push(perim[i + 1]);
+}
+
+/// Fill a skewed parallelogram (logical rect `(x, y, w, h)`, skewed by
+/// `skew_deg` around its own local vertical center, same convention as
+/// `fill_skewed_rect`) with a vertical multi-stop gradient — `stops` are
+/// `(0.0-1.0 fraction of h, color)` pairs, ascending, first at `0.0` and
+/// last at `1.0`. The shear offset is computed once against the *whole*
+/// shape's height rather than per-sub-band, so adjacent bands share the
+/// same edge position with no visible seam.
+pub fn fill_skewed_rect_vgradient(
+    canvas: &mut Canvas<Window>,
+    scale: &Scale,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    skew_deg: f32,
+    stops: &[(f32, Color)],
+) {
+    canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
+    let skew = skew_deg.to_radians().tan();
+    let shift_at = |local_y: f32| skew * (local_y - h / 2.0);
+    for pair in stops.windows(2) {
+        let (t0, c0) = pair[0];
+        let (t1, c1) = pair[1];
+        let ly0 = h * t0;
+        let ly1 = h * t1;
+        let s0 = shift_at(ly0);
+        let s1 = shift_at(ly1);
+        let tl = scale.point(x + s0, y + ly0);
+        let tr = scale.point(x + w + s0, y + ly0);
+        let bl = scale.point(x + s1, y + ly1);
+        let br = scale.point(x + w + s1, y + ly1);
+        let verts = [
+            vertex(tl.0 as f32, tl.1 as f32, c0),
+            vertex(tr.0 as f32, tr.1 as f32, c0),
+            vertex(br.0 as f32, br.1 as f32, c1),
+            vertex(tl.0 as f32, tl.1 as f32, c0),
+            vertex(br.0 as f32, br.1 as f32, c1),
+            vertex(bl.0 as f32, bl.1 as f32, c1),
+        ];
+        fill_triangles(canvas, &verts);
     }
-    fill_triangles(canvas, &verts);
+}
+
+/// Fill a full-box linear gradient band across the entire logical `VW x VH`
+/// stage, CSS `linear-gradient(angle_deg, stops...)` convention (`0deg`
+/// points "to top", increasing clockwise — `dx = sin(a)`, `dy = -cos(a)` is
+/// the direction of increasing `%`). `stops` are `(0.0-1.0 fraction along
+/// the gradient line, color)` pairs. The gradient-line span is derived from
+/// the box's own corner projections (centered on the box), matching the CSS
+/// spec's definition of the line length for an angled full-box gradient —
+/// not just the box's width or height alone, which is wrong for diagonal
+/// angles. Each stop pair renders as a wide quad perpendicular to the
+/// gradient direction, long enough on the perpendicular axis to fully cover
+/// the box regardless of rotation.
+pub fn fill_linear_gradient_box(canvas: &mut Canvas<Window>, scale: &Scale, angle_deg: f32, stops: &[(f32, Color)]) {
+    canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
+    let a = angle_deg.to_radians();
+    let (dx, dy) = (a.sin(), -a.cos());
+    let (px, py) = (-dy, dx);
+    let w = super::theme::VW;
+    let h = super::theme::VH;
+    let (cx, cy) = (w / 2.0, h / 2.0);
+    let corners = [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)];
+    let mut min_p = f32::MAX;
+    let mut max_p = f32::MIN;
+    for (cxp, cyp) in corners {
+        let proj = (cxp - cx) * dx + (cyp - cy) * dy;
+        min_p = min_p.min(proj);
+        max_p = max_p.max(proj);
+    }
+    let span = max_p - min_p;
+    let half_perp = (w * w + h * h).sqrt();
+    for pair in stops.windows(2) {
+        let (t0, c0) = pair[0];
+        let (t1, c1) = pair[1];
+        let p0 = min_p + span * t0;
+        let p1 = min_p + span * t1;
+        let (c0x, c0y) = (cx + dx * p0, cy + dy * p0);
+        let (c1x, c1y) = (cx + dx * p1, cy + dy * p1);
+        let tl = scale.point(c0x - px * half_perp, c0y - py * half_perp);
+        let tr = scale.point(c0x + px * half_perp, c0y + py * half_perp);
+        let bl = scale.point(c1x - px * half_perp, c1y - py * half_perp);
+        let br = scale.point(c1x + px * half_perp, c1y + py * half_perp);
+        let verts = [
+            vertex(tl.0 as f32, tl.1 as f32, c0),
+            vertex(tr.0 as f32, tr.1 as f32, c0),
+            vertex(br.0 as f32, br.1 as f32, c1),
+            vertex(tl.0 as f32, tl.1 as f32, c0),
+            vertex(br.0 as f32, br.1 as f32, c1),
+            vertex(bl.0 as f32, bl.1 as f32, c1),
+        ];
+        fill_triangles(canvas, &verts);
+    }
 }
 
 /// Fill an axis-aligned logical rect `(x, y, w, h)` with a horizontal color
