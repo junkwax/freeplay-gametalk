@@ -3433,6 +3433,54 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         }
                                     }
                                 }
+                                fp_ui::FpResult::SendLobbyChat(message) => {
+                                    // Mirrors legacy's NavResult::SendLobbyChat(message).
+                                    matchmaking::set_guest_profile(
+                                        cfg.player_username.clone(),
+                                        cfg.stats_email.clone(),
+                                        cfg.guest_device_id.clone(),
+                                    );
+                                    let (tx, rx) = std::sync::mpsc::channel();
+                                    lobby_chat_post_rx = Some(rx);
+                                    matchmaking::send_lobby_chat(message, tx);
+                                }
+                                fp_ui::FpResult::OpenLegacyChat { chat, presence } => {
+                                    // fp_ui has no on-screen keyboard — hand off to the
+                                    // real legacy OnlineHub Chat tab (which has one),
+                                    // seeded with the chat/presence already fetched here
+                                    // instead of starting from empty. Known rough edge:
+                                    // lands back on legacy once the player backs out,
+                                    // same shape as BeginAccountEdit/OpenJoinCode.
+                                    state = AppState::Menu(MenuScreen::OnlineHub {
+                                        tab: menu::OnlineTab::Chat,
+                                        focus: menu::HubFocus::Content,
+                                        cursor: 0,
+                                        challenge_format: menu::ChallengeFormat::UnrankedVs,
+                                        chat_draft: String::new(),
+                                        chat,
+                                        presence,
+                                        chat_scroll: 0,
+                                        osk_row: 0,
+                                        osk_col: 0,
+                                        challenge_pick: None,
+                                        incoming: None,
+                                        lobbies: Vec::new(),
+                                        live_matches: Vec::new(),
+                                        status: "Choose a section".into(),
+                                    });
+                                }
+                                fp_ui::FpResult::WatchSession(session_id) => {
+                                    // Mirrors legacy's NavResult::WatchSession(id) — the
+                                    // spectator view itself stays legacy.
+                                    let (tx, rx) = std::sync::mpsc::channel();
+                                    spectate_rx = Some(rx);
+                                    spectate_last_update = Some(Instant::now());
+                                    matchmaking::watch_spectate_state(session_id.clone(), tx);
+                                    state = AppState::Menu(MenuScreen::Spectate {
+                                        session_id,
+                                        status: menu::SpectateStatus::waiting(),
+                                    });
+                                }
                             }
                         }
                     }
@@ -7335,6 +7383,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             tab: menu::OnlineTab::Watch,
                             ..
                         })
+                    )
+                    || matches!(
+                        state,
+                        AppState::FpUi(fp_ui::FpScreen::Lobby { tab: 4, .. })
                     ))
                     && live_matches_rx.is_none()
                     && Instant::now() >= live_matches_next_refresh
@@ -7347,14 +7399,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 // Refresh general-lobby presence/chat on Chat and Players (both
                 // need the online roster; this also registers our presence so
-                // others can challenge us).
-                if matches!(
+                // others can challenge us). fp_ui's Chat tab (tab: 3) mirrors
+                // the same fetch rather than a second pipeline.
+                if (matches!(
                     state,
                     AppState::Menu(menu::MenuScreen::OnlineHub {
                         tab: menu::OnlineTab::Chat | menu::OnlineTab::Players,
                         ..
                     })
-                ) && lobby_rx.is_none()
+                ) || matches!(
+                    state,
+                    AppState::FpUi(fp_ui::FpScreen::Lobby { tab: 3, .. })
+                )) && lobby_rx.is_none()
                     && Instant::now() >= lobby_next_refresh
                 {
                     let (tx, rx) = std::sync::mpsc::channel();
@@ -7364,13 +7420,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 if let Some(rx) = &lobby_rx {
-                    if let AppState::Menu(menu::MenuScreen::OnlineHub {
-                        ref mut status,
-                        ref mut chat,
-                        ref mut presence,
-                        ..
-                    }) = state
-                    {
+                    // fp_ui's Chat tab (tab: 3) mirrors legacy OnlineHub's
+                    // chat/presence/status fields exactly, so the same fetch
+                    // populates either shape.
+                    let target = match &mut state {
+                        AppState::Menu(menu::MenuScreen::OnlineHub {
+                            status,
+                            chat,
+                            presence,
+                            ..
+                        }) => Some((status, chat, presence)),
+                        AppState::FpUi(fp_ui::FpScreen::Lobby {
+                            status,
+                            chat,
+                            presence,
+                            ..
+                        }) => Some((status, chat, presence)),
+                        _ => None,
+                    };
+                    if let Some((status, chat, presence)) = target {
                         match rx.try_recv() {
                             Ok(matchmaking::LobbyUpdate::Loaded(snapshot)) => {
                                 *status = snapshot.status.clone();
@@ -7393,11 +7461,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 if let Some(rx) = &lobby_chat_post_rx {
-                    if let AppState::Menu(menu::MenuScreen::OnlineHub {
-                        ref mut status,
-                        ..
-                    }) = state
-                    {
+                    let target = match &mut state {
+                        AppState::Menu(menu::MenuScreen::OnlineHub { status, .. }) => {
+                            Some(status)
+                        }
+                        AppState::FpUi(fp_ui::FpScreen::Lobby { status, .. }) => Some(status),
+                        _ => None,
+                    };
+                    if let Some(status) = target {
                         match rx.try_recv() {
                             Ok(matchmaking::LobbyChatPostUpdate::Sent) => {
                                 *status = "Message sent".into();
@@ -7917,6 +7988,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             status,
                         })
                         | AppState::Menu(menu::MenuScreen::OnlineHub {
+                            cursor,
+                            live_matches: matches,
+                            status,
+                            ..
+                        })
+                        | AppState::FpUi(fp_ui::FpScreen::Lobby {
                             cursor,
                             live_matches: matches,
                             status,

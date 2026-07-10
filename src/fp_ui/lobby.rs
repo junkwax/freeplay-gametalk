@@ -28,7 +28,7 @@ use sdl2::pixels::Color;
 use sdl2::render::Canvas;
 use sdl2::video::Window;
 
-pub const TABS: [&str; 3] = ["QUICK MATCH", "HOST / JOIN", "SERVER BROWSER"];
+pub const TABS: [&str; 5] = ["QUICK MATCH", "HOST / JOIN", "SERVER BROWSER", "CHAT", "WATCH"];
 const SIDE_PAD: f32 = 56.0;
 const CONTENT_TOP: f32 = 142.0;
 const PANEL_TOP: f32 = CONTENT_TOP + 122.0;
@@ -45,6 +45,9 @@ pub fn draw(
     cursor: usize,
     lobbies: &[LobbyPreview],
     status: &str,
+    chat: &[crate::matchmaking::LobbyChatMessage],
+    presence: &[crate::matchmaking::LobbyUser],
+    live_matches: &[crate::matchmaking::LiveMatch],
     username: &str,
 ) -> Result<(), String> {
     chrome::draw_header(canvas, fonts, scale, username, true, None)?;
@@ -76,7 +79,9 @@ pub fn draw(
     match tab {
         0 => draw_quick_match(canvas, fonts, scale)?,
         1 => draw_host_join(canvas, fonts, scale, host_join_focus)?,
-        _ => draw_server_browser(canvas, fonts, scale, lobbies, cursor, status)?,
+        2 => draw_server_browser(canvas, fonts, scale, lobbies, cursor, status)?,
+        3 => draw_chat(canvas, fonts, scale, chat, presence, cursor)?,
+        _ => draw_watch(canvas, fonts, scale, live_matches, cursor)?,
     }
 
     let prompts: &[chrome::FooterPrompt] = match tab {
@@ -86,9 +91,19 @@ pub fn draw(
             chrome::PROMPT_SELECT,
             chrome::PROMPT_BACK,
         ],
-        _ => &[
+        2 => &[
             chrome::FooterPrompt { glyph: "\u{2195}", label: "Row", color: Color::RGB(0xcf, 0xcf, 0xc9) },
             chrome::PROMPT_SELECT,
+            chrome::PROMPT_BACK,
+        ],
+        3 => &[
+            chrome::FooterPrompt { glyph: "\u{2195}", label: "Phrase", color: Color::RGB(0xcf, 0xcf, 0xc9) },
+            chrome::PROMPT_SELECT,
+            chrome::PROMPT_BACK,
+        ],
+        _ => &[
+            chrome::FooterPrompt { glyph: "\u{2195}", label: "Match", color: Color::RGB(0xcf, 0xcf, 0xc9) },
+            chrome::FooterPrompt { glyph: "X", label: "Spectate", color: theme::BTN_CROSS },
             chrome::PROMPT_BACK,
         ],
     };
@@ -251,6 +266,198 @@ fn draw_server_browser(
         fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(13.0), lobby.format.label(), fx, fy, Color::RGB(0x9a, 0x9a, 0xa2))?;
         let (px, py) = scale.point(SIDE_PAD + 24.0 + 1200.0, y + row_h / 2.0 - 8.0);
         fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(16.0), &format!("{}", lobby.players), px, py, Color::RGB(0xcf, 0xcf, 0xc9))?;
+    }
+    Ok(())
+}
+
+/// Chat tab — message list + presence sidebar, matching the mockup's own
+/// two-column layout. Quick-phrase chips are real, native, and Confirm-able
+/// (`FpResult::SendLobbyChat`); the mockup's own "△ TO OPEN KEYBOARD" hint
+/// (there's no inline keyboard drawn in its own markup either) becomes the
+/// "COMPOSE MESSAGE" row here — see `mod.rs`'s `FpResult::OpenLegacyChat`
+/// doc comment for why that hands off to legacy instead of a native OSK.
+fn draw_chat(
+    canvas: &mut Canvas<Window>,
+    fonts: &mut FpFontCache,
+    scale: &Scale,
+    chat: &[crate::matchmaking::LobbyChatMessage],
+    presence: &[crate::matchmaking::LobbyUser],
+    cursor: usize,
+) -> Result<(), String> {
+    let sidebar_w = 320.0;
+    let messages_w = PANEL_W - sidebar_w - 1.0;
+
+    // Message list, newest at the bottom (matching the mockup's own
+    // `justify-content:flex-end` chat log), most recent MAX_MESSAGES shown.
+    const MAX_MESSAGES: usize = 9;
+    let row_h = 30.0;
+    let list_top = PANEL_TOP + 16.0;
+    let list_h = 300.0;
+    let shown: Vec<&crate::matchmaking::LobbyChatMessage> = chat.iter().rev().take(MAX_MESSAGES).rev().collect();
+    if shown.is_empty() {
+        let msg = "No messages yet \u{2014} say hi";
+        let (mw, _) = fonts.text_size(FpFont::SairaSemiBold, scale.font_px(15.0), msg);
+        let (mx, my) = scale.point(SIDE_PAD + (messages_w - mw as f32 / scale.s) / 2.0, list_top + list_h / 2.0);
+        fonts.draw(canvas, FpFont::SairaSemiBold, scale.font_px(15.0), msg, mx, my, theme::DIM)?;
+    } else {
+        let start_y = list_top + list_h - shown.len() as f32 * row_h;
+        for (i, msg) in shown.iter().enumerate() {
+            let y = start_y + i as f32 * row_h;
+            if let Some(time) = &msg.timestamp {
+                let (ttx, tty) = scale.point(SIDE_PAD + 24.0, y);
+                fonts.draw(canvas, FpFont::ChakraPetchMedium, scale.font_px(11.0), time, ttx, tty, Color::RGB(0x3a, 0x3a, 0x42))?;
+            }
+            let (ux, uy) = scale.point(SIDE_PAD + 24.0 + 52.0, y);
+            let (uw, _) = fonts.draw(canvas, FpFont::SairaSemiBold, scale.font_px(15.0), &msg.username, ux, uy, theme::ACCENT)?;
+            let (mx, my) = scale.point(SIDE_PAD + 24.0 + 52.0 + (uw as f32 / scale.s) + 10.0, y);
+            fonts.draw(canvas, FpFont::SairaMedium, scale.font_px(15.0), &msg.message, mx, my, Color::RGB(0xcf, 0xcf, 0xc9))?;
+        }
+    }
+
+    canvas.set_draw_color(Color::RGBA(255, 255, 255, 18));
+    canvas.fill_rect(Some(scale.rect(SIDE_PAD, list_top + list_h + 12.0, messages_w, 1.0)))?;
+
+    // Quick phrases + compose row, one shared vertical cursor.
+    let quick_y = list_top + list_h + 28.0;
+    let mut px = SIDE_PAD + 24.0;
+    let phrase_y_h = 34.0;
+    for (i, phrase) in crate::menu::QUICK_PHRASES.iter().enumerate() {
+        let selected = i == cursor;
+        let (pw, ph) = fonts.text_size(FpFont::ChakraPetchSemiBold, scale.font_px(13.0), phrase);
+        let chip_w = (pw as f32 / scale.s) + 22.0;
+        let chip_h = (ph as f32 / scale.s) + 14.0;
+        if px + chip_w > SIDE_PAD + messages_w - 24.0 {
+            break;
+        }
+        canvas.set_draw_color(if selected {
+            Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 46)
+        } else {
+            Color::RGBA(255, 255, 255, 10)
+        });
+        canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
+        canvas.fill_rect(Some(scale.rect(px, quick_y, chip_w, chip_h)))?;
+        canvas.set_draw_color(if selected { theme::ACCENT } else { Color::RGBA(255, 255, 255, 24) });
+        canvas.draw_rect(scale.rect(px, quick_y, chip_w, chip_h))?;
+        let (tx2, ty2) = scale.point(px + 11.0, quick_y + 7.0);
+        fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(13.0), phrase, tx2, ty2, if selected { theme::TEXT } else { Color::RGB(0x9a, 0x9a, 0xa2) })?;
+        px += chip_w + 8.0;
+    }
+
+    let compose_selected = cursor == crate::menu::QUICK_PHRASES.len();
+    let compose_y = quick_y + phrase_y_h + 14.0;
+    canvas.set_draw_color(if compose_selected {
+        Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 30)
+    } else {
+        Color::RGBA(255, 255, 255, 8)
+    });
+    canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
+    canvas.fill_rect(Some(scale.rect(SIDE_PAD + 24.0, compose_y, messages_w - 48.0, 40.0)))?;
+    canvas.set_draw_color(if compose_selected { theme::ACCENT } else { Color::RGBA(255, 255, 255, 20) });
+    canvas.draw_rect(scale.rect(SIDE_PAD + 24.0, compose_y, messages_w - 48.0, 40.0))?;
+    let hint = "SELECT TO OPEN KEYBOARD \u{b7} TYPE A MESSAGE";
+    let (hx, hy) = scale.point(SIDE_PAD + 24.0 + 14.0, compose_y + 13.0);
+    fonts.draw(canvas, FpFont::ChakraPetchMedium, scale.font_px(13.0), hint, hx, hy, if compose_selected { theme::TEXT } else { theme::MUTE })?;
+
+    // Presence sidebar.
+    let sidebar_x = SIDE_PAD + messages_w + 1.0;
+    canvas.set_draw_color(Color::RGBA(255, 255, 255, 12));
+    canvas.fill_rect(Some(scale.rect(sidebar_x, PANEL_TOP, 1.0, PANEL_H)))?;
+    let header = format!("{} ONLINE", presence.len());
+    let (phx, phy) = scale.point(sidebar_x + 20.0, PANEL_TOP + 16.0);
+    fonts.draw_tracked(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(11.0), &header, phx, phy, theme::MUTE, scale.len(3.0).round() as i32)?;
+    canvas.set_draw_color(Color::RGBA(255, 255, 255, 12));
+    canvas.fill_rect(Some(scale.rect(sidebar_x, PANEL_TOP + 40.0, sidebar_w, 1.0)))?;
+
+    let prow_h = 46.0;
+    for (i, user) in presence.iter().enumerate() {
+        let y = PANEL_TOP + 40.0 + i as f32 * prow_h;
+        if y + prow_h > PANEL_TOP + PANEL_H {
+            break;
+        }
+        let dot_color = if user.status.eq_ignore_ascii_case("online") { theme::GREEN } else { theme::MUTE };
+        geometry::fill_circle(canvas, scale, sidebar_x + 20.0 + 4.0, y + prow_h / 2.0, 4.0, dot_color);
+        let (nx, ny) = scale.point(sidebar_x + 20.0 + 18.0, y + prow_h / 2.0 - 15.0);
+        fonts.draw(canvas, FpFont::SairaSemiBold, scale.font_px(14.0), &user.username, nx, ny, Color::RGB(0xed, 0xed, 0xe8))?;
+        let (stx, sty) = scale.point(sidebar_x + 20.0 + 18.0, y + prow_h / 2.0 + 2.0);
+        fonts.draw(canvas, FpFont::ChakraPetchMedium, scale.font_px(10.0), &user.status, stx, sty, Color::RGB(0x52, 0x52, 0x5a))?;
+        if let Some(rating) = user.rating {
+            let rtext = rating.to_string();
+            let (rw, _) = fonts.text_size(FpFont::ChakraPetchMedium, scale.font_px(12.0), &rtext);
+            let (rx, ry) = scale.point(sidebar_x + sidebar_w - 20.0 - (rw as f32 / scale.s), y + prow_h / 2.0 - 7.0);
+            fonts.draw(canvas, FpFont::ChakraPetchMedium, scale.font_px(12.0), &rtext, rx, ry, Color::RGB(0x4a, 0x4a, 0x52))?;
+        }
+    }
+    Ok(())
+}
+
+/// Watch tab — live-match list, matching the mockup's own card layout minus
+/// the round/duration fields (`matchmaking::LiveMatch` has no real data to
+/// back those — session id, names, and score only).
+fn draw_watch(
+    canvas: &mut Canvas<Window>,
+    fonts: &mut FpFontCache,
+    scale: &Scale,
+    live_matches: &[crate::matchmaking::LiveMatch],
+    cursor: usize,
+) -> Result<(), String> {
+    let header_y = PANEL_TOP + 20.0;
+    let header = format!("{} LIVE MATCHES \u{2014} SELECT TO SPECTATE", live_matches.len());
+    let (hx, hy) = scale.point(SIDE_PAD + 24.0, header_y);
+    fonts.draw_tracked(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(11.0), &header, hx, hy, theme::MUTE, scale.len(3.0).round() as i32)?;
+
+    geometry::fill_circle(canvas, scale, SIDE_PAD + PANEL_W - 70.0, header_y + 6.0, 3.5, theme::ACCENT);
+    let (lx, ly) = scale.point(SIDE_PAD + PANEL_W - 58.0, header_y - 2.0);
+    fonts.draw_tracked(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(12.0), "LIVE", lx, ly, theme::ACCENT, scale.len(3.0).round() as i32)?;
+
+    if live_matches.is_empty() {
+        let msg = "No live matches right now";
+        let (mw, _) = fonts.text_size(FpFont::SairaSemiBold, scale.font_px(15.0), msg);
+        let (mx, my) = scale.point(SIDE_PAD + (PANEL_W - mw as f32 / scale.s) / 2.0, PANEL_TOP + PANEL_H / 2.0);
+        fonts.draw(canvas, FpFont::SairaSemiBold, scale.font_px(15.0), msg, mx, my, theme::DIM)?;
+        return Ok(());
+    }
+
+    let row_h = 84.0;
+    let list_top = header_y + 32.0;
+    for (i, m) in live_matches.iter().enumerate() {
+        let y = list_top + i as f32 * (row_h + 10.0);
+        if y + row_h > PANEL_TOP + PANEL_H {
+            break;
+        }
+        let selected = i == cursor;
+        canvas.set_draw_color(if selected {
+            Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 26)
+        } else {
+            Color::RGBA(8, 8, 11, 140)
+        });
+        canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
+        canvas.fill_rect(Some(scale.rect(SIDE_PAD, y, PANEL_W, row_h)))?;
+        canvas.set_draw_color(if selected { theme::ACCENT } else { Color::RGBA(255, 255, 255, 18) });
+        canvas.draw_rect(scale.rect(SIDE_PAD, y, PANEL_W, row_h))?;
+
+        let score = format!("{}-{}", m.p1_score, m.p2_score);
+        let center_x = SIDE_PAD + PANEL_W / 2.0;
+        let (p1w, _) = fonts.text_size(FpFont::SairaCondensedBold, scale.font_px(28.0), &m.p1_name.to_uppercase());
+        let (scw, _) = fonts.text_size(FpFont::ChakraPetchSemiBold, scale.font_px(22.0), &score);
+        let gap = 24.0;
+        let p1_x = center_x - (p1w as f32 / scale.s) - gap / 2.0 - (scw as f32 / scale.s) / 2.0;
+        let (p1x, p1y) = scale.point(p1_x, y + row_h / 2.0 - 16.0);
+        fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(28.0), &m.p1_name.to_uppercase(), p1x, p1y, theme::TEXT)?;
+        let (scx, scy) = scale.point(center_x - (scw as f32 / scale.s) / 2.0, y + row_h / 2.0 - 13.0);
+        fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(22.0), &score, scx, scy, theme::ACCENT)?;
+        let (p2x, p2y) = scale.point(center_x + (scw as f32 / scale.s) / 2.0 + gap / 2.0, y + row_h / 2.0 - 16.0);
+        fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(28.0), &m.p2_name.to_uppercase(), p2x, p2y, theme::TEXT)?;
+
+        let watch_label = "WATCH";
+        let (ww, wh) = fonts.text_size(FpFont::SairaCondensedBold, scale.font_px(15.0), watch_label);
+        let btn_w = (ww as f32 / scale.s) + 32.0;
+        let btn_h = (wh as f32 / scale.s) + 18.0;
+        let btn_x = SIDE_PAD + PANEL_W - 24.0 - btn_w;
+        let btn_y = y + row_h / 2.0 - btn_h / 2.0;
+        canvas.set_draw_color(if selected { theme::ACCENT } else { Color::RGBA(255, 255, 255, 24) });
+        canvas.draw_rect(scale.rect(btn_x, btn_y, btn_w, btn_h))?;
+        let (wtx, wty) = scale.point(btn_x + 16.0, btn_y + 9.0);
+        fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(15.0), watch_label, wtx, wty, if selected { theme::TEXT } else { Color::RGB(0x9a, 0x9a, 0xa2) })?;
     }
     Ok(())
 }

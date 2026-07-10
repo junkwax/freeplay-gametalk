@@ -163,17 +163,25 @@ pub enum FpScreen {
         sidebar_focus: bool,
         controls_player: crate::input::Player,
     },
-    /// `tab`: 0=Quick Match, 1=Host/Join, 2=Server Browser.
+    /// `tab`: 0=Quick Match, 1=Host/Join, 2=Server Browser, 3=Chat, 4=Watch.
     /// `host_join_focus`: 0=Host column, 1=Join column (tab 1 only).
     /// `lobbies`/`cursor`/`status`: the real public-lobby list (tab 2),
     /// kept in sync by main.rs the same way it syncs
     /// `MenuScreen::OnlineHub`'s fields from `lobby_list_rx`.
+    /// `chat`/`presence` (tab 3) and `live_matches` (tab 4) are kept in sync
+    /// the same way — see `mod.rs`'s `FpResult::SendLobbyChat`/
+    /// `WatchSession`/`OpenLegacyChat` doc comments. `cursor` doubles as the
+    /// quick-phrase index on tab 3 and the live-match index on tab 4 (same
+    /// per-tab reuse `Settings`' `row` already does across categories).
     Lobby {
         tab: usize,
         host_join_focus: usize,
         cursor: usize,
         lobbies: Vec<LobbyPreview>,
         status: String,
+        chat: Vec<crate::matchmaking::LobbyChatMessage>,
+        presence: Vec<crate::matchmaking::LobbyUser>,
+        live_matches: Vec<crate::matchmaking::LiveMatch>,
     },
 }
 
@@ -199,6 +207,9 @@ impl FpScreen {
             cursor: 0,
             lobbies: Vec::new(),
             status: String::new(),
+            chat: Vec::new(),
+            presence: Vec::new(),
+            live_matches: Vec::new(),
         }
     }
 }
@@ -299,6 +310,27 @@ pub enum FpResult {
     /// Confirm on a community replay entry. Caller does exactly what
     /// legacy's `NavResult::LoadRemoteReplay(url)` does.
     LoadRemoteReplay(String),
+    /// Confirm on a Chat quick-phrase chip. Caller does exactly what
+    /// legacy's `NavResult::SendLobbyChat(message)` does.
+    SendLobbyChat(String),
+    /// Confirm on the Chat tab's "compose a message" slot (one past the
+    /// last quick phrase). fp_ui has no on-screen keyboard of its own —
+    /// same as the mockup itself, whose Chat tab shows a "△ TO OPEN
+    /// KEYBOARD" hint rather than an inline keyboard — so this hands off
+    /// to the real legacy `MenuScreen::OnlineHub` (tab Chat, focus
+    /// Content), which has the actual OSK, seeded with the chat/presence
+    /// already fetched here rather than re-fetching from empty. Known
+    /// rough edge, same shape as `BeginAccountEdit`/`OpenJoinCode`: lands
+    /// back on legacy once the player backs out, not on this screen.
+    OpenLegacyChat {
+        chat: Vec<crate::matchmaking::LobbyChatMessage>,
+        presence: Vec<crate::matchmaking::LobbyUser>,
+    },
+    /// Confirm on a Watch tab live-match row. Caller does exactly what
+    /// legacy's `NavResult::WatchSession(session_id)` does — the spectator
+    /// *view* itself stays legacy (`MenuScreen::Spectate`), same as replay/
+    /// ghost playback; only this list is native.
+    WatchSession(String),
 }
 
 pub fn nav(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult {
@@ -624,13 +656,15 @@ pub fn nav(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult {
             }
             _ => FpResult::Stay,
         },
-        FpScreen::Lobby { tab, host_join_focus, cursor, lobbies, .. } => match input {
+        FpScreen::Lobby { tab, host_join_focus, cursor, lobbies, chat, presence, live_matches, .. } => match input {
             FpNav::PrevTab => {
-                *tab = (*tab + 2) % 3;
+                *tab = (*tab + lobby::TABS.len() - 1) % lobby::TABS.len();
+                *cursor = 0;
                 FpResult::Stay
             }
             FpNav::NextTab => {
-                *tab = (*tab + 1) % 3;
+                *tab = (*tab + 1) % lobby::TABS.len();
+                *cursor = 0;
                 FpResult::Stay
             }
             FpNav::Up if *tab == 2 => {
@@ -641,6 +675,26 @@ pub fn nav(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult {
                 *cursor = (*cursor + 1).min(lobbies.len().saturating_sub(1));
                 FpResult::Stay
             }
+            // Chat: cursor walks the quick-phrase row, plus one sentinel
+            // slot past the last phrase for "compose a message" (see
+            // `FpResult::OpenLegacyChat`'s doc comment for why that's a
+            // screen swap rather than native text entry).
+            FpNav::Up if *tab == 3 => {
+                *cursor = cursor.saturating_sub(1);
+                FpResult::Stay
+            }
+            FpNav::Down if *tab == 3 => {
+                *cursor = (*cursor + 1).min(crate::menu::QUICK_PHRASES.len());
+                FpResult::Stay
+            }
+            FpNav::Up if *tab == 4 => {
+                *cursor = cursor.saturating_sub(1);
+                FpResult::Stay
+            }
+            FpNav::Down if *tab == 4 => {
+                *cursor = (*cursor + 1).min(live_matches.len().saturating_sub(1));
+                FpResult::Stay
+            }
             FpNav::Left | FpNav::Right if *tab == 1 => {
                 *host_join_focus = 1 - *host_join_focus;
                 FpResult::Stay
@@ -649,8 +703,16 @@ pub fn nav(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult {
                 0 => FpResult::StartFindMatch,
                 1 if *host_join_focus == 0 => FpResult::CreatePrivateLobby,
                 1 => FpResult::OpenJoinCode,
-                _ => match lobbies.get(*cursor) {
+                2 => match lobbies.get(*cursor) {
                     Some(l) => FpResult::JoinLobby(l.id.clone()),
+                    None => FpResult::Stay,
+                },
+                3 if *cursor < crate::menu::QUICK_PHRASES.len() => {
+                    FpResult::SendLobbyChat(crate::menu::quick_phrase(*cursor).to_string())
+                }
+                3 => FpResult::OpenLegacyChat { chat: chat.clone(), presence: presence.clone() },
+                _ => match live_matches.get(*cursor) {
+                    Some(m) => FpResult::WatchSession(m.session_id.clone()),
                     None => FpResult::Stay,
                 },
             },
@@ -719,9 +781,20 @@ pub fn draw(
             stats_email,
             discord_connected,
         )?,
-        FpScreen::Lobby { tab, host_join_focus, cursor, lobbies, status } => {
-            lobby::draw(canvas, fonts, &scale, *tab, *host_join_focus, *cursor, lobbies, status, username)?
-        }
+        FpScreen::Lobby { tab, host_join_focus, cursor, lobbies, status, chat, presence, live_matches } => lobby::draw(
+            canvas,
+            fonts,
+            &scale,
+            *tab,
+            *host_join_focus,
+            *cursor,
+            lobbies,
+            status,
+            chat,
+            presence,
+            live_matches,
+            username,
+        )?,
     }
 
     Ok(())

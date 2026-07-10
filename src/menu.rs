@@ -694,6 +694,9 @@ pub fn test_state(name: &str) -> Option<AppState> {
                 cursor: 0,
                 lobbies: Vec::new(),
                 status: String::new(),
+                chat: Vec::new(),
+                presence: Vec::new(),
+                live_matches: Vec::new(),
             }))
         }
         "fp:lobby:browser" => {
@@ -722,6 +725,72 @@ pub fn test_state(name: &str) -> Option<AppState> {
                     },
                 ],
                 status: String::new(),
+                chat: Vec::new(),
+                presence: Vec::new(),
+                live_matches: Vec::new(),
+            }))
+        }
+        "fp:lobby:chat" => {
+            return Some(AppState::FpUi(crate::fp_ui::FpScreen::Lobby {
+                tab: 3,
+                host_join_focus: 0,
+                cursor: 0,
+                lobbies: Vec::new(),
+                status: String::new(),
+                chat: vec![
+                    LobbyChatMessage {
+                        username: "ScorpionKiller".into(),
+                        message: "gg wp that was close".into(),
+                        timestamp: Some("21:04".into()),
+                    },
+                    LobbyChatMessage {
+                        username: "SubZeroFan".into(),
+                        message: "anyone up for an ft5?".into(),
+                        timestamp: Some("21:05".into()),
+                    },
+                ],
+                presence: vec![
+                    LobbyUser {
+                        player_id: "p1".into(),
+                        username: "ScorpionKiller".into(),
+                        status: "online".into(),
+                        rating: Some(1403),
+                    },
+                    LobbyUser {
+                        player_id: "p2".into(),
+                        username: "SubZeroFan".into(),
+                        status: "in lobby".into(),
+                        rating: Some(1521),
+                    },
+                ],
+                live_matches: Vec::new(),
+            }))
+        }
+        "fp:lobby:watch" => {
+            return Some(AppState::FpUi(crate::fp_ui::FpScreen::Lobby {
+                tab: 4,
+                host_join_focus: 0,
+                cursor: 0,
+                lobbies: Vec::new(),
+                status: String::new(),
+                chat: Vec::new(),
+                presence: Vec::new(),
+                live_matches: vec![
+                    LiveMatch {
+                        session_id: "s1".into(),
+                        p1_name: "Liu Kang".into(),
+                        p2_name: "Kung Lao".into(),
+                        p1_score: 2,
+                        p2_score: 1,
+                    },
+                    LiveMatch {
+                        session_id: "s2".into(),
+                        p1_name: "Mileena".into(),
+                        p2_name: "Kitana".into(),
+                        p1_score: 0,
+                        p2_score: 3,
+                    },
+                ],
             }))
         }
         "profile" => {
