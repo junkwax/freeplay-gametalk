@@ -41,6 +41,7 @@ pub fn draw(
     thumb: Option<&(Vec<u8>, u32, u32)>,
     username: &str,
 ) -> Result<(), String> {
+    chrome::draw_background_accents_no_glow(canvas, scale)?;
     chrome::draw_header(canvas, fonts, scale, username, true, None)?;
 
     canvas.set_draw_color(theme::ACCENT);

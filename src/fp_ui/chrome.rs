@@ -37,8 +37,14 @@ const SIDE_PAD: f32 = 56.0;
 /// skewed elements are a fixed -11deg per the CSS regardless of whatever
 /// skew angle the calling screen's foreground rows use.
 pub fn draw_background_accents(canvas: &mut Canvas<Window>, scale: &Scale) -> Result<(), String> {
-    const BG_SKEW_DEG: f32 = -11.0;
+    draw_stage_glow(canvas, scale)?;
+    draw_background_accents_no_glow(canvas, scale)
+}
 
+/// The off-center radial "stage glow" ellipse alone — split out of
+/// `draw_background_accents` so screens that don't want it can still get
+/// the rest of the layered background via `draw_background_accents_no_glow`.
+fn draw_stage_glow(canvas: &mut Canvas<Window>, scale: &Scale) -> Result<(), String> {
     // Stage base: radial-gradient(120% 120% at 78% 18%, #121217 0%,
     // #0a0a0d 42%, #060608 100%). Ellipse, not circle — 120% of a
     // 1920x1080 box is not the same in both axes.
@@ -55,6 +61,16 @@ pub fn draw_background_accents(canvas: &mut Canvas<Window>, scale: &Scale) -> Re
             (1.0, Color::RGB(0x06, 0x06, 0x08)),
         ],
     );
+    Ok(())
+}
+
+/// Same layered background as `draw_background_accents`, minus the
+/// off-center radial "stage glow" ellipse (the neutral gray sunburst at
+/// 78%/18%) — per direct feedback that the glow specifically wasn't
+/// wanted on some screens, while the diagonal red wash, the left-side
+/// skewed light bar, the red hairline, and the vignette all still are.
+pub fn draw_background_accents_no_glow(canvas: &mut Canvas<Window>, scale: &Scale) -> Result<(), String> {
+    const BG_SKEW_DEG: f32 = -11.0;
 
     // Diagonal accent wash: linear-gradient(115deg, transparent 0%,
     // transparent 60%, rgba(226,42,53,.05) 78%, transparent 80%) — the

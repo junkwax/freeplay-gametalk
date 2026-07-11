@@ -43,6 +43,7 @@ pub fn draw(
     status: &str,
     checking: bool,
 ) -> Result<(), String> {
+    chrome::draw_background_accents_no_glow(canvas, scale)?;
     // No confirmed identity yet — this screen exists specifically because
     // one doesn't exist, so the header's profile chip shows the in-progress
     // value rather than a blank/placeholder name.
