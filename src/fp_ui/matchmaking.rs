@@ -123,9 +123,15 @@ pub(super) fn draw_radar(canvas: &mut Canvas<Window>, scale: &Scale, cx: f32, cy
     // fading from ~65% to 0% opacity over a 2.8s cycle, the second offset by
     // half a cycle (1.4s) so a new pulse starts as the first fades out —
     // `@keyframes fp-radar` in the mockup.
-    let cycle_ms = 2800.0;
-    for phase in [0.0, 0.5] {
-        let t = ((elapsed_ms() as f32 / cycle_ms + phase) % 1.0).max(0.0);
+    //
+    // The modulo must happen in *integer* space before the f32 conversion:
+    // `elapsed_ms()` is Unix-epoch millis (~1.8e12), far past f32's 24-bit
+    // mantissa — `as f32` first quantizes it to ~131s steps, freezing the
+    // animation on any human timescale (the bug this comment replaces).
+    let cycle_ms: u128 = 2800;
+    let cycle_t = (elapsed_ms() % cycle_ms) as f32 / cycle_ms as f32;
+    for phase in [0.0f32, 0.5] {
+        let t = (cycle_t + phase) % 1.0;
         let scale_factor = 0.25 + t * (1.55 - 0.25);
         let alpha = (0.65 * (1.0 - t) * 255.0) as u8;
         geometry::stroke_circle(
@@ -144,7 +150,7 @@ pub(super) fn draw_radar(canvas: &mut Canvas<Window>, scale: &Scale, cx: f32, cy
 
     // Rotating ~20deg wedge (conic-gradient's 55deg-75deg visible band in
     // the CSS) — `@keyframes fp-sweep`, one linear revolution per 2.8s.
-    let angle = (elapsed_ms() as f32 / cycle_ms) * std::f32::consts::TAU;
+    let angle = cycle_t * std::f32::consts::TAU;
     let wedge_span = 20.0_f32.to_radians();
     let steps = 10;
     for i in 0..steps {
