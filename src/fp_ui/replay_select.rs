@@ -41,7 +41,6 @@ pub fn draw(
     status: Option<&str>,
     username: &str,
 ) -> Result<(), String> {
-    chrome::draw_background_accents(canvas, scale)?;
     chrome::draw_header(canvas, fonts, scale, username, true, None)?;
 
     canvas.set_draw_color(theme::ACCENT);

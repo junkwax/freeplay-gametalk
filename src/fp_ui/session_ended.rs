@@ -35,7 +35,6 @@ pub fn draw(
     choice: usize,
     username: &str,
 ) -> Result<(), String> {
-    chrome::draw_background_accents(canvas, scale)?;
     chrome::draw_header(canvas, fonts, scale, username, true, None)?;
 
     let has_replay = replay_path.is_some();
