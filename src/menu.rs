@@ -6,7 +6,8 @@ use crate::font::Font;
 use crate::input::{is_action_active, Action, Binding, Bindings, Player, PlayerBindings};
 use crate::matchmaking::{
     HistoryRow, IncomingChallenge, LeaderboardRow, LiveMatch, LobbyChatMessage, LobbyCurrent,
-    LobbyMemberInfo, LobbyUser, LobbyView, ProfileData, RemoteGhostMeta,
+    LobbyMatchFormat, LobbyMemberInfo, LobbyReadyCheck, LobbyUser, LobbyView, ProfileData,
+    RemoteGhostMeta,
 };
 use crate::version;
 use sdl2::pixels::Color;
@@ -309,7 +310,7 @@ pub enum ChallengeFormat {
 }
 
 impl ChallengeFormat {
-    const ALL: [ChallengeFormat; 4] = [
+    pub const ALL: [ChallengeFormat; 4] = [
         ChallengeFormat::UnrankedVs,
         ChallengeFormat::RankedFt3,
         ChallengeFormat::RankedFt5,
@@ -697,6 +698,8 @@ pub fn test_state(name: &str) -> Option<AppState> {
                 chat: Vec::new(),
                 presence: Vec::new(),
                 live_matches: Vec::new(),
+                challenge_pick: None,
+                incoming: None,
             }))
         }
         "fp:lobby:browser" => {
@@ -728,6 +731,8 @@ pub fn test_state(name: &str) -> Option<AppState> {
                 chat: Vec::new(),
                 presence: Vec::new(),
                 live_matches: Vec::new(),
+                challenge_pick: None,
+                incoming: None,
             }))
         }
         "fp:lobby:chat" => {
@@ -764,6 +769,8 @@ pub fn test_state(name: &str) -> Option<AppState> {
                     },
                 ],
                 live_matches: Vec::new(),
+                challenge_pick: None,
+                incoming: None,
             }))
         }
         "fp:lobby:watch" => {
@@ -791,6 +798,149 @@ pub fn test_state(name: &str) -> Option<AppState> {
                         p2_score: 3,
                     },
                 ],
+                challenge_pick: None,
+                incoming: None,
+            }))
+        }
+        "fp:lobby:players" => {
+            return Some(AppState::FpUi(crate::fp_ui::FpScreen::Lobby {
+                tab: 5,
+                host_join_focus: 0,
+                cursor: 0,
+                lobbies: Vec::new(),
+                status: String::new(),
+                chat: Vec::new(),
+                presence: vec![
+                    LobbyUser { player_id: "p1".into(), username: "ScorpionKiller".into(), status: "online".into(), rating: Some(1403) },
+                    LobbyUser { player_id: "p2".into(), username: "SubZeroFan".into(), status: "in lobby".into(), rating: Some(1521) },
+                    LobbyUser { player_id: "p3".into(), username: "Kano_Main".into(), status: "online".into(), rating: Some(1288) },
+                ],
+                live_matches: Vec::new(),
+                challenge_pick: None,
+                incoming: None,
+            }))
+        }
+        "fp:lobby:incoming" => {
+            return Some(AppState::FpUi(crate::fp_ui::FpScreen::Lobby {
+                tab: 5,
+                host_join_focus: 0,
+                cursor: 0,
+                lobbies: Vec::new(),
+                status: String::new(),
+                chat: Vec::new(),
+                presence: vec![
+                    LobbyUser { player_id: "p1".into(), username: "ScorpionKiller".into(), status: "online".into(), rating: Some(1403) },
+                ],
+                live_matches: Vec::new(),
+                challenge_pick: None,
+                incoming: Some(IncomingChallenge {
+                    challenge_id: "ch1".into(),
+                    from_username: "ScorpionKiller".into(),
+                    format: LobbyMatchFormat::RankedFt5,
+                }),
+            }))
+        }
+        "fp:sessionended" => {
+            return Some(AppState::FpUi(crate::fp_ui::FpScreen::SessionEnded {
+                lines: vec![
+                    "OK Match completed \u{b7} FT3 \u{b7} 3-1".into(),
+                    "WARN 2 rollback resyncs (avg 4 frames)".into(),
+                    "Replay saved locally".into(),
+                ],
+                replay_path: Some("dummy.ncrp".into()),
+                choice: 0,
+            }))
+        }
+        "fp:claimusername" => {
+            return Some(AppState::FpUi(crate::fp_ui::FpScreen::ClaimUsername {
+                value: crate::config::default_username(),
+                status: "This is your name — edit it or press Enter to claim it".into(),
+                checking: false,
+            }))
+        }
+        "fp:lobbyroom:empty" => {
+            return Some(AppState::FpUi(crate::fp_ui::FpScreen::LobbyRoom {
+                id: "AB12CD".into(),
+                view: Some(LobbyView {
+                    id: "AB12CD".into(),
+                    name: "Respected_Hunter's lobby".into(),
+                    ranked: false,
+                    private: true,
+                    format: LobbyMatchFormat::UnrankedVs,
+                    members: vec![
+                        LobbyMemberInfo { username: "Respected_Hunter".into(), rating: Some(1502), queued: false, in_match: false },
+                    ],
+                    queue: vec![],
+                    current: None,
+                    ready_check: None,
+                    your_position: None,
+                    your_queued: false,
+                    your_session: None,
+                    your_turn: false,
+                }),
+                status: String::new(),
+                thumb: None,
+            }))
+        }
+        "fp:lobbyroom:queued" => {
+            return Some(AppState::FpUi(crate::fp_ui::FpScreen::LobbyRoom {
+                id: "AB12CD".into(),
+                view: Some(LobbyView {
+                    id: "AB12CD".into(),
+                    name: "Respected_Hunter's lobby".into(),
+                    ranked: false,
+                    private: true,
+                    format: LobbyMatchFormat::UnrankedVs,
+                    members: vec![
+                        LobbyMemberInfo { username: "Respected_Hunter".into(), rating: Some(1502), queued: true, in_match: false },
+                        LobbyMemberInfo { username: "Sub_Zero_Fan".into(), rating: Some(1610), queued: false, in_match: true },
+                        LobbyMemberInfo { username: "Kano_Main".into(), rating: Some(1480), queued: false, in_match: true },
+                    ],
+                    queue: vec!["Respected_Hunter".into()],
+                    current: Some(LobbyCurrent {
+                        host_username: "Sub_Zero_Fan".into(),
+                        join_username: "Kano_Main".into(),
+                        host_session: String::new(),
+                        join_session: String::new(),
+                    }),
+                    ready_check: None,
+                    your_position: Some(0),
+                    your_queued: true,
+                    your_session: None,
+                    your_turn: false,
+                }),
+                status: String::new(),
+                thumb: None,
+            }))
+        }
+        "fp:lobbyroom:ready" => {
+            return Some(AppState::FpUi(crate::fp_ui::FpScreen::LobbyRoom {
+                id: "AB12CD".into(),
+                view: Some(LobbyView {
+                    id: "AB12CD".into(),
+                    name: "Respected_Hunter's lobby".into(),
+                    ranked: false,
+                    private: true,
+                    format: LobbyMatchFormat::UnrankedVs,
+                    members: vec![
+                        LobbyMemberInfo { username: "Respected_Hunter".into(), rating: Some(1502), queued: false, in_match: false },
+                        LobbyMemberInfo { username: "Sub_Zero_Fan".into(), rating: Some(1610), queued: false, in_match: false },
+                    ],
+                    queue: vec![],
+                    current: None,
+                    ready_check: Some(LobbyReadyCheck {
+                        champion_username: "Sub_Zero_Fan".into(),
+                        challenger_username: "Respected_Hunter".into(),
+                        seconds_left: 8,
+                        you_are_challenger: true,
+                    }),
+                    your_position: None,
+                    your_queued: false,
+                    your_session: None,
+                    your_turn: false,
+                }),
+                status: String::new(),
+                thumb: None,
             }))
         }
         "profile" => {
@@ -1763,7 +1913,9 @@ impl AppState {
                     }
                 }
             }
-        } else if let AppState::Menu(MenuScreen::MatchUsername { value, .. }) = self {
+        } else if let AppState::Menu(MenuScreen::MatchUsername { value, .. })
+        | AppState::FpUi(crate::fp_ui::FpScreen::ClaimUsername { value, .. }) = self
+        {
             for c in s.chars() {
                 if (c.is_ascii_alphanumeric() || c == '_' || c == '-' || c.is_whitespace())
                     && value.len() < MAX_USERNAME_LEN
@@ -1791,7 +1943,9 @@ impl AppState {
             ip_text.pop();
         } else if let AppState::Menu(MenuScreen::TextEdit { value, .. }) = self {
             value.pop();
-        } else if let AppState::Menu(MenuScreen::MatchUsername { value, .. }) = self {
+        } else if let AppState::Menu(MenuScreen::MatchUsername { value, .. })
+        | AppState::FpUi(crate::fp_ui::FpScreen::ClaimUsername { value, .. }) = self
+        {
             value.pop();
         }
     }

@@ -452,6 +452,20 @@ impl LocalPlayMode {
     }
 }
 
+/// Builds the username-claim screen matching whichever UI is currently
+/// showing it — `AppState::FpUi(FpScreen::ClaimUsername)` if that's where
+/// `state` already is, otherwise legacy's `AppState::Menu(MenuScreen::MatchUsername)`.
+/// Used by every username-check transition (submit / taken / error / retry)
+/// so both UIs share one round trip through `matchmaking::check_username_available`
+/// without duplicating that logic per screen.
+fn set_username_screen(state: &mut AppState, value: String, status: String, checking: bool) {
+    if matches!(state, AppState::FpUi(fp_ui::FpScreen::ClaimUsername { .. })) {
+        *state = AppState::FpUi(fp_ui::FpScreen::ClaimUsername { value, status, checking });
+    } else {
+        *state = AppState::Menu(MenuScreen::MatchUsername { value, status, checking });
+    }
+}
+
 fn start_find_match_queue(
     cfg: &config::Config,
     mm_rx: &mut Option<std::sync::mpsc::Receiver<matchmaking::Update>>,
@@ -2072,6 +2086,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         checking: false,
                         ..
                     })
+                    | AppState::FpUi(fp_ui::FpScreen::ClaimUsername {
+                        checking: false,
+                        ..
+                    })
             )
         {
             video_subsystem.text_input().start();
@@ -2744,6 +2762,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 checking: false,
                                 ..
                             })
+                            | AppState::FpUi(fp_ui::FpScreen::ClaimUsername {
+                                checking: false,
+                                ..
+                            })
                     ) =>
                 {
                     state.text_input(&text);
@@ -2761,6 +2783,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         })
                         | AppState::Menu(menu::MenuScreen::TextEdit { .. })
                         | AppState::Menu(menu::MenuScreen::MatchUsername {
+                            checking: false,
+                            ..
+                        })
+                        | AppState::FpUi(fp_ui::FpScreen::ClaimUsername {
                             checking: false,
                             ..
                         })
@@ -3092,8 +3118,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             &mut discord_id,
                                         );
                                     } else {
+                                        // First time online: show the auto-generated name
+                                        // and let them keep or change it before queueing —
+                                        // native counterpart of legacy's own first-time path
+                                        // just below (`NavResult::OpenUsernameEntry`).
                                         config::save(&cfg);
-                                        state = AppState::Menu(MenuScreen::MatchUsername {
+                                        state = AppState::FpUi(fp_ui::FpScreen::ClaimUsername {
                                             value,
                                             status: "This is your name — edit it or press Enter to claim it".into(),
                                             checking: false,
@@ -3124,7 +3154,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         true,
                                         format.wire().to_string(),
                                     );
-                                    state = AppState::Menu(MenuScreen::Lobby {
+                                    state = AppState::FpUi(fp_ui::FpScreen::LobbyRoom {
                                         id: String::new(),
                                         view: None,
                                         status: "Creating private lobby...".into(),
@@ -3153,7 +3183,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     let (tx, rx) = std::sync::mpsc::channel();
                                     lobby_view_rx = Some(rx);
                                     matchmaking::join_lobby(tx, lobby_id.clone(), false);
-                                    state = AppState::Menu(MenuScreen::Lobby {
+                                    state = AppState::FpUi(fp_ui::FpScreen::LobbyRoom {
                                         id: lobby_id,
                                         view: None,
                                         status: "Joining lobby...".into(),
@@ -3217,6 +3247,134 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 toast = Some((
                                                     "No replay found for this match".into(),
                                                     Instant::now() + Duration::from_millis(2400),
+                                                ));
+                                            }
+                                        }
+                                    }
+                                }
+                                fp_ui::FpResult::SubmitUsername(value) => {
+                                    // Mirrors legacy's NavResult::SubmitUsername exactly,
+                                    // targeting FpScreen::ClaimUsername's fields instead of
+                                    // the legacy screen's (see `set_username_screen`).
+                                    match config::sanitize_username(&value) {
+                                        Some(username) => {
+                                            let (tx, rx) = std::sync::mpsc::channel();
+                                            username_check_rx = Some(rx);
+                                            username_check_silent = false;
+                                            username_check_started_at = Some(Instant::now());
+                                            let owner_id = discord_id
+                                                .clone()
+                                                .unwrap_or_else(|| cfg.guest_device_id.clone());
+                                            matchmaking::check_username_available(
+                                                cfg.stats_url.clone(),
+                                                username.clone(),
+                                                owner_id,
+                                                tx,
+                                            );
+                                            set_username_screen(&mut state, username, "Checking username".into(), true);
+                                        }
+                                        None => {
+                                            set_username_screen(
+                                                &mut state,
+                                                value,
+                                                format!(
+                                                    "Invalid name: use 2-{} letters, numbers, _ or -",
+                                                    config::MAX_USERNAME_LEN
+                                                ),
+                                                false,
+                                            );
+                                        }
+                                    }
+                                }
+                                fp_ui::FpResult::SetLobbyQueue(lobby_id, queued) => {
+                                    // Mirrors legacy's NavResult::SetLobbyQueue exactly.
+                                    let (tx, rx) = std::sync::mpsc::channel();
+                                    lobby_view_rx = Some(rx);
+                                    matchmaking::join_lobby(tx, lobby_id, queued);
+                                }
+                                fp_ui::FpResult::ReadyLobby(lobby_id) => {
+                                    // Mirrors legacy's NavResult::ReadyLobby exactly.
+                                    let (tx, rx) = std::sync::mpsc::channel();
+                                    lobby_view_rx = Some(rx);
+                                    matchmaking::ready_lobby(tx, lobby_id);
+                                }
+                                fp_ui::FpResult::LeaveLobby(lobby_id) => {
+                                    // Mirrors legacy's own Back handling for
+                                    // MenuScreen::Lobby (declines any pending ready
+                                    // check for you by simply leaving).
+                                    if !lobby_id.is_empty() {
+                                        matchmaking::leave_lobby(lobby_id);
+                                    }
+                                    lobby_view_rx = None;
+                                    state = menu::main_menu_state(cfg.new_ui);
+                                }
+                                fp_ui::FpResult::SendChallenge(target_id, format) => {
+                                    // Mirrors legacy's NavResult::SendChallenge exactly —
+                                    // same "connecting" handoff to the shared legacy
+                                    // Matchmaking screen as StartFindMatch above.
+                                    matchmaking::set_guest_profile(
+                                        cfg.player_username.clone(),
+                                        cfg.stats_email.clone(),
+                                        cfg.guest_device_id.clone(),
+                                    );
+                                    shutdown_for_online_start!("Send challenge");
+                                    let (tx, rx) = std::sync::mpsc::channel();
+                                    mm_rx = Some(rx);
+                                    matchmaking::start_send_challenge(
+                                        tx,
+                                        target_id,
+                                        format.wire().to_string(),
+                                    );
+                                    state = AppState::Menu(MenuScreen::Matchmaking {
+                                        status: "Challenging player...".into(),
+                                    });
+                                }
+                                fp_ui::FpResult::AcceptChallenge(challenge_id) => {
+                                    // Mirrors legacy's NavResult::AcceptChallenge exactly.
+                                    matchmaking::set_guest_profile(
+                                        cfg.player_username.clone(),
+                                        cfg.stats_email.clone(),
+                                        cfg.guest_device_id.clone(),
+                                    );
+                                    shutdown_for_online_start!("Accept challenge");
+                                    let (tx, rx) = std::sync::mpsc::channel();
+                                    mm_rx = Some(rx);
+                                    matchmaking::start_accept_challenge(tx, challenge_id);
+                                    state = AppState::Menu(MenuScreen::Matchmaking {
+                                        status: "Accepting challenge...".into(),
+                                    });
+                                }
+                                fp_ui::FpResult::DeclineChallenge(challenge_id) => {
+                                    matchmaking::decline_challenge(challenge_id);
+                                }
+                                fp_ui::FpResult::WatchEndedReplay(path) => {
+                                    // Same playback pipeline as WatchLastMatchReplay above,
+                                    // just fed an explicit path instead of looking one up.
+                                    ensure_core_loaded(&mut core, &mut audio_queue, &audio_subsystem)?;
+                                    if let Some(c) = &core {
+                                        match prepare_replay_review(c, &path) {
+                                            Ok(pb) => enter_replay_review(
+                                                pb,
+                                                &mut match_replay_playback,
+                                                &mut replay_review_paused,
+                                                &mut replay_review_speed,
+                                                &mut replay_review_tick,
+                                                &mut replay_event_filter,
+                                                &mut replay_clip_in,
+                                                &mut replay_clip_out,
+                                                &mut ghost_playback,
+                                                &mut ghost_recording,
+                                                &mut drone_runner,
+                                                &mut input_history,
+                                                &mut clip_recorder,
+                                                &mut toast,
+                                                &mut state,
+                                            ),
+                                            Err(e) => {
+                                                println!("[replay] Session-end replay load failed: {e}");
+                                                toast = Some((
+                                                    format!("Replay unavailable: {e}"),
+                                                    Instant::now() + Duration::from_millis(3200),
                                                 ));
                                             }
                                         }
@@ -3895,12 +4053,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             let (tx, rx) = std::sync::mpsc::channel();
                                             lobby_view_rx = Some(rx);
                                             matchmaking::join_lobby(tx, code.clone(), false);
-                                            state = AppState::Menu(MenuScreen::Lobby {
-                                                id: code,
-                                                view: None,
-                                                status: "Joining lobby...".into(),
-                                                thumb: None,
-                                            });
+                                            state = if cfg.new_ui {
+                                                AppState::FpUi(fp_ui::FpScreen::LobbyRoom {
+                                                    id: code,
+                                                    view: None,
+                                                    status: "Joining lobby...".into(),
+                                                    thumb: None,
+                                                })
+                                            } else {
+                                                AppState::Menu(MenuScreen::Lobby {
+                                                    id: code,
+                                                    view: None,
+                                                    status: "Joining lobby...".into(),
+                                                    thumb: None,
+                                                })
+                                            };
                                         }
                                     }
                                     menu::EditField::ReplayNote { path, cursor } => {
@@ -6569,11 +6736,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             // stays, loser re-queues); we just resume polling.
                             lobby_view_rx = None;
                             lobby_view_next_refresh = Instant::now();
-                            state = AppState::Menu(MenuScreen::Lobby {
-                                id: lobby_id,
-                                view: None,
-                                status: "Returning to lobby...".into(),
-                                thumb: None,
+                            state = if cfg.new_ui {
+                                AppState::FpUi(fp_ui::FpScreen::LobbyRoom {
+                                    id: lobby_id,
+                                    view: None,
+                                    status: "Returning to lobby...".into(),
+                                    thumb: None,
+                                })
+                            } else {
+                                AppState::Menu(MenuScreen::Lobby {
+                                    id: lobby_id,
+                                    view: None,
+                                    status: "Returning to lobby...".into(),
+                                    thumb: None,
+                                })
+                            };
+                        } else if cfg.new_ui {
+                            state = AppState::FpUi(fp_ui::FpScreen::SessionEnded {
+                                lines: teardown_lines,
+                                replay_path,
+                                choice: 0,
                             });
                         } else {
                             state = AppState::Menu(MenuScreen::SessionEnded {
@@ -7274,6 +7456,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             checking: false,
                             ..
                         })
+                        | AppState::FpUi(fp_ui::FpScreen::ClaimUsername {
+                            checking: false,
+                            ..
+                        })
                 ) {
                     video_subsystem.text_input().start();
                 } else {
@@ -7284,6 +7470,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let waiting_for_username = matches!(
                         state,
                         AppState::Menu(menu::MenuScreen::MatchUsername { .. })
+                            | AppState::FpUi(fp_ui::FpScreen::ClaimUsername { .. })
                     ) || (username_check_silent
                         && matches!(state, AppState::Menu(menu::MenuScreen::Matchmaking { .. })));
                     if waiting_for_username {
@@ -7291,19 +7478,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             .map(|started| started.elapsed() >= Duration::from_secs(12))
                             .unwrap_or(false);
                         if timed_out {
-                            let value =
-                                if let AppState::Menu(MenuScreen::MatchUsername { value, .. }) =
-                                    &state
-                                {
-                                    value.clone()
-                                } else {
-                                    cfg.player_username.clone()
-                                };
-                            state = AppState::Menu(MenuScreen::MatchUsername {
+                            let value = match &state {
+                                AppState::Menu(MenuScreen::MatchUsername { value, .. }) => value.clone(),
+                                AppState::FpUi(fp_ui::FpScreen::ClaimUsername { value, .. }) => value.clone(),
+                                _ => cfg.player_username.clone(),
+                            };
+                            set_username_screen(
+                                &mut state,
                                 value,
-                                status: "Username check timed out. Press Enter to retry.".into(),
-                                checking: false,
-                            });
+                                "Username check timed out. Press Enter to retry.".into(),
+                                false,
+                            );
                             username_check_rx = None;
                             username_check_silent = false;
                             username_check_started_at = None;
@@ -7328,30 +7513,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     username_check_started_at = None;
                                 }
                                 Ok(matchmaking::UsernameCheckUpdate::Taken(username)) => {
-                                    state = AppState::Menu(MenuScreen::MatchUsername {
-                                        value: username,
-                                        status: "That name is already taken".into(),
-                                        checking: false,
-                                    });
+                                    set_username_screen(
+                                        &mut state,
+                                        username,
+                                        "That name is already taken".into(),
+                                        false,
+                                    );
                                     username_check_rx = None;
                                     username_check_silent = false;
                                     username_check_started_at = None;
                                 }
                                 Ok(matchmaking::UsernameCheckUpdate::Error(message)) => {
-                                    let value = if let AppState::Menu(MenuScreen::MatchUsername {
-                                        value,
-                                        ..
-                                    }) = &state
-                                    {
-                                        value.clone()
-                                    } else {
-                                        cfg.player_username.clone()
+                                    let value = match &state {
+                                        AppState::Menu(MenuScreen::MatchUsername { value, .. }) => value.clone(),
+                                        AppState::FpUi(fp_ui::FpScreen::ClaimUsername { value, .. }) => value.clone(),
+                                        _ => cfg.player_username.clone(),
                                     };
-                                    state = AppState::Menu(MenuScreen::MatchUsername {
-                                        value,
-                                        status: message,
-                                        checking: false,
-                                    });
+                                    set_username_screen(&mut state, value, message, false);
                                     username_check_rx = None;
                                     username_check_silent = false;
                                     username_check_started_at = None;
@@ -7361,11 +7539,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     username_check_rx = None;
                                     username_check_silent = false;
                                     username_check_started_at = None;
-                                    state = AppState::Menu(MenuScreen::MatchUsername {
-                                        value: cfg.player_username.clone(),
-                                        status: "Username check stopped".into(),
-                                        checking: false,
-                                    });
+                                    set_username_screen(
+                                        &mut state,
+                                        cfg.player_username.clone(),
+                                        "Username check stopped".into(),
+                                        false,
+                                    );
                                 }
                             }
                         }
@@ -7555,10 +7734,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
 
-                // Poll incoming challenges anywhere in the Online hub and raise
-                // a modal prompt when one arrives.
-                if matches!(state, AppState::Menu(menu::MenuScreen::OnlineHub { .. }))
-                    && challenge_rx.is_none()
+                // Poll incoming challenges anywhere in the Online hub (legacy or
+                // native) and raise a modal prompt when one arrives — a
+                // challenge can land while any tab is showing, not just Players.
+                if matches!(
+                    state,
+                    AppState::Menu(menu::MenuScreen::OnlineHub { .. })
+                        | AppState::FpUi(fp_ui::FpScreen::Lobby { .. })
+                ) && challenge_rx.is_none()
                     && Instant::now() >= challenge_next_refresh
                 {
                     let (tx, rx) = std::sync::mpsc::channel();
@@ -7573,6 +7756,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if let AppState::Menu(menu::MenuScreen::OnlineHub {
                                 ref mut incoming,
                                 ..
+                            })
+                            | AppState::FpUi(fp_ui::FpScreen::Lobby {
+                                ref mut incoming, ..
                             }) = state
                             {
                                 if incoming.is_none() {
@@ -7593,8 +7779,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
 
-                // King-of-the-hill lobby: poll state while the lobby screen is up.
-                if let AppState::Menu(menu::MenuScreen::Lobby { id, .. }) = &state {
+                // King-of-the-hill lobby: poll state while the lobby room screen
+                // is up — legacy or native, both carry the exact same fields
+                // (`FpScreen::LobbyRoom` mirrors `MenuScreen::Lobby`'s shape), so
+                // the same or-pattern binds either one.
+                if let AppState::Menu(menu::MenuScreen::Lobby { id, .. })
+                | AppState::FpUi(fp_ui::FpScreen::LobbyRoom { id, .. }) = &state
+                {
                     if !id.is_empty()
                         && lobby_view_rx.is_none()
                         && Instant::now() >= lobby_view_next_refresh
@@ -7608,7 +7799,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(rx) = &lobby_view_rx {
                     match rx.try_recv() {
                         Ok(matchmaking::LobbyViewUpdate::Created(new_id)) => {
-                            if let AppState::Menu(menu::MenuScreen::Lobby { id, status, .. }) =
+                            if let AppState::Menu(menu::MenuScreen::Lobby { id, status, .. })
+                            | AppState::FpUi(fp_ui::FpScreen::LobbyRoom { id, status, .. }) =
                                 &mut state
                             {
                                 *id = new_id;
@@ -7642,6 +7834,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 status,
                                 thumb,
                                 ..
+                            })
+                            | AppState::FpUi(fp_ui::FpScreen::LobbyRoom {
+                                id,
+                                view,
+                                status,
+                                thumb,
                             }) = &mut state
                             {
                                 *id = v.id.clone();
@@ -7655,7 +7853,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             lobby_view_rx = None;
                         }
                         Ok(matchmaking::LobbyViewUpdate::Error(e)) => {
-                            if let AppState::Menu(menu::MenuScreen::Lobby { status, .. }) =
+                            if let AppState::Menu(menu::MenuScreen::Lobby { status, .. })
+                            | AppState::FpUi(fp_ui::FpScreen::LobbyRoom { status, .. }) =
                                 &mut state
                             {
                                 *status = format!("Lobby unavailable: {e}");
@@ -7671,7 +7870,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 // King-of-the-hill: fetch the live match thumbnail while a match
                 // is in progress in the lobby we're viewing.
-                if let AppState::Menu(menu::MenuScreen::Lobby { id, view, .. }) = &state {
+                if let AppState::Menu(menu::MenuScreen::Lobby { id, view, .. })
+                | AppState::FpUi(fp_ui::FpScreen::LobbyRoom { id, view, .. }) = &state
+                {
                     let has_match = view.as_ref().map_or(false, |v| v.current.is_some());
                     if has_match
                         && !id.is_empty()
@@ -7690,7 +7891,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let expected =
                                 (render::LOBBY_THUMB_W * render::LOBBY_THUMB_H * 4) as usize;
                             if rgba.len() == expected {
-                                if let AppState::Menu(menu::MenuScreen::Lobby { thumb, .. }) =
+                                if let AppState::Menu(menu::MenuScreen::Lobby { thumb, .. })
+                                | AppState::FpUi(fp_ui::FpScreen::LobbyRoom { thumb, .. }) =
                                     &mut state
                                 {
                                     *thumb = Some((

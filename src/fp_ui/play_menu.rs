@@ -39,7 +39,7 @@ const LABEL_GAP: f32 = 26.0;
 /// character-select/roster depth this app doesn't have, since Arcade boots
 /// straight to the ROM with no fp_ui character-select step).
 const ITEMS: [(&str, &str); 4] = [
-    ("ARCADE", "Play offline arcade"),
+    ("ARCADE", "Local versus"),
     ("LAB", "Training tools \u{b7} hitbox \u{b7} dummy \u{b7} punish trainer"),
     ("REPLAYS", "Watch and manage recorded match files"),
     ("DRONES", "Load ghost input streams to train against"),

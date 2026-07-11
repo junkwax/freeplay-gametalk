@@ -14,6 +14,7 @@
 
 pub mod about;
 pub mod bandwidth;
+mod claim_username;
 pub mod chrome;
 mod ghost_select;
 pub mod geometry;
@@ -21,12 +22,14 @@ pub mod input;
 mod lab_menu;
 pub mod layout;
 mod lobby;
+mod lobby_room;
 mod main_menu;
 mod play_menu;
 mod profile;
 mod quit;
 pub mod rankings;
 mod replay_select;
+mod session_ended;
 pub mod settings;
 pub mod theme;
 
@@ -173,6 +176,11 @@ pub enum FpScreen {
     /// `WatchSession`/`OpenLegacyChat` doc comments. `cursor` doubles as the
     /// quick-phrase index on tab 3 and the live-match index on tab 4 (same
     /// per-tab reuse `Settings`' `row` already does across categories).
+    /// `challenge_pick`/`incoming` back tab 5 (Players) — see
+    /// `FpResult::SendChallenge`/`AcceptChallenge`/`DeclineChallenge`.
+    /// `incoming` is populated the same way legacy's `MenuScreen::OnlineHub`
+    /// is: polled from anywhere in this screen, not just tab 5, since a
+    /// challenge can arrive while the player is on any tab.
     Lobby {
         tab: usize,
         host_join_focus: usize,
@@ -182,6 +190,44 @@ pub enum FpScreen {
         chat: Vec<crate::matchmaking::LobbyChatMessage>,
         presence: Vec<crate::matchmaking::LobbyUser>,
         live_matches: Vec<crate::matchmaking::LiveMatch>,
+        challenge_pick: Option<usize>,
+        incoming: Option<crate::matchmaking::IncomingChallenge>,
+    },
+    /// Post-match summary shown after a netplay session ends (disconnect,
+    /// timeout, or a completed set) — native redesign of legacy's
+    /// `MenuScreen::SessionEnded`. `lines`/`replay_path` are populated by
+    /// `main.rs` exactly the way it already builds the legacy screen's
+    /// fields; `choice` picks between the WATCH REPLAY / RETURN TO MENU
+    /// buttons the same way `FpScreen::Quit`'s `choice` does (0 = leftmost
+    /// button when both are present).
+    SessionEnded {
+        lines: Vec<String>,
+        replay_path: Option<String>,
+        choice: usize,
+    },
+    /// First-time-online username claim — native redesign of legacy's
+    /// `MenuScreen::MatchUsername`. Reached from the Lobby's Quick Match tab
+    /// (`FpResult::StartFindMatch`) the first time a player queues before
+    /// `Config::player_username_confirmed` is set. `value`/`status`/
+    /// `checking` are the exact same fields legacy's screen carries, driven
+    /// by the same `matchmaking::check_username_available` round trip in
+    /// `main.rs` — see `claim_username.rs`'s module doc.
+    ClaimUsername {
+        value: String,
+        status: String,
+        checking: bool,
+    },
+    /// King-of-the-hill lobby room — native redesign of legacy's
+    /// `MenuScreen::Lobby`. Reached from Host/Join's Host or Join actions,
+    /// or the Server Browser (`FpResult::CreatePrivateLobby`/`JoinLobby`).
+    /// `id`/`view`/`status`/`thumb` are the exact same fields legacy's
+    /// screen carries, polled by `main.rs` the same way — see
+    /// `lobby_room.rs`'s module doc.
+    LobbyRoom {
+        id: String,
+        view: Option<crate::matchmaking::LobbyView>,
+        status: String,
+        thumb: Option<(Vec<u8>, u32, u32)>,
     },
 }
 
@@ -210,6 +256,8 @@ impl FpScreen {
             chat: Vec::new(),
             presence: Vec::new(),
             live_matches: Vec::new(),
+            challenge_pick: None,
+            incoming: None,
         }
     }
 }
@@ -331,6 +379,43 @@ pub enum FpResult {
     /// *view* itself stays legacy (`MenuScreen::Spectate`), same as replay/
     /// ghost playback; only this list is native.
     WatchSession(String),
+    /// Confirm on Session Ended's WATCH REPLAY button. Caller does exactly
+    /// what legacy's R/Y shortcut on `MenuScreen::SessionEnded` does
+    /// (`prepare_replay_review`/`enter_replay_review` on this explicit
+    /// path) — the replay *viewer* itself stays legacy, same as every other
+    /// playback screen.
+    WatchEndedReplay(String),
+    /// Confirm on the Claim Username screen (not checking). Caller does
+    /// exactly what legacy's `NavResult::SubmitUsername(value)` does —
+    /// sanitizes, kicks off `matchmaking::check_username_available`, and
+    /// targets this screen's fields instead of the legacy screen's.
+    SubmitUsername(String),
+    /// Confirm on the Lobby Room when not in a ready check. Caller does
+    /// exactly what legacy's `NavResult::SetLobbyQueue(id, queued)` does —
+    /// `queued` is the *current* queued state, toggling it via
+    /// `matchmaking::join_lobby(tx, id, queued)`.
+    SetLobbyQueue(String, bool),
+    /// Confirm on the Lobby Room while a ready check names you as
+    /// challenger. Caller does exactly what legacy's
+    /// `NavResult::ReadyLobby(id)` does.
+    ReadyLobby(String),
+    /// Back on the Lobby Room. Caller does exactly what legacy's own
+    /// Back handling for `MenuScreen::Lobby` does: `matchmaking::leave_lobby(id)`
+    /// (a no-op server-side if `id` is still empty/pending), reset the
+    /// lobby poll, and return to the Main Menu.
+    LeaveLobby(String),
+    /// Confirm on a Players-tab row's format chooser. Caller does exactly
+    /// what legacy's `NavResult::SendChallenge(target_id, format)` does —
+    /// lands on the shared legacy `MenuScreen::Matchmaking` "connecting"
+    /// screen, same as `StartFindMatch`'s already-established handoff.
+    SendChallenge(String, crate::menu::ChallengeFormat),
+    /// Confirm on the incoming-challenge modal. Caller does exactly what
+    /// legacy's `NavResult::AcceptChallenge(id)` does.
+    AcceptChallenge(String),
+    /// Back on the incoming-challenge modal. Caller does exactly what
+    /// legacy's own Back handling for `MenuScreen::OnlineHub`'s incoming
+    /// modal does: `matchmaking::decline_challenge(id)`.
+    DeclineChallenge(String),
 }
 
 pub fn nav(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult {
@@ -656,70 +741,183 @@ pub fn nav(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult {
             }
             _ => FpResult::Stay,
         },
-        FpScreen::Lobby { tab, host_join_focus, cursor, lobbies, chat, presence, live_matches, .. } => match input {
-            FpNav::PrevTab => {
-                *tab = (*tab + lobby::TABS.len() - 1) % lobby::TABS.len();
-                *cursor = 0;
-                FpResult::Stay
+        FpScreen::Lobby {
+            tab,
+            host_join_focus,
+            cursor,
+            lobbies,
+            chat,
+            presence,
+            live_matches,
+            challenge_pick,
+            incoming,
+            ..
+        } => {
+            // An incoming challenge prompt takes priority over everything
+            // else on this screen, same as legacy's `MenuScreen::OnlineHub` —
+            // it can arrive while any tab is showing, and only Confirm/Back
+            // respond to it while it's up.
+            if incoming.is_some() {
+                return match input {
+                    FpNav::Confirm => FpResult::AcceptChallenge(incoming.take().unwrap().challenge_id),
+                    FpNav::Back => FpResult::DeclineChallenge(incoming.take().unwrap().challenge_id),
+                    _ => FpResult::Stay,
+                };
             }
-            FpNav::NextTab => {
-                *tab = (*tab + 1) % lobby::TABS.len();
-                *cursor = 0;
-                FpResult::Stay
-            }
-            FpNav::Up if *tab == 2 => {
-                *cursor = cursor.saturating_sub(1);
-                FpResult::Stay
-            }
-            FpNav::Down if *tab == 2 => {
-                *cursor = (*cursor + 1).min(lobbies.len().saturating_sub(1));
-                FpResult::Stay
-            }
-            // Chat: cursor walks the quick-phrase row, plus one sentinel
-            // slot past the last phrase for "compose a message" (see
-            // `FpResult::OpenLegacyChat`'s doc comment for why that's a
-            // screen swap rather than native text entry).
-            FpNav::Up if *tab == 3 => {
-                *cursor = cursor.saturating_sub(1);
-                FpResult::Stay
-            }
-            FpNav::Down if *tab == 3 => {
-                *cursor = (*cursor + 1).min(crate::menu::QUICK_PHRASES.len());
-                FpResult::Stay
-            }
-            FpNav::Up if *tab == 4 => {
-                *cursor = cursor.saturating_sub(1);
-                FpResult::Stay
-            }
-            FpNav::Down if *tab == 4 => {
-                *cursor = (*cursor + 1).min(live_matches.len().saturating_sub(1));
-                FpResult::Stay
-            }
-            FpNav::Left | FpNav::Right if *tab == 1 => {
-                *host_join_focus = 1 - *host_join_focus;
-                FpResult::Stay
-            }
-            FpNav::Confirm => match *tab {
-                0 => FpResult::StartFindMatch,
-                1 if *host_join_focus == 0 => FpResult::CreatePrivateLobby,
-                1 => FpResult::OpenJoinCode,
-                2 => match lobbies.get(*cursor) {
-                    Some(l) => FpResult::JoinLobby(l.id.clone()),
-                    None => FpResult::Stay,
-                },
-                3 if *cursor < crate::menu::QUICK_PHRASES.len() => {
-                    FpResult::SendLobbyChat(crate::menu::quick_phrase(*cursor).to_string())
+            match input {
+                FpNav::PrevTab => {
+                    *tab = (*tab + lobby::TABS.len() - 1) % lobby::TABS.len();
+                    *cursor = 0;
+                    *challenge_pick = None;
+                    FpResult::Stay
                 }
-                3 => FpResult::OpenLegacyChat { chat: chat.clone(), presence: presence.clone() },
-                _ => match live_matches.get(*cursor) {
-                    Some(m) => FpResult::WatchSession(m.session_id.clone()),
-                    None => FpResult::Stay,
+                FpNav::NextTab => {
+                    *tab = (*tab + 1) % lobby::TABS.len();
+                    *cursor = 0;
+                    *challenge_pick = None;
+                    FpResult::Stay
+                }
+                FpNav::Up if *tab == 2 => {
+                    *cursor = cursor.saturating_sub(1);
+                    FpResult::Stay
+                }
+                FpNav::Down if *tab == 2 => {
+                    *cursor = (*cursor + 1).min(lobbies.len().saturating_sub(1));
+                    FpResult::Stay
+                }
+                // Chat: cursor walks the quick-phrase row, plus one sentinel
+                // slot past the last phrase for "compose a message" (see
+                // `FpResult::OpenLegacyChat`'s doc comment for why that's a
+                // screen swap rather than native text entry).
+                FpNav::Up if *tab == 3 => {
+                    *cursor = cursor.saturating_sub(1);
+                    FpResult::Stay
+                }
+                FpNav::Down if *tab == 3 => {
+                    *cursor = (*cursor + 1).min(crate::menu::QUICK_PHRASES.len());
+                    FpResult::Stay
+                }
+                FpNav::Up if *tab == 4 => {
+                    *cursor = cursor.saturating_sub(1);
+                    FpResult::Stay
+                }
+                FpNav::Down if *tab == 4 => {
+                    *cursor = (*cursor + 1).min(live_matches.len().saturating_sub(1));
+                    FpResult::Stay
+                }
+                // Players: Up/Down walks the format-chooser pick while it's
+                // open, otherwise the player-row cursor — same reuse of
+                // Up/Down legacy's own `OnlineTab::Players` arm does.
+                FpNav::Up if *tab == 5 => {
+                    if let Some(f) = challenge_pick {
+                        *f = f.saturating_sub(1);
+                    } else {
+                        *cursor = cursor.saturating_sub(1);
+                    }
+                    FpResult::Stay
+                }
+                FpNav::Down if *tab == 5 => {
+                    if let Some(f) = challenge_pick {
+                        *f = (*f + 1).min(crate::menu::ChallengeFormat::ALL.len() - 1);
+                    } else {
+                        *cursor = (*cursor + 1).min(presence.len().saturating_sub(1));
+                    }
+                    FpResult::Stay
+                }
+                FpNav::Left | FpNav::Right if *tab == 1 => {
+                    *host_join_focus = 1 - *host_join_focus;
+                    FpResult::Stay
+                }
+                FpNav::Confirm => match *tab {
+                    0 => FpResult::StartFindMatch,
+                    1 if *host_join_focus == 0 => FpResult::CreatePrivateLobby,
+                    1 => FpResult::OpenJoinCode,
+                    2 => match lobbies.get(*cursor) {
+                        Some(l) => FpResult::JoinLobby(l.id.clone()),
+                        None => FpResult::Stay,
+                    },
+                    3 if *cursor < crate::menu::QUICK_PHRASES.len() => {
+                        FpResult::SendLobbyChat(crate::menu::quick_phrase(*cursor).to_string())
+                    }
+                    3 => FpResult::OpenLegacyChat { chat: chat.clone(), presence: presence.clone() },
+                    4 => match live_matches.get(*cursor) {
+                        Some(m) => FpResult::WatchSession(m.session_id.clone()),
+                        None => FpResult::Stay,
+                    },
+                    _ => {
+                        if presence.is_empty() {
+                            return FpResult::Stay;
+                        }
+                        match challenge_pick {
+                            None => {
+                                // Open the format chooser at the same default
+                                // (Ranked FT5) legacy's own Players tab does.
+                                *challenge_pick = Some(crate::menu::ChallengeFormat::RankedFt5.index());
+                                FpResult::Stay
+                            }
+                            Some(fmt_idx) => {
+                                let fmt = crate::menu::ChallengeFormat::at_index(*fmt_idx);
+                                let target = presence.get(*cursor).map(|u| u.player_id.clone());
+                                *challenge_pick = None;
+                                match target {
+                                    Some(id) => FpResult::SendChallenge(id, fmt),
+                                    None => FpResult::Stay,
+                                }
+                            }
+                        }
+                    }
                 },
-            },
-            FpNav::Back => {
-                *screen = FpScreen::Main { cursor: MAIN_ONLINE_INDEX };
+                // Back closes the format chooser first, same priority as
+                // legacy's `nav_back` for `MenuScreen::OnlineHub`.
+                FpNav::Back if challenge_pick.is_some() => {
+                    *challenge_pick = None;
+                    FpResult::Stay
+                }
+                FpNav::Back => {
+                    *screen = FpScreen::Main { cursor: MAIN_ONLINE_INDEX };
+                    FpResult::Stay
+                }
+                _ => FpResult::Stay,
+            }
+        }
+        FpScreen::SessionEnded { replay_path, choice, .. } => match input {
+            FpNav::Left | FpNav::Right if replay_path.is_some() => {
+                *choice = 1 - *choice;
                 FpResult::Stay
             }
+            FpNav::Confirm => {
+                let watching = replay_path.is_some() && *choice == 0;
+                if watching {
+                    FpResult::WatchEndedReplay(replay_path.clone().unwrap_or_default())
+                } else {
+                    *screen = FpScreen::main();
+                    FpResult::Stay
+                }
+            }
+            FpNav::Back => {
+                *screen = FpScreen::main();
+                FpResult::Stay
+            }
+            _ => FpResult::Stay,
+        },
+        FpScreen::ClaimUsername { value, checking, .. } => match input {
+            FpNav::Confirm if !*checking => FpResult::SubmitUsername(value.clone()),
+            // No cancel path — same as legacy's `MatchUsername` (no Back
+            // handling in its own `accept()`/nav arm either): the player
+            // arrived here specifically because they have no confirmed
+            // identity yet, so backing out would just re-trigger this same
+            // screen the next time they try to go online.
+            _ => FpResult::Stay,
+        },
+        FpScreen::LobbyRoom { id, view, .. } => match input {
+            FpNav::Confirm => match view {
+                Some(v) if v.ready_check.as_ref().is_some_and(|rc| rc.you_are_challenger) => {
+                    FpResult::ReadyLobby(id.clone())
+                }
+                Some(v) => FpResult::SetLobbyQueue(id.clone(), v.your_queued || v.your_position.is_some()),
+                None => FpResult::Stay,
+            },
+            FpNav::Back => FpResult::LeaveLobby(id.clone()),
             _ => FpResult::Stay,
         },
     }
@@ -781,7 +979,18 @@ pub fn draw(
             stats_email,
             discord_connected,
         )?,
-        FpScreen::Lobby { tab, host_join_focus, cursor, lobbies, status, chat, presence, live_matches } => lobby::draw(
+        FpScreen::Lobby {
+            tab,
+            host_join_focus,
+            cursor,
+            lobbies,
+            status,
+            chat,
+            presence,
+            live_matches,
+            challenge_pick,
+            incoming,
+        } => lobby::draw(
             canvas,
             fonts,
             &scale,
@@ -793,8 +1002,25 @@ pub fn draw(
             chat,
             presence,
             live_matches,
+            *challenge_pick,
+            incoming.as_ref(),
             username,
         )?,
+        FpScreen::SessionEnded { lines, replay_path, choice } => session_ended::draw(
+            canvas,
+            fonts,
+            &scale,
+            lines,
+            replay_path.as_deref(),
+            *choice,
+            username,
+        )?,
+        FpScreen::ClaimUsername { value, status, checking } => {
+            claim_username::draw(canvas, fonts, &scale, value, status, *checking)?
+        }
+        FpScreen::LobbyRoom { view, status, thumb, .. } => {
+            lobby_room::draw(canvas, fonts, &scale, view.as_ref(), status, thumb.as_ref(), username)?
+        }
     }
 
     Ok(())
