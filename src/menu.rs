@@ -192,12 +192,17 @@ pub enum MenuScreen {
         session_id: String,
         status: SpectateStatus,
     },
+    /// `came_from` is `Box<AppState>` (not `Box<MenuScreen>`) so this can
+    /// return to a native `AppState::FpUi` screen exactly the way
+    /// `AppState::Rebinding::came_from` already does, rather than always
+    /// falling back to a legacy `MenuScreen` regardless of where the edit
+    /// was triggered from.
     TextEdit {
         title: String,
         label: String,
         value: String,
         field: EditField,
-        came_from: Box<MenuScreen>,
+        came_from: Box<AppState>,
     },
     /// A king-of-the-hill lobby room: current match, play queue, spectators.
     /// `view` is `None` until the first poll lands.
@@ -215,7 +220,7 @@ pub enum MenuScreen {
 pub enum EditField {
     Username,
     StatsEmail,
-    ReplayNote { path: String, cursor: usize },
+    ReplayNote { path: String },
     /// Entering a lobby invite code to join a private lobby.
     JoinCode,
 }
@@ -1154,7 +1159,9 @@ pub enum NavResult {
     BeginRebind,
     ClearAllBindings(Player),
     EditText(EditField, String),
-    CommitText(EditField, String),
+    /// `Box<AppState>` is the screen (native or legacy) editing began from —
+    /// see `MenuScreen::TextEdit::came_from`'s doc comment.
+    CommitText(EditField, String, Box<AppState>),
     ConnectDiscord,
     /// Load a ghost file from the selected path.
     LoadGhost(String),
@@ -1858,8 +1865,8 @@ impl AppState {
                 17 => NavResult::ToggleRunaheadOnline,
                 _ => NavResult::Stay,
             },
-            AppState::Menu(MenuScreen::TextEdit { field, value, .. }) => {
-                NavResult::CommitText(field, value)
+            AppState::Menu(MenuScreen::TextEdit { field, value, came_from, .. }) => {
+                NavResult::CommitText(field, value, came_from)
             }
             AppState::Menu(MenuScreen::Training { cursor, .. }) => match cursor {
                 0 => NavResult::ToggleTraining("hitboxes"),
@@ -1917,7 +1924,7 @@ impl AppState {
                 *self = main_menu_state(new_ui);
             }
             AppState::Menu(MenuScreen::TextEdit { came_from, .. }) => {
-                *self = AppState::Menu((**came_from).clone());
+                *self = (**came_from).clone();
             }
             _ => {}
         }

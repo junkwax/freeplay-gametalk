@@ -1199,36 +1199,17 @@ fn handle_replay_select_shortcut(event: &Event, state: &mut AppState) -> bool {
                 set_replay_select_status(state, "Notes are local replays only");
                 return true;
             }
-            let cursor = if let AppState::Menu(MenuScreen::ReplaySelect { cursor, .. })
-            | AppState::FpUi(fp_ui::FpScreen::ReplaySelect { cursor, .. }) = state
-            {
-                *cursor
-            } else {
-                0
-            };
-            // Same known rough edge as `BeginAccountEdit`/`OpenJoinCode`
-            // when triggered from fp_ui: TextEdit's `came_from` is a legacy
-            // `MenuScreen`, not `AppState`, so editing a note from the
-            // native Replays screen lands back on a legacy `ReplaySelect`
-            // stub (re-populated on the next `refresh_replay_select` call,
-            // but empty until then) rather than back on the native screen.
-            let came_from = if let AppState::Menu(screen) = state {
-                screen.clone()
-            } else {
-                MenuScreen::ReplaySelect {
-                    cursor,
-                    entries: vec![],
-                    status: None,
-                }
-            };
+            // `came_from` is the exact screen (native or legacy) editing
+            // began from — `came_from: Box<AppState>` (see
+            // `MenuScreen::TextEdit`'s doc comment) means this returns to
+            // whichever one it actually was on commit/cancel, not always a
+            // legacy fallback.
+            let came_from = state.clone();
             *state = AppState::Menu(MenuScreen::TextEdit {
                 title: "REPLAY NOTE".into(),
                 label: format!("{} vs {}", entry.p1_name, entry.p2_name),
                 value: entry.note,
-                field: menu::EditField::ReplayNote {
-                    path: entry.path,
-                    cursor,
-                },
+                field: menu::EditField::ReplayNote { path: entry.path },
                 came_from: Box::new(came_from),
             });
             true
@@ -3176,15 +3157,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     });
                                 }
                                 fp_ui::FpResult::OpenJoinCode => {
-                                    // Mirrors legacy's NavResult::OpenJoinCode. `came_from`
-                                    // lands back on legacy Main (not fp_ui) if cancelled —
-                                    // a known small rough edge, see the Step 5 commit notes.
+                                    // Mirrors legacy's NavResult::OpenJoinCode, returning to
+                                    // the actual fp_ui Lobby screen on cancel now that
+                                    // `came_from` is `Box<AppState>`.
+                                    let came_from = state.clone();
                                     state = AppState::Menu(MenuScreen::TextEdit {
                                         title: "JOIN LOBBY".into(),
                                         label: "Enter the 6-character invite code".into(),
                                         value: String::new(),
                                         field: menu::EditField::JoinCode,
-                                        came_from: Box::new(menu::MenuScreen::Main { cursor: 0 }),
+                                        came_from: Box::new(came_from),
                                     });
                                 }
                                 fp_ui::FpResult::JoinLobby(lobby_id) => {
@@ -3413,9 +3395,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                                 fp_ui::FpResult::BeginAccountEdit(field) => {
                                     // Mirrors legacy's NavResult::EditText for just the
-                                    // two fields the Account category exposes. Same known
-                                    // rough edge as OpenJoinCode above: lands on legacy
-                                    // Main (not fp_ui Settings) once submitted/cancelled.
+                                    // two fields the Account category exposes, returning to
+                                    // the actual fp_ui Settings screen on cancel/commit now
+                                    // that `came_from` is `Box<AppState>`.
                                     let (title, label, value) = match &field {
                                         menu::EditField::Username => (
                                             "Username",
@@ -3429,12 +3411,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         ),
                                         _ => ("", "", String::new()),
                                     };
+                                    let came_from = state.clone();
                                     state = AppState::Menu(MenuScreen::TextEdit {
                                         title: title.into(),
                                         label: label.into(),
                                         value,
                                         field,
-                                        came_from: Box::new(menu::MenuScreen::Main { cursor: 0 }),
+                                        came_from: Box::new(came_from),
                                     });
                                 }
                                 fp_ui::FpResult::ToggleDiscordConnect => {
@@ -4031,39 +4014,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         menu::EditField::ReplayNote { .. } => "Replay note",
                                         menu::EditField::JoinCode => "Enter invite code",
                                     };
-                                    let settings_cursor = match &field {
-                                        menu::EditField::Username => 0,
-                                        menu::EditField::StatsEmail => 1,
-                                        menu::EditField::ReplayNote { .. }
-                                        | menu::EditField::JoinCode => 0,
-                                    };
+                                    // `state` is already `AppState::Menu(MenuScreen::Settings
+                                    // { .. })` here (this only fires from that screen's own
+                                    // `accept()` arm) — clone it directly instead of
+                                    // rebuilding the same struct field-by-field.
+                                    let came_from = state.clone();
                                     state = AppState::Menu(MenuScreen::TextEdit {
                                         title,
                                         label: label.into(),
                                         value,
                                         field,
-                                        came_from: Box::new(MenuScreen::Settings {
-                                            cursor: settings_cursor,
-                                            player_username: cfg.player_username.clone(),
-                                            stats_email: cfg.stats_email.clone(),
-                                            discord_connected: matchmaking::connected_discord_user_from_cached_token()
-                                                .is_some(),
-                                            discord_rpc_enabled: cfg.discord_rpc_enabled,
-                                            fullscreen: cfg.fullscreen,
-                                            volume_percent: cfg.volume_percent,
-                                            audio_buffer: cfg.audio_buffer,
-                                            video_filter: cfg.video_filter,
-                                            crt_corner_bend: cfg.crt_corner_bend,
-                                            aspect_mode: cfg.aspect_mode,
-                                            scorebar_style: cfg.scorebar_style,
-                                            input_delay: cfg.input_delay,
-                                            render_profile: cfg.render_profile,
-                                            runahead: cfg.runahead,
-                                            runahead_online: cfg.runahead_online,
-                                        }),
+                                        came_from: Box::new(came_from),
                                     });
                                 }
-                                NavResult::CommitText(field, value) => match field {
+                                NavResult::CommitText(field, value, came_from) => match field {
                                     menu::EditField::JoinCode => {
                                         let code = value.trim().to_uppercase();
                                         if code.is_empty() {
@@ -4095,17 +4059,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             };
                                         }
                                     }
-                                    menu::EditField::ReplayNote { path, cursor } => {
+                                    menu::EditField::ReplayNote { path } => {
                                         let status =
                                             match match_replay::save_replay_note(&path, &value) {
                                                 Ok(()) => "Replay note saved".to_string(),
                                                 Err(e) => format!("Replay note failed: {e}"),
                                             };
-                                        state = AppState::Menu(MenuScreen::ReplaySelect {
-                                            cursor,
-                                            entries: vec![],
-                                            status: Some(status.clone()),
-                                        });
+                                        // Return to whichever screen (native or legacy)
+                                        // editing began from, then refresh its entries —
+                                        // `refresh_replay_select` already handles both.
+                                        state = *came_from;
                                         refresh_replay_select(&mut state, Some(status));
                                     }
                                     field => {
@@ -4152,31 +4115,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         }
                                         config::save(&cfg);
                                         matchmaking::clear_cached_token();
-                                        state = AppState::Menu(MenuScreen::Settings {
-                                            cursor: match field {
-                                                menu::EditField::Username => 0,
-                                                menu::EditField::StatsEmail => 1,
-                                                menu::EditField::ReplayNote { .. }
-                                                | menu::EditField::JoinCode => 0,
-                                            },
-                                            player_username: cfg.player_username.clone(),
-                                            stats_email: cfg.stats_email.clone(),
-                                            discord_connected:
+                                        // Return to whichever Settings screen (native or
+                                        // legacy) editing began from. fp_ui's own Settings
+                                        // reads `player_username`/`stats_email` live from
+                                        // `cfg` every frame (passed as separate `draw()`
+                                        // params, not baked into `FpScreen::Settings`), so
+                                        // it needs no refresh here — only legacy's own
+                                        // `MenuScreen::Settings`, which snapshots them, does.
+                                        state = *came_from;
+                                        if let AppState::Menu(MenuScreen::Settings {
+                                            player_username,
+                                            stats_email,
+                                            discord_connected,
+                                            ..
+                                        }) = &mut state
+                                        {
+                                            *player_username = cfg.player_username.clone();
+                                            *stats_email = cfg.stats_email.clone();
+                                            *discord_connected =
                                                 matchmaking::connected_discord_user_from_cached_token()
-                                                    .is_some(),
-                                            discord_rpc_enabled: cfg.discord_rpc_enabled,
-                                            fullscreen: cfg.fullscreen,
-                                            volume_percent: cfg.volume_percent,
-                                            audio_buffer: cfg.audio_buffer,
-                                            video_filter: cfg.video_filter,
-                                            crt_corner_bend: cfg.crt_corner_bend,
-                                            aspect_mode: cfg.aspect_mode,
-                                            scorebar_style: cfg.scorebar_style,
-                                            input_delay: cfg.input_delay,
-                                            render_profile: cfg.render_profile,
-                                            runahead: cfg.runahead,
-                                            runahead_online: cfg.runahead_online,
-                                        });
+                                                    .is_some();
+                                        }
                                     }
                                 },
                                 NavResult::ConnectDiscord => {
@@ -4316,12 +4275,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     });
                                 }
                                 NavResult::OpenJoinCode => {
+                                    // Was hardcoded to legacy Main regardless of where this
+                                    // was triggered from — now returns to the actual
+                                    // OnlineHub screen on cancel.
+                                    let came_from = state.clone();
                                     state = AppState::Menu(MenuScreen::TextEdit {
                                         title: "JOIN LOBBY".into(),
                                         label: "Enter the 6-character invite code".into(),
                                         value: String::new(),
                                         field: menu::EditField::JoinCode,
-                                        came_from: Box::new(menu::MenuScreen::Main { cursor: 0 }),
+                                        came_from: Box::new(came_from),
                                     });
                                 }
                                 NavResult::SetLobbyQueue(lobby_id, spectate) => {
