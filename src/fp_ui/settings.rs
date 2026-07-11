@@ -306,8 +306,18 @@ fn draw_cat_row(
     } else {
         Color::RGB(0x34, 0x34, 0x3a)
     };
-    let (nx, ny) = scale.point(SIDE_PAD + 22.0, y + CAT_ROW_H / 2.0 - 7.0);
-    fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(13.0), &format!("{:02}", index + 1), nx, ny, num_color)?;
+    // True visible-pixel centering (not a fixed "half the font size" offset)
+    // — the number (Chakra Petch, 13px) and label (Saira Condensed, 26px)
+    // are different families at different sizes, so naive offsets tuned for
+    // one don't land the other on the same visual center line. Same
+    // `visible_span` technique `main_menu.rs`/`play_menu.rs` already use for
+    // their own row centering.
+    let num_text = format!("{:02}", index + 1);
+    let num_px = scale.font_px(13.0);
+    let (num_inset, num_vis_h) = fonts.visible_span(FpFont::ChakraPetchSemiBold, num_px, &num_text);
+    let num_top = y + CAT_ROW_H / 2.0 - (num_vis_h as f32 / scale.s) / 2.0;
+    let (nx, ny) = scale.point(SIDE_PAD + 22.0, num_top - num_inset as f32 / scale.s);
+    fonts.draw(canvas, FpFont::ChakraPetchSemiBold, num_px, &num_text, nx, ny, num_color)?;
 
     let label_color = if hot {
         theme::TEXT
@@ -316,8 +326,11 @@ fn draw_cat_row(
     } else {
         Color::RGB(0x5a, 0x5a, 0x62)
     };
-    let (lx, ly) = scale.point(SIDE_PAD + 22.0 + 30.0, y + CAT_ROW_H / 2.0 - 13.0);
-    fonts.draw(canvas, FpFont::SairaCondensedBlack, scale.font_px(26.0), label, lx, ly, label_color)?;
+    let label_px = scale.font_px(26.0);
+    let (label_inset, label_vis_h) = fonts.visible_span(FpFont::SairaCondensedBlack, label_px, label);
+    let label_top = y + CAT_ROW_H / 2.0 - (label_vis_h as f32 / scale.s) / 2.0;
+    let (lx, ly) = scale.point(SIDE_PAD + 22.0 + 30.0, label_top - label_inset as f32 / scale.s);
+    fonts.draw(canvas, FpFont::SairaCondensedBlack, label_px, label, lx, ly, label_color)?;
     Ok(())
 }
 
