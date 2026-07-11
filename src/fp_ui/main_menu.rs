@@ -150,8 +150,15 @@ fn draw_row(
 
     let num_color = if selected { theme::ACCENT } else { Color::RGB(0x34, 0x34, 0x3a) };
     let num = format!("{:02}", index + 1);
-    let (nx, ny) = scale.point(LIST_X + BAR_W + LABEL_GAP, y + ROW_H / 2.0 - 8.0);
-    fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(16.0), &num, nx, ny, num_color)?;
+    let num_px = scale.font_px(16.0);
+    // True visible-glyph centering (`visible_span`), not a hand-tuned
+    // "-8.0" offset — matches the same technique the label below already
+    // uses, so the number lands on the same center line as the label
+    // instead of independently guessed.
+    let (num_inset, num_vis_h) = fonts.visible_span(FpFont::ChakraPetchSemiBold, num_px, &num);
+    let num_top = y + ROW_H / 2.0 - (num_vis_h as f32 / scale.s) / 2.0;
+    let (nx, ny) = scale.point(LIST_X + BAR_W + LABEL_GAP, num_top - num_inset as f32 / scale.s);
+    fonts.draw(canvas, FpFont::ChakraPetchSemiBold, num_px, &num, nx, ny, num_color)?;
 
     let label_size = if selected { 52.0 } else { 42.0 };
     let label_color = if disabled {
@@ -278,13 +285,16 @@ fn draw_last_match_card(
     if !sub_text.is_empty() {
         // Baseline-align the smaller date/score text against the main
         // line's own visible glyph bottom (`visible_span`, not a flat
-        // guessed offset — a fixed +3px gap looked fine for one font-size
-        // pairing but drifted noticeably out of line here, same root cause
-        // `visible_span` was already introduced for elsewhere in this
-        // screen). All-caps text with no descenders on either run, so
-        // aligning visible bottoms approximates true baseline alignment.
+        // guessed offset). Measured against a fixed "0123456789" reference
+        // rather than the actual `main_text` — `main_text` embeds the
+        // opponent's username verbatim (`format_result_line`), and a
+        // username containing an underscore (a real, common case — e.g.
+        // "SUDDEN_RECLINE") has a low descender that pulls the whole
+        // string's measured visible-bottom down well past where the score
+        // digits at the end of the line actually sit, which is what the
+        // date needs to align with.
         let sub_px = scale.font_px(15.0);
-        let (main_inset, main_vis_h) = fonts.visible_span(FpFont::SairaCondensedBold, main_px, &main_text);
+        let (main_inset, main_vis_h) = fonts.visible_span(FpFont::SairaCondensedBold, main_px, "0123456789");
         let main_bottom = y + 32.0 + (main_inset + main_vis_h) as f32 / scale.s;
         let (sub_inset, sub_vis_h) = fonts.visible_span(FpFont::ChakraPetchMedium, sub_px, &sub_text);
         let sub_top = main_bottom - (sub_inset + sub_vis_h) as f32 / scale.s;

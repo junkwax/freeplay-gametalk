@@ -133,8 +133,15 @@ fn draw_row(
 
     let num_color = if selected { theme::ACCENT } else { Color::RGB(0x34, 0x34, 0x3a) };
     let num = format!("{:02}", index + 1);
-    let (nx, ny) = scale.point(LIST_X + BAR_W + LABEL_GAP, y + ROW_H / 2.0 - 8.0);
-    fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(16.0), &num, nx, ny, num_color)?;
+    let num_px = scale.font_px(16.0);
+    // True visible-glyph centering (`visible_span`), not a hand-tuned
+    // "-8.0" offset — matches the same technique the label below already
+    // uses, so the number lands on the same center line as the label
+    // instead of independently guessed.
+    let (num_inset, num_vis_h) = fonts.visible_span(FpFont::ChakraPetchSemiBold, num_px, &num);
+    let num_top = y + ROW_H / 2.0 - (num_vis_h as f32 / scale.s) / 2.0;
+    let (nx, ny) = scale.point(LIST_X + BAR_W + LABEL_GAP, num_top - num_inset as f32 / scale.s);
+    fonts.draw(canvas, FpFont::ChakraPetchSemiBold, num_px, &num, nx, ny, num_color)?;
 
     // Same label sizes/font/italic treatment and true visible-pixel
     // centering as `main_menu::draw_row` (see its doc comment on why

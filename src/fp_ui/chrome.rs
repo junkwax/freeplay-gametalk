@@ -406,18 +406,28 @@ pub fn draw_footer(
 
             cursor_x -= 10.0;
             let select = "SELECT";
-            let (sw, sh) = fonts.text_size(FpFont::ChakraPetchSemiBold, scale.font_px(12.0), select);
+            let select_px = scale.font_px(12.0);
+            let (sw, _) = fonts.text_size(FpFont::ChakraPetchSemiBold, select_px, select);
+            // The pill's height/text position used to be derived from
+            // `text_size` (the font's nominal ascent+descent box), which is
+            // taller than "SELECT"'s actual glyphs (no descenders) — that
+            // extra unused space sat below the visible text within the pill,
+            // pushing it visibly lower than "ABOUT"/"CREDIT" alongside it.
+            // `visible_span` centers the pill (and the text within it) on
+            // the glyphs' real height instead.
+            let (s_inset, s_vis_h) = fonts.visible_span(FpFont::ChakraPetchSemiBold, select_px, select);
+            let s_vis_h_l = s_vis_h as f32 / scale.s;
             let pill_pad_x = 10.0;
             let pill_pad_y = 4.0;
             let pill_w = (sw as f32 / scale.s) + pill_pad_x * 2.0;
-            let pill_h = (sh as f32 / scale.s) + pill_pad_y * 2.0;
+            let pill_h = s_vis_h_l + pill_pad_y * 2.0;
             cursor_x -= pill_w;
             let pill_y = row_cy - pill_h / 2.0;
             canvas.set_draw_color(Color::RGBA(255, 255, 255, 12));
             canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
             canvas.draw_rect(scale.rect(cursor_x, pill_y, pill_w, pill_h))?;
-            let (slx, sly) = scale.point(cursor_x + pill_pad_x, pill_y + pill_pad_y);
-            fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(12.0), select, slx, sly, theme::DIM)?;
+            let (slx, sly) = scale.point(cursor_x + pill_pad_x, row_cy - s_vis_h_l / 2.0 - s_inset as f32 / scale.s);
+            fonts.draw(canvas, FpFont::ChakraPetchSemiBold, select_px, select, slx, sly, theme::DIM)?;
         }
         FooterRight::Text(s) => {
             let (tw, _) = fonts.text_size(FpFont::ChakraPetchSemiBold, scale.font_px(13.0), s);

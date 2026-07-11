@@ -169,25 +169,44 @@ fn draw_table(
             _ if is_you => theme::ACCENT,
             _ => Color::RGB(0x6a, 0x6a, 0x72),
         };
-        let (rx, ry2) = scale.point(cols[0], ry + row_h / 2.0 - 13.0);
-        fonts.draw(canvas, FpFont::SairaCondensedBlack, scale.font_px(27.0), &format!("{:02}", i + 1), rx, ry2, rank_color)?;
+        // Each column centered on its own true visible glyph height
+        // (`visible_span`), not independently hand-tuned flat offsets —
+        // rank (27px), codename (20px), W/L (16px), and rating (17px) are
+        // different sizes that don't share a baseline that way.
+        let rank_text = format!("{:02}", i + 1);
+        let rank_px = scale.font_px(27.0);
+        let (rank_inset, rank_vis_h) = fonts.visible_span(FpFont::SairaCondensedBlack, rank_px, &rank_text);
+        let (rx, ry2) = scale.point(cols[0], ry + row_h / 2.0 - (rank_vis_h as f32 / scale.s) / 2.0 - rank_inset as f32 / scale.s);
+        fonts.draw(canvas, FpFont::SairaCondensedBlack, rank_px, &rank_text, rx, ry2, rank_color)?;
 
         let name_color = if is_you { theme::TEXT } else { Color::RGB(0xf2, 0xf2, 0xee) };
-        let (nx, ny) = scale.point(cols[1], ry + row_h / 2.0 - 12.0);
-        fonts.draw(canvas, FpFont::SairaSemiBold, scale.font_px(20.0), &row.username, nx, ny, name_color)?;
+        let name_px = scale.font_px(20.0);
+        let (name_inset, name_vis_h) = fonts.visible_span(FpFont::SairaSemiBold, name_px, &row.username);
+        let (nx, ny) = scale.point(cols[1], ry + row_h / 2.0 - (name_vis_h as f32 / scale.s) / 2.0 - name_inset as f32 / scale.s);
+        fonts.draw(canvas, FpFont::SairaSemiBold, name_px, &row.username, nx, ny, name_color)?;
         if is_you {
-            let (yx, yy) = scale.point(cols[1] + 220.0, ry + row_h / 2.0 - 10.0);
-            fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(11.0), "YOU", yx, yy, theme::ACCENT)?;
+            let you_px = scale.font_px(11.0);
+            let (you_inset, you_vis_h) = fonts.visible_span(FpFont::ChakraPetchSemiBold, you_px, "YOU");
+            let (yx, yy) = scale.point(cols[1] + 220.0, ry + row_h / 2.0 - (you_vis_h as f32 / scale.s) / 2.0 - you_inset as f32 / scale.s);
+            fonts.draw(canvas, FpFont::ChakraPetchSemiBold, you_px, "YOU", yx, yy, theme::ACCENT)?;
         }
 
-        let (wx, wy) = scale.point(cols[2], ry + row_h / 2.0 - 9.0);
-        fonts.draw(canvas, FpFont::ChakraPetchMedium, scale.font_px(16.0), &row.wins.to_string(), wx, wy, theme::GREEN)?;
-        let (lx, ly) = scale.point(cols[3], ry + row_h / 2.0 - 9.0);
-        fonts.draw(canvas, FpFont::ChakraPetchMedium, scale.font_px(16.0), &row.losses.to_string(), lx, ly, Color::RGB(0x7a, 0x7a, 0x82))?;
+        let wl_px = scale.font_px(16.0);
+        let wins_text = row.wins.to_string();
+        let (wins_inset, wins_vis_h) = fonts.visible_span(FpFont::ChakraPetchMedium, wl_px, &wins_text);
+        let (wx, wy) = scale.point(cols[2], ry + row_h / 2.0 - (wins_vis_h as f32 / scale.s) / 2.0 - wins_inset as f32 / scale.s);
+        fonts.draw(canvas, FpFont::ChakraPetchMedium, wl_px, &wins_text, wx, wy, theme::GREEN)?;
+        let losses_text = row.losses.to_string();
+        let (losses_inset, losses_vis_h) = fonts.visible_span(FpFont::ChakraPetchMedium, wl_px, &losses_text);
+        let (lx, ly) = scale.point(cols[3], ry + row_h / 2.0 - (losses_vis_h as f32 / scale.s) / 2.0 - losses_inset as f32 / scale.s);
+        fonts.draw(canvas, FpFont::ChakraPetchMedium, wl_px, &losses_text, lx, ly, Color::RGB(0x7a, 0x7a, 0x82))?;
 
         let rating_color = if is_you { theme::TEXT } else { Color::RGB(0xcf, 0xcf, 0xc9) };
-        let (gx, gy) = scale.point(cols[4], ry + row_h / 2.0 - 10.0);
-        fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(17.0), &row.rating.to_string(), gx, gy, rating_color)?;
+        let rating_px = scale.font_px(17.0);
+        let rating_text = row.rating.to_string();
+        let (rating_inset, rating_vis_h) = fonts.visible_span(FpFont::ChakraPetchSemiBold, rating_px, &rating_text);
+        let (gx, gy) = scale.point(cols[4], ry + row_h / 2.0 - (rating_vis_h as f32 / scale.s) / 2.0 - rating_inset as f32 / scale.s);
+        fonts.draw(canvas, FpFont::ChakraPetchSemiBold, rating_px, &rating_text, gx, gy, rating_color)?;
     }
 
     Ok(())
