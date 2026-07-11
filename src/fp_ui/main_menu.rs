@@ -513,7 +513,7 @@ fn draw_cabinet_title(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scal
     let sub = if rom_present {
         "ARCADE \u{b7} 1993 \u{b7} NETPLAY FREEPLAY"
     } else {
-"PLACE mk2.zip NEXT TO THE EXE OR IN roms\\"
+        "IN THE roms\\ FOLDER"
     };
     let sub_track = scale.len(6.0).round() as i32;
     let (sw, _) = fonts.text_size_tracked(FpFont::ChakraPetchMedium, scale.font_px(14.0), sub, sub_track);
