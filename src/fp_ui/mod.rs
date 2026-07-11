@@ -107,10 +107,16 @@ pub enum FpScreen {
     /// Load Drones — native redesign of legacy's `MenuScreen::GhostSelect`.
     /// `entries`/`status` are populated/drained by `main.rs` exactly like
     /// the legacy screen's own fields (`FpResult::OpenGhostSelect` kicks off
-    /// the same local-scan + remote-fetch this screen just displays). See
+    /// the same local-scan + remote-fetch this screen just displays).
+    /// `cursor` indexes the *full* `entries` list (unchanged from before) —
+    /// `section` (0=Local, 1=Remote) is purely a display/navigation scope on
+    /// top of it, matching the mockup's LOCAL/REMOTE tabs, so main.rs's
+    /// existing population/lookup code (which already treats `entries` as
+    /// one combined local-then-remote list) needed no changes. See
     /// `ghost_select.rs`.
     GhostSelect {
         cursor: usize,
+        section: usize,
         entries: Vec<crate::menu::GhostEntry>,
         status: Option<String>,
     },
@@ -519,7 +525,7 @@ pub fn nav(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult {
                     // Drones — jumps straight to the drone list, same shortcut
                     // legacy's own Play submenu gives this row (skipping the
                     // Lab chooser, since there's nothing to choose here).
-                    *screen = FpScreen::GhostSelect { cursor: 0, entries: Vec::new(), status: None };
+                    *screen = FpScreen::GhostSelect { cursor: 0, section: 0, entries: Vec::new(), status: None };
                     FpResult::OpenGhostSelect
                 }
             },
@@ -546,7 +552,7 @@ pub fn nav(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult {
             FpNav::Confirm => {
                 // Load Drones — same OpenGhostSelect side effect the Play
                 // submenu's Drones row triggers directly.
-                *screen = FpScreen::GhostSelect { cursor: 0, entries: Vec::new(), status: None };
+                *screen = FpScreen::GhostSelect { cursor: 0, section: 0, entries: Vec::new(), status: None };
                 FpResult::OpenGhostSelect
             }
             FpNav::Back => {
@@ -555,20 +561,54 @@ pub fn nav(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult {
             }
             _ => FpResult::Stay,
         },
-        FpScreen::GhostSelect { cursor, entries, .. } => match input {
+        FpScreen::GhostSelect { cursor, section, entries, .. } => match input {
             FpNav::Up => {
-                *cursor = cursor.saturating_sub(1);
+                let idxs = ghost_section_indices(entries, *section);
+                if let Some(pos) = idxs.iter().position(|i| i == cursor) {
+                    if pos > 0 {
+                        *cursor = idxs[pos - 1];
+                    }
+                } else if let Some(&first) = idxs.first() {
+                    *cursor = first;
+                }
                 FpResult::Stay
             }
             FpNav::Down => {
-                *cursor = (*cursor + 1).min(entries.len().saturating_sub(1));
+                let idxs = ghost_section_indices(entries, *section);
+                if let Some(pos) = idxs.iter().position(|i| i == cursor) {
+                    if pos + 1 < idxs.len() {
+                        *cursor = idxs[pos + 1];
+                    }
+                } else if let Some(&first) = idxs.first() {
+                    *cursor = first;
+                }
                 FpResult::Stay
             }
-            FpNav::Confirm => match entries.get(*cursor) {
-                Some(crate::menu::GhostEntry::Local { path, .. }) => FpResult::LoadGhost(path.clone()),
-                Some(crate::menu::GhostEntry::Remote(meta)) => FpResult::DownloadGhost(meta.ghost_id.clone()),
-                None => FpResult::Stay,
-            },
+            // LOCAL/REMOTE section tabs — matches the mockup's
+            // `droneSectionTabs`. `cursor` jumps to that section's first
+            // entry (or stays put if it's already empty) rather than
+            // leaving it pointed at an index outside the visible list.
+            FpNav::PrevTab | FpNav::NextTab => {
+                *section = 1 - *section;
+                let idxs = ghost_section_indices(entries, *section);
+                if let Some(&first) = idxs.first() {
+                    *cursor = first;
+                }
+                FpResult::Stay
+            }
+            // Guard against acting on `cursor` before it's been scoped into
+            // this section — see `FpScreen::GhostSelect`'s doc comment and
+            // `ghost_select.rs`'s matching guard on the same mismatch (fresh
+            // entry into the screen, or an async population landing between
+            // frames, can leave `cursor` pointing at the *other* section's
+            // entry while `section` hasn't caught up yet).
+            FpNav::Confirm if ghost_section_indices(entries, *section).contains(cursor) => {
+                match entries.get(*cursor) {
+                    Some(crate::menu::GhostEntry::Local { path, .. }) => FpResult::LoadGhost(path.clone()),
+                    Some(crate::menu::GhostEntry::Remote(meta)) => FpResult::DownloadGhost(meta.ghost_id.clone()),
+                    None => FpResult::Stay,
+                }
+            }
             FpNav::Back => {
                 *screen = FpScreen::LabMenu { cursor: 1 };
                 FpResult::Stay
@@ -923,6 +963,18 @@ pub fn nav(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult {
     }
 }
 
+/// Indices into `entries` belonging to section 0 (Local) or 1 (Remote) —
+/// see `FpScreen::GhostSelect`'s doc comment for why this scopes navigation
+/// rather than splitting `entries` itself into two lists.
+fn ghost_section_indices(entries: &[crate::menu::GhostEntry], section: usize) -> Vec<usize> {
+    entries
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| matches!((section, e), (0, crate::menu::GhostEntry::Local { .. }) | (1, crate::menu::GhostEntry::Remote(_))))
+        .map(|(i, _)| i)
+        .collect()
+}
+
 /// Draw the current fp_ui screen. Caller has already set
 /// `canvas.set_logical_size(0, 0)` (raw window pixels) — fp_ui owns all its
 /// own logical->window scaling via `Scale`, rather than relying on SDL's
@@ -955,8 +1007,8 @@ pub fn draw(
         }
         FpScreen::PlayMenu { cursor } => play_menu::draw(canvas, fonts, &scale, *cursor, username)?,
         FpScreen::LabMenu { cursor } => lab_menu::draw(canvas, fonts, &scale, *cursor, username)?,
-        FpScreen::GhostSelect { cursor, entries, status } => {
-            ghost_select::draw(canvas, fonts, &scale, *cursor, entries, status.as_deref(), username)?
+        FpScreen::GhostSelect { cursor, section, entries, status } => {
+            ghost_select::draw(canvas, fonts, &scale, *cursor, *section, entries, status.as_deref(), username)?
         }
         FpScreen::ReplaySelect { cursor, entries, status } => {
             replay_select::draw(canvas, fonts, &scale, *cursor, entries, status.as_deref(), username)?

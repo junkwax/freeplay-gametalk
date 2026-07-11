@@ -691,7 +691,7 @@ fn mark_uploaded(path: &std::path::Path) {
 }
 
 /// Read just the frame_count from an .ncgh header (skipping the savestate).
-fn read_ncgh_frame_count(path: &std::path::Path) -> Option<u32> {
+pub fn read_ncgh_frame_count(path: &std::path::Path) -> Option<u32> {
     use std::io::Read;
     let mut f = std::fs::File::open(path).ok()?;
     let mut magic = [0u8; 4];

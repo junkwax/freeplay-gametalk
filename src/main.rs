@@ -764,11 +764,15 @@ fn scan_local_ghost_entries() -> Vec<menu::GhostEntry> {
         files.sort_by(|a, b| extract_ts(&b.0).cmp(&extract_ts(&a.0)));
         entries = files
             .into_iter()
-            .map(|(name, path)| menu::GhostEntry::Local { filename: name, path })
+            .map(|(name, path)| {
+                let frame_count = ghost::read_ncgh_frame_count(std::path::Path::new(&path)).unwrap_or(0);
+                menu::GhostEntry::Local { filename: name, path, frame_count }
+            })
             .collect();
     }
     if std::path::Path::new("ghost.bin").exists() {
-        entries.push(menu::GhostEntry::Local { filename: "ghost.bin".into(), path: "ghost.bin".into() });
+        let frame_count = ghost::read_ncgh_frame_count(std::path::Path::new("ghost.bin")).unwrap_or(0);
+        entries.push(menu::GhostEntry::Local { filename: "ghost.bin".into(), path: "ghost.bin".into(), frame_count });
     }
     entries
 }
@@ -1133,9 +1137,8 @@ fn set_replay_select_status(state: &mut AppState, status: impl Into<String>) {
 }
 
 fn selected_replay_entry(state: &AppState) -> Option<menu::ReplayEntry> {
-    if let AppState::Menu(MenuScreen::ReplaySelect {
-        cursor, entries, ..
-    }) = state
+    if let AppState::Menu(MenuScreen::ReplaySelect { cursor, entries, .. })
+    | AppState::FpUi(fp_ui::FpScreen::ReplaySelect { cursor, entries, .. }) = state
     {
         entries.get(*cursor).cloned()
     } else {
@@ -1144,7 +1147,10 @@ fn selected_replay_entry(state: &AppState) -> Option<menu::ReplayEntry> {
 }
 
 fn handle_replay_select_shortcut(event: &Event, state: &mut AppState) -> bool {
-    if !matches!(state, AppState::Menu(MenuScreen::ReplaySelect { .. })) {
+    if !matches!(
+        state,
+        AppState::Menu(MenuScreen::ReplaySelect { .. }) | AppState::FpUi(fp_ui::FpScreen::ReplaySelect { .. })
+    ) {
         return false;
     }
 
@@ -1193,11 +1199,19 @@ fn handle_replay_select_shortcut(event: &Event, state: &mut AppState) -> bool {
                 set_replay_select_status(state, "Notes are local replays only");
                 return true;
             }
-            let cursor = if let AppState::Menu(MenuScreen::ReplaySelect { cursor, .. }) = state {
+            let cursor = if let AppState::Menu(MenuScreen::ReplaySelect { cursor, .. })
+            | AppState::FpUi(fp_ui::FpScreen::ReplaySelect { cursor, .. }) = state
+            {
                 *cursor
             } else {
                 0
             };
+            // Same known rough edge as `BeginAccountEdit`/`OpenJoinCode`
+            // when triggered from fp_ui: TextEdit's `came_from` is a legacy
+            // `MenuScreen`, not `AppState`, so editing a note from the
+            // native Replays screen lands back on a legacy `ReplaySelect`
+            // stub (re-populated on the next `refresh_replay_select` call,
+            // but empty until then) rather than back on the native screen.
             let came_from = if let AppState::Menu(screen) = state {
                 screen.clone()
             } else {
@@ -3642,10 +3656,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                     }
-                    if !matches!(state, AppState::Menu(_)) {
+                    // The native Replays screen has no `FpNav` equivalent for
+                    // Delete/Edit-Note (they're raw shortcut keys, not part of
+                    // the D-pad/face-button navigation grammar), so it's let
+                    // through here too — `handle_replay_select_shortcut` (and
+                    // the legacy nav_* methods it falls through to on a miss)
+                    // already no-op safely for any other `AppState::FpUi`.
+                    if !matches!(state, AppState::Menu(_))
+                        && !matches!(state, AppState::FpUi(fp_ui::FpScreen::ReplaySelect { .. }))
+                    {
                         continue;
                     }
                     if handle_replay_select_shortcut(&event, &mut state) {
+                        continue;
+                    }
+                    if !matches!(state, AppState::Menu(_)) {
                         continue;
                     }
                     if let Some(nav) = event_to_menu_nav(&event) {

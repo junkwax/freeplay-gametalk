@@ -223,8 +223,11 @@ pub enum EditField {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GhostEntry {
     /// On-disk `.ncgh` we recorded locally (or downloaded previously).
-    /// `path` is what `ghost::Playback::load` opens.
-    Local { filename: String, path: String },
+    /// `path` is what `ghost::Playback::load` opens. `frame_count` is read
+    /// straight from the file's own header (`ghost::read_ncgh_frame_count`)
+    /// at scan time — real data, not fabricated, matching what
+    /// `RemoteGhostMeta` already carries for remote entries.
+    Local { filename: String, path: String, frame_count: u32 },
     /// Catalogued on freeplay-stats but not yet downloaded. Pressing Enter
     /// kicks off the download to `ghosts/remote_<id>.ncgh`.
     Remote(RemoteGhostMeta),
@@ -653,14 +656,76 @@ pub fn test_state(name: &str) -> Option<AppState> {
         "fp:ghostselect" => {
             return Some(AppState::FpUi(crate::fp_ui::FpScreen::GhostSelect {
                 cursor: 0,
-                entries: vec![],
+                section: 0,
+                entries: vec![
+                    GhostEntry::Local { filename: "ghost_1720600000.ncgh".into(), path: "ghosts/ghost_1720600000.ncgh".into(), frame_count: 8420 },
+                    GhostEntry::Local { filename: "ghost_1720700000.ncgh".into(), path: "ghosts/ghost_1720700000.ncgh".into(), frame_count: 11340 },
+                    GhostEntry::Remote(RemoteGhostMeta {
+                        ghost_id: "g1".into(),
+                        filename: "scorpion_pit.ncgh".into(),
+                        username: "SCORPION_PIT".into(),
+                        frame_count: 23400,
+                    }),
+                    GhostEntry::Remote(RemoteGhostMeta {
+                        ghost_id: "g2".into(),
+                        filename: "raidenbolt.ncgh".into(),
+                        username: "RaidenBolt99".into(),
+                        frame_count: 18200,
+                    }),
+                ],
                 status: None,
             }))
         }
         "fp:replayselect" => {
             return Some(AppState::FpUi(crate::fp_ui::FpScreen::ReplaySelect {
                 cursor: 0,
-                entries: vec![],
+                entries: vec![
+                    ReplayEntry {
+                        filename: "1719index_a.ncrp".into(),
+                        path: "replays/1719index_a.ncrp".into(),
+                        remote_url: None,
+                        p1_name: "Respected_Hunter".into(),
+                        p2_name: "Scorpion_Pit".into(),
+                        p1_score: Some(3),
+                        p2_score: Some(1),
+                        winner: "Respected_Hunter".into(),
+                        frame_count: 28400,
+                        duration: "8:42".into(),
+                        recorded_at: "2026-06-25T00:00:00Z".into(),
+                        note: "Good block strings".into(),
+                        bookmark_count: 3,
+                    },
+                    ReplayEntry {
+                        filename: "1719index_b.ncrp".into(),
+                        path: "replays/1719index_b.ncrp".into(),
+                        remote_url: None,
+                        p1_name: "Respected_Hunter".into(),
+                        p2_name: "KungLaoFan".into(),
+                        p1_score: Some(1),
+                        p2_score: Some(3),
+                        winner: "KungLaoFan".into(),
+                        frame_count: 36900,
+                        duration: "11:15".into(),
+                        recorded_at: "2026-06-25T00:00:00Z".into(),
+                        note: String::new(),
+                        bookmark_count: 0,
+                    },
+                    ReplayEntry {
+                        filename: String::new(),
+                        path: String::new(),
+                        remote_url: Some("https://stats.example/replays/r3".into()),
+                        p1_name: "Sub__Zero".into(),
+                        p2_name: "MileenaX".into(),
+                        p1_score: Some(0),
+                        p2_score: Some(3),
+                        winner: "MileenaX".into(),
+                        frame_count: 20500,
+                        duration: "6:21".into(),
+                        recorded_at: "2026-06-23T00:00:00Z".into(),
+                        note: String::new(),
+                        bookmark_count: 12,
+                    },
+                ],
                 status: None,
             }))
         }
