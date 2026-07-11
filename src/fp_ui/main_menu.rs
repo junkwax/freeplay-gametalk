@@ -491,18 +491,20 @@ fn stat_values(profile: &ProfileScreenState) -> (String, String, String) {
     }
 }
 
-/// "MORTAL KOMBAT / ARCADE · 1993 · NETPLAY FREEPLAY" caption, bottom-right
-/// of the content area, in front of the giant "II" ghost watermark — per
-/// the mockup's markup. An earlier pass here instead drew an invented
-/// "SELECTED CABINET / MORTAL KOMBAT II / ARCADE" info box that doesn't
-/// exist in the current mockup; that box has been replaced by the real
-/// "LAST MATCH" card (`draw_last_match_card`), which is what actually sits
-/// below the item list in this version of the markup.
+/// "MORTAL KOMBAT II / ARCADE · 1993 · NETPLAY FREEPLAY" caption,
+/// bottom-right of the content area, in front of the giant "II" ghost
+/// watermark — the mockup's own markup just says "MORTAL KOMBAT" here, but
+/// this app only ever runs MK2, so the caption says so explicitly rather
+/// than the franchise-level name. An earlier pass here instead drew an
+/// invented "SELECTED CABINET / MORTAL KOMBAT II / ARCADE" info box that
+/// doesn't exist in the current mockup; that box has been replaced by the
+/// real "LAST MATCH" card (`draw_last_match_card`), which is what actually
+/// sits below the item list in this version of the markup.
 fn draw_cabinet_title(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scale: &Scale, rom_present: bool) -> Result<(), String> {
     let bottom = theme::VH - chrome::FOOTER_H - 96.0;
     // No ROM found: don't claim MK2 is loaded and ready to play — real
     // data only, same reasoning as the "?" watermark next to this.
-    let title = if rom_present { "MORTAL KOMBAT" } else { "NO ROM FOUND" };
+    let title = if rom_present { "MORTAL KOMBAT II" } else { "NO ROM FOUND" };
     let title_track = scale.len(11.0).round() as i32;
     let (tw, th) = fonts.text_size_tracked(FpFont::SairaCondensedBold, scale.font_px(32.0), title, title_track);
     let (tx, ty) = scale.point(theme::VW - 96.0 - (tw as f32 / scale.s), bottom - (th as f32 / scale.s));

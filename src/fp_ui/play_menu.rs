@@ -84,9 +84,9 @@ pub fn draw(
     let bottom = theme::VH - chrome::FOOTER_H - 96.0;
     let mk_size = 32.0;
     let mk_track = scale.len(11.0).round() as i32;
-    let (mkw, mkh) = fonts.text_size_tracked(FpFont::SairaCondensedBold, scale.font_px(mk_size), "MORTAL KOMBAT", mk_track);
+    let (mkw, mkh) = fonts.text_size_tracked(FpFont::SairaCondensedBold, scale.font_px(mk_size), "MORTAL KOMBAT II", mk_track);
     let (mkx, mky) = scale.point(theme::VW - 96.0 - (mkw as f32 / scale.s), bottom - (mkh as f32 / scale.s));
-    fonts.draw_tracked(canvas, FpFont::SairaCondensedBold, scale.font_px(mk_size), "MORTAL KOMBAT", mkx, mky, Color::RGB(0xde, 0xde, 0xd8), mk_track)?;
+    fonts.draw_tracked(canvas, FpFont::SairaCondensedBold, scale.font_px(mk_size), "MORTAL KOMBAT II", mkx, mky, Color::RGB(0xde, 0xde, 0xd8), mk_track)?;
     let sub = "ARCADE \u{b7} 1993 \u{b7} PLAY MODES";
     let sub_track = scale.len(6.0).round() as i32;
     let (subw, _) = fonts.text_size_tracked(FpFont::ChakraPetchMedium, scale.font_px(14.0), sub, sub_track);
