@@ -42,9 +42,16 @@ pub const CONTROLS_CAT_INDEX: usize = 0;
 /// here — appended last rather than reordered in, to avoid renumbering the
 /// other 4 categories' index constants.
 pub const ACCOUNT_CAT_INDEX: usize = 4;
-pub const CATS: [&str; 5] = ["CONTROLS", "VIDEO", "AUDIO", "NETPLAY", "ACCOUNT"];
-// Controls: 11 actions + a "CLEAR ALL" row. Account: Username/Stats Email/Discord.
-const ROWS_PER_CAT: [usize; 5] = [Action::ALL.len() + 1, 6, 2, 4, 3];
+/// Diagnostics — a real UDP-probe flow (`netplay::probe_connection`) the
+/// mockup's own Settings screen has as its 5th category; this build's own
+/// 5th category is Account (see above) instead, so Test Connection is
+/// appended as a 6th rather than displacing it — both are real,
+/// backend-backed functionality worth keeping.
+pub const TEST_CONN_CAT_INDEX: usize = 5;
+pub const CATS: [&str; 6] = ["CONTROLS", "VIDEO", "AUDIO", "NETPLAY", "ACCOUNT", "TEST CONNECTION"];
+// Controls: 11 actions + a "CLEAR ALL" row. Account: Username/Stats Email/
+// Discord. Test Connection: just the one address field.
+const ROWS_PER_CAT: [usize; 6] = [Action::ALL.len() + 1, 6, 2, 4, 3, 1];
 
 const SIDE_PAD: f32 = 56.0;
 const CONTENT_TOP: f32 = 142.0;
@@ -180,6 +187,8 @@ pub fn draw(
     username: &str,
     stats_email: &str,
     discord_connected: bool,
+    test_conn_address: &str,
+    test_conn_lines: &[String],
 ) -> Result<(), String> {
     chrome::draw_header(canvas, fonts, scale, username, true, None)?;
 
@@ -210,6 +219,8 @@ pub fn draw(
         draw_controls_rows(canvas, fonts, scale, panel_x, rows_top, row, controls_player, bindings, !sidebar_focus)?;
     } else if cat == ACCOUNT_CAT_INDEX {
         draw_account_rows(canvas, fonts, scale, panel_x, rows_top, row, username, stats_email, discord_connected, !sidebar_focus)?;
+    } else if cat == TEST_CONN_CAT_INDEX {
+        draw_test_conn(canvas, fonts, scale, panel_x, rows_top, test_conn_address, test_conn_lines)?;
     } else {
         for r in 0..rows_in_cat(cat) {
             let (label, hint) = SettingsFields::row_meta(cat, r);
@@ -230,6 +241,12 @@ pub fn draw(
             chrome::FooterPrompt { glyph: "\u{2195}", label: "Row", color: Color::RGB(0xcf, 0xcf, 0xc9) },
             chrome::FooterPrompt { glyph: "L/R", label: "Category", color: Color::RGB(0xcf, 0xcf, 0xc9) },
             chrome::PROMPT_SELECT,
+            chrome::PROMPT_BACK,
+        ]
+    } else if cat == TEST_CONN_CAT_INDEX {
+        &[
+            chrome::FooterPrompt { glyph: "L/R", label: "Category", color: Color::RGB(0xcf, 0xcf, 0xc9) },
+            chrome::FooterPrompt { glyph: "X", label: "Run Probe", color: theme::BTN_CROSS },
             chrome::PROMPT_BACK,
         ]
     } else {
@@ -462,6 +479,93 @@ fn draw_account_rows(
     for (i, (label, value, hint)) in rows.iter().enumerate() {
         let y = top + i as f32 * row_h;
         draw_bind_row(canvas, fonts, scale, x, y, row_h, label, value, hint, row == i, focused)?;
+    }
+    Ok(())
+}
+
+/// Test Connection category content: a real hardware-keyboard address
+/// field (typed into directly, same mechanism `claim_username.rs` uses —
+/// see `FpResult::RunConnectionProbe`'s doc comment) plus the exact
+/// `render::format_probe_result` output a real probe produces. Lines are
+/// colored by the same "OK "/"WARN "/"FAIL " prefix convention that
+/// function already uses; unprefixed lines are either section headers
+/// (`"L3 LOCAL STACK"`, no leading space) or indented follow-up detail
+/// (leading spaces) — distinguished here by that same leading-whitespace
+/// check rather than a second real/fabricated classification field.
+fn draw_test_conn(
+    canvas: &mut Canvas<Window>,
+    fonts: &mut FpFontCache,
+    scale: &Scale,
+    x: f32,
+    top: f32,
+    address: &str,
+    lines: &[String],
+) -> Result<(), String> {
+    let field_w = 460.0;
+    let field_h = 46.0;
+    canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
+    canvas.set_draw_color(Color::RGBA(255, 255, 255, 15));
+    canvas.fill_rect(Some(scale.rect(x, top, field_w, field_h)))?;
+    canvas.set_draw_color(theme::ACCENT);
+    canvas.draw_rect(scale.rect(x, top, field_w, field_h))?;
+    let (vx, vy) = scale.point(x + 14.0, top + field_h / 2.0 - 10.0);
+    let (vw, _) = fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(17.0), address, vx, vy, Color::RGB(0xF4, 0xF4, 0xF0))?;
+    let caret_x = x + 14.0 + (vw as f32 / scale.s) + 3.0;
+    canvas.set_draw_color(theme::ACCENT);
+    canvas.fill_rect(Some(scale.rect(caret_x, top + 10.0, 2.0, field_h - 20.0)))?;
+
+    let hint_y = top + field_h + 8.0;
+    let (hx, hy) = scale.point(x, hint_y);
+    fonts.draw(
+        canvas,
+        FpFont::SairaMedium,
+        scale.font_px(12.0),
+        "Type an address, then Cross to run a UDP probe",
+        hx,
+        hy,
+        Color::RGB(0x52, 0x52, 0x5a),
+    )?;
+
+    let log_top = hint_y + 30.0;
+    let log_w = 1360.0f32.max(field_w);
+    let log_h = 420.0;
+    canvas.set_draw_color(Color::RGBA(4, 4, 7, 179));
+    canvas.fill_rect(Some(scale.rect(x, log_top, log_w, log_h)))?;
+    canvas.set_draw_color(Color::RGBA(255, 255, 255, 18));
+    canvas.draw_rect(scale.rect(x, log_top, log_w, log_h))?;
+    let (plx, ply) = scale.point(x + 16.0, log_top + 12.0);
+    fonts.draw_tracked(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(11.0), "PROBE OUTPUT", plx, ply, Color::RGB(0x3a, 0x3a, 0x42), scale.len(4.0).round() as i32)?;
+
+    if lines.is_empty() {
+        let msg = "ENTER AN ADDRESS AND RUN PROBE";
+        let (mw, _) = fonts.text_size(FpFont::ChakraPetchMedium, scale.font_px(12.0), msg);
+        let (mx, my) = scale.point(x + (log_w - mw as f32 / scale.s) / 2.0, log_top + log_h / 2.0 - 6.0);
+        fonts.draw(canvas, FpFont::ChakraPetchMedium, scale.font_px(12.0), msg, mx, my, Color::RGB(0x1e, 0x1e, 0x24))?;
+    } else {
+        let row_h = 22.0;
+        let max_visible = ((log_h - 40.0) / row_h).floor().max(1.0) as usize;
+        let mut y = log_top + 40.0;
+        for line in lines.iter().take(max_visible) {
+            if line.is_empty() {
+                y += row_h * 0.4;
+                continue;
+            }
+            let indented = line.starts_with(' ');
+            let (color, text) = if let Some(rest) = line.strip_prefix("OK ") {
+                (theme::GREEN, rest)
+            } else if let Some(rest) = line.strip_prefix("WARN ") {
+                (theme::WARNING, rest)
+            } else if let Some(rest) = line.strip_prefix("FAIL ") {
+                (theme::HIGH_PING, rest)
+            } else if indented {
+                (Color::RGB(0x52, 0x52, 0x5a), line.trim_start())
+            } else {
+                (Color::RGB(0xcf, 0xcf, 0xc9), line.as_str())
+            };
+            let (lx, ly) = scale.point(x + 16.0 + if indented { 14.0 } else { 0.0 }, y);
+            fonts.draw(canvas, FpFont::ChakraPetchMedium, scale.font_px(13.0), text, lx, ly, color)?;
+            y += row_h;
+        }
     }
     Ok(())
 }

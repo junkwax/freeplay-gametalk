@@ -744,7 +744,7 @@ pub fn test_state(name: &str) -> Option<AppState> {
             )))
         }
         "fp:settings:account" => {
-            let crate::fp_ui::FpScreen::Settings { fields, sidebar_focus, controls_player, .. } =
+            let crate::fp_ui::FpScreen::Settings { fields, sidebar_focus, controls_player, test_conn_address, test_conn_lines, .. } =
                 crate::fp_ui::FpScreen::settings_from_cfg(&crate::config::load())
             else {
                 unreachable!()
@@ -755,6 +755,24 @@ pub fn test_state(name: &str) -> Option<AppState> {
                 fields,
                 sidebar_focus,
                 controls_player,
+                test_conn_address,
+                test_conn_lines,
+            }));
+        }
+        "fp:settings:testconn" => {
+            let crate::fp_ui::FpScreen::Settings { fields, sidebar_focus, controls_player, .. } =
+                crate::fp_ui::FpScreen::settings_from_cfg(&crate::config::load())
+            else {
+                unreachable!()
+            };
+            return Some(AppState::FpUi(crate::fp_ui::FpScreen::Settings {
+                cat: crate::fp_ui::settings::TEST_CONN_CAT_INDEX,
+                row: 0,
+                fields,
+                sidebar_focus,
+                controls_player,
+                test_conn_address: "127.0.0.1:7000".into(),
+                test_conn_lines: Vec::new(),
             }));
         }
         "fp:lobby" => return Some(AppState::FpUi(crate::fp_ui::FpScreen::lobby())),
@@ -1961,6 +1979,20 @@ impl AppState {
                 }
             }
             return;
+        } else if let AppState::FpUi(crate::fp_ui::FpScreen::Settings {
+            cat,
+            test_conn_address,
+            ..
+        }) = self
+        {
+            if *cat == crate::fp_ui::settings::TEST_CONN_CAT_INDEX {
+                for c in s.chars() {
+                    if (c.is_ascii_digit() || c == '.' || c == ':') && test_conn_address.len() < 24 {
+                        test_conn_address.push(c);
+                    }
+                }
+            }
+            return;
         }
 
         if let AppState::Menu(MenuScreen::TextEdit { field, value, .. }) = self {
@@ -2013,6 +2045,15 @@ impl AppState {
         }) = self
         {
             ip_text.pop();
+        } else if let AppState::FpUi(crate::fp_ui::FpScreen::Settings {
+            cat,
+            test_conn_address,
+            ..
+        }) = self
+        {
+            if *cat == crate::fp_ui::settings::TEST_CONN_CAT_INDEX {
+                test_conn_address.pop();
+            }
         } else if let AppState::Menu(MenuScreen::TextEdit { value, .. }) = self {
             value.pop();
         } else if let AppState::Menu(MenuScreen::MatchUsername { value, .. })
@@ -2024,7 +2065,7 @@ impl AppState {
 }
 
 /// Parse "1.2.3.4:7000" or "1.2.3.4" (default port added) into a SocketAddr.
-fn parse_ip_port(s: &str) -> Option<std::net::SocketAddr> {
+pub fn parse_ip_port(s: &str) -> Option<std::net::SocketAddr> {
     let trimmed = s.trim();
     if let Ok(a) = trimmed.parse::<std::net::SocketAddr>() {
         return Some(a);

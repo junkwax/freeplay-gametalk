@@ -165,12 +165,21 @@ pub enum FpScreen {
     /// mouse-only affordance we don't have, so repurposing the otherwise-
     /// idle Left/Right for this category is the closest controller-native
     /// equivalent).
+    /// `test_conn_address`/`test_conn_lines` back the Test Connection
+    /// category (`settings::TEST_CONN_CAT_INDEX`) — real hardware-keyboard
+    /// text entry into `test_conn_address` (same mechanism
+    /// `ClaimUsername`/legacy `TestIp` already use), and `test_conn_lines`
+    /// is the exact `render::format_probe_result` output a real
+    /// `netplay::probe_connection` call produces, targeting this screen's
+    /// field instead of legacy `MenuScreen::TestResult`'s.
     Settings {
         cat: usize,
         row: usize,
         fields: SettingsFields,
         sidebar_focus: bool,
         controls_player: crate::input::Player,
+        test_conn_address: String,
+        test_conn_lines: Vec<String>,
     },
     /// `tab`: 0=Quick Match, 1=Host/Join, 2=Server Browser, 3=Chat, 4=Watch.
     /// `host_join_focus`: 0=Host column, 1=Join column (tab 1 only).
@@ -249,6 +258,8 @@ impl FpScreen {
             fields: SettingsFields::from_cfg(cfg),
             sidebar_focus: false,
             controls_player: crate::input::Player::P1,
+            test_conn_address: String::new(),
+            test_conn_lines: Vec::new(),
         }
     }
 
@@ -422,6 +433,12 @@ pub enum FpResult {
     /// legacy's own Back handling for `MenuScreen::OnlineHub`'s incoming
     /// modal does: `matchmaking::decline_challenge(id)`.
     DeclineChallenge(String),
+    /// Confirm on the Test Connection category. Caller parses the address
+    /// (`menu::parse_ip_port`) and, if valid, runs the exact same
+    /// `netplay::probe_connection`/`render::format_probe_result` call
+    /// legacy's `NavResult::RunProbe` does, writing the result into this
+    /// screen's `test_conn_lines` instead of a separate `MenuScreen::TestResult`.
+    RunConnectionProbe(String),
 }
 
 pub fn nav(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult {
@@ -700,7 +717,7 @@ pub fn nav(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult {
             }
             _ => FpResult::Stay,
         },
-        FpScreen::Settings { cat, row, fields, sidebar_focus, controls_player } => match input {
+        FpScreen::Settings { cat, row, fields, sidebar_focus, controls_player, test_conn_address, .. } => match input {
             FpNav::Up => {
                 if *sidebar_focus {
                     *cat = cat.saturating_sub(1);
@@ -740,6 +757,15 @@ pub fn nav(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult {
                 1 => FpResult::BeginAccountEdit(crate::menu::EditField::StatsEmail),
                 _ => FpResult::ToggleDiscordConnect,
             },
+            // Test Connection has no row list to select into — Confirm
+            // always runs a probe against whatever's currently typed into
+            // `test_conn_address` (real hardware-keyboard entry, same
+            // mechanism `ClaimUsername` uses — see that screen's doc
+            // comment for why there's no separate native OSK to delegate
+            // to).
+            FpNav::Confirm if *cat == settings::TEST_CONN_CAT_INDEX => {
+                FpResult::RunConnectionProbe(test_conn_address.clone())
+            }
             FpNav::PrevTab => {
                 *cat = (*cat + settings::CATS.len() - 1) % settings::CATS.len();
                 *row = 0;
@@ -756,6 +782,11 @@ pub fn nav(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult {
             // `FpScreen::Settings::controls_player`'s doc comment).
             FpNav::Left | FpNav::Right if !*sidebar_focus && *cat == settings::CONTROLS_CAT_INDEX => {
                 *controls_player = controls_player.other();
+                FpResult::Stay
+            }
+            // Test Connection has nothing to cycle with Left/Right either —
+            // its only input is the real-keyboard address field.
+            FpNav::Left | FpNav::Right if !*sidebar_focus && *cat == settings::TEST_CONN_CAT_INDEX => {
                 FpResult::Stay
             }
             FpNav::Left if !*sidebar_focus => {
@@ -1017,7 +1048,7 @@ pub fn draw(
         FpScreen::Rankings => rankings::draw(canvas, fonts, &scale, username, leaderboard)?,
         FpScreen::Profile => profile::draw(canvas, fonts, &scale, username, profile)?,
         FpScreen::About => about::draw(canvas, fonts, &scale, username)?,
-        FpScreen::Settings { cat, row, fields, sidebar_focus, controls_player } => settings::draw(
+        FpScreen::Settings { cat, row, fields, sidebar_focus, controls_player, test_conn_address, test_conn_lines } => settings::draw(
             canvas,
             fonts,
             &scale,
@@ -1030,6 +1061,8 @@ pub fn draw(
             username,
             stats_email,
             discord_connected,
+            test_conn_address,
+            test_conn_lines,
         )?,
         FpScreen::Lobby {
             tab,

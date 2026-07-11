@@ -1122,6 +1122,19 @@ fn refresh_replay_select(state: &mut AppState, status: Option<String>) {
     }
 }
 
+/// True while the native Test Connection category is showing and actively
+/// focused (not sidebar-driven category switching) — real hardware-keyboard
+/// text input should be active into `test_conn_address`, same mechanism
+/// legacy's `MenuScreen::TestIp { editing: true, .. }` already uses for the
+/// same field.
+fn is_fp_test_conn_editing(state: &AppState) -> bool {
+    matches!(
+        state,
+        AppState::FpUi(fp_ui::FpScreen::Settings { cat, sidebar_focus: false, .. })
+            if *cat == fp_ui::settings::TEST_CONN_CAT_INDEX
+    )
+}
+
 fn set_replay_select_status(state: &mut AppState, status: impl Into<String>) {
     let status = status.into();
     if let AppState::FpUi(fp_ui::FpScreen::ReplaySelect { status: screen_status, .. }) = state {
@@ -2086,6 +2099,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ..
                     })
             )
+            || is_fp_test_conn_editing(&state)
         {
             video_subsystem.text_input().start();
         } else {
@@ -2761,7 +2775,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 checking: false,
                                 ..
                             })
-                    ) =>
+                    ) || is_fp_test_conn_editing(&state) =>
                 {
                     state.text_input(&text);
                 }
@@ -2785,7 +2799,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             checking: false,
                             ..
                         })
-                ) =>
+                ) || is_fp_test_conn_editing(&state) =>
                 {
                     state.text_backspace();
                 }
@@ -3342,6 +3356,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                                 fp_ui::FpResult::DeclineChallenge(challenge_id) => {
                                     matchmaking::decline_challenge(challenge_id);
+                                }
+                                fp_ui::FpResult::RunConnectionProbe(address) => {
+                                    // Mirrors legacy's NavResult::RunProbe exactly (same
+                                    // netplay::probe_connection/format_probe_result call),
+                                    // targeting this screen's test_conn_lines instead of a
+                                    // separate MenuScreen::TestResult.
+                                    let lines = match menu::parse_ip_port(&address) {
+                                        Some(peer) => {
+                                            let (_rom_size, rom_hash_u64) = rom_fingerprint();
+                                            let report = netplay::probe_connection(
+                                                peer,
+                                                5,
+                                                version::VERSION,
+                                                rom_hash_u64,
+                                            );
+                                            let lines = format_probe_result(peer, rom_hash_u64, &report);
+                                            for l in &lines {
+                                                println!("[probe] {}", l);
+                                            }
+                                            lines
+                                        }
+                                        None => vec!["FAIL Invalid address \u{2014} use IP or IP:PORT".into()],
+                                    };
+                                    if let AppState::FpUi(fp_ui::FpScreen::Settings {
+                                        ref mut test_conn_lines,
+                                        ..
+                                    }) = state
+                                    {
+                                        *test_conn_lines = lines;
+                                    }
                                 }
                                 fp_ui::FpResult::WatchEndedReplay(path) => {
                                     // Same playback pipeline as WatchLastMatchReplay above,
@@ -7448,7 +7492,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             checking: false,
                             ..
                         })
-                ) {
+                ) || is_fp_test_conn_editing(&state) {
                     video_subsystem.text_input().start();
                 } else {
                     video_subsystem.text_input().stop();
