@@ -41,7 +41,10 @@ use sdl2::video::Window;
 pub const TABS: [&str; 6] = ["QUICK MATCH", "HOST / JOIN", "SERVER BROWSER", "CHAT", "WATCH", "PLAYERS"];
 const SIDE_PAD: f32 = 56.0;
 const CONTENT_TOP: f32 = 142.0;
-const PANEL_TOP: f32 = CONTENT_TOP + 122.0;
+// Tabs sit at CONTENT_TOP+100 and are 44px tall (see `draw_tab`), so their
+// bottom edge is at CONTENT_TOP+144 — PANEL_TOP used to be CONTENT_TOP+122,
+// which put the panel's top 22px *inside* the tab row instead of below it.
+const PANEL_TOP: f32 = CONTENT_TOP + 168.0;
 const PANEL_H: f32 = 512.0;
 const PANEL_W: f32 = 1808.0;
 
@@ -72,7 +75,12 @@ pub fn draw(
     let (tx, ty) = scale.point(SIDE_PAD, CONTENT_TOP + 26.0);
     fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(58.0), "LOBBY", tx, ty, theme::TEXT)?;
 
-    let tabs_y = CONTENT_TOP + 96.0;
+    // A little more breathing room above the tab row than before (96 -> 100),
+    // and the hairline now sits flush with the tabs' own bottom edge (44px
+    // tall) instead of 6px above it, so it reads as the tab row's underline
+    // rather than cutting through the tabs themselves.
+    let tabs_y = CONTENT_TOP + 100.0;
+    let tab_h = 44.0;
     let mut x = SIDE_PAD;
     for (i, label) in TABS.iter().enumerate() {
         let w = 20.0 * 2.0 + label.len() as f32 * 11.0;
@@ -80,7 +88,7 @@ pub fn draw(
         x += w + 5.0;
     }
     canvas.set_draw_color(Color::RGBA(255, 255, 255, 26));
-    canvas.fill_rect(Some(scale.rect(SIDE_PAD, tabs_y + 38.0, PANEL_W, 1.0)))?;
+    canvas.fill_rect(Some(scale.rect(SIDE_PAD, tabs_y + tab_h, PANEL_W, 1.0)))?;
 
     canvas.set_draw_color(Color::RGBA(8, 8, 11, 140));
     canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
