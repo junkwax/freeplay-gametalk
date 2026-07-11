@@ -735,6 +735,11 @@ pub fn test_state(name: &str) -> Option<AppState> {
             }))
         }
         "fp:bandwidth" => return Some(AppState::FpUi(crate::fp_ui::FpScreen::Bandwidth)),
+        "fp:matchmaking" => {
+            return Some(AppState::FpUi(crate::fp_ui::FpScreen::Matchmaking {
+                status: "Entering queue as SUDDEN_RECLINE".into(),
+            }))
+        }
         "fp:rankings" => return Some(AppState::FpUi(crate::fp_ui::FpScreen::Rankings)),
         "fp:about" => return Some(AppState::FpUi(crate::fp_ui::FpScreen::About)),
         "fp:profile" => return Some(AppState::FpUi(crate::fp_ui::FpScreen::Profile)),
@@ -776,6 +781,21 @@ pub fn test_state(name: &str) -> Option<AppState> {
             }));
         }
         "fp:lobby" => return Some(AppState::FpUi(crate::fp_ui::FpScreen::lobby())),
+        "fp:lobby:searching" => {
+            return Some(AppState::FpUi(crate::fp_ui::FpScreen::Lobby {
+                tab: 0,
+                host_join_focus: 0,
+                cursor: 0,
+                lobbies: Vec::new(),
+                status: String::new(),
+                chat: Vec::new(),
+                presence: Vec::new(),
+                live_matches: Vec::new(),
+                challenge_pick: None,
+                incoming: None,
+                quick_match_status: Some("Entering queue as SUDDEN_RECLINE".into()),
+            }))
+        }
         "fp:lobby:host" => {
             return Some(AppState::FpUi(crate::fp_ui::FpScreen::Lobby {
                 tab: 1,
@@ -788,6 +808,7 @@ pub fn test_state(name: &str) -> Option<AppState> {
                 live_matches: Vec::new(),
                 challenge_pick: None,
                 incoming: None,
+                quick_match_status: None,
             }))
         }
         "fp:lobby:browser" => {
@@ -821,6 +842,7 @@ pub fn test_state(name: &str) -> Option<AppState> {
                 live_matches: Vec::new(),
                 challenge_pick: None,
                 incoming: None,
+                quick_match_status: None,
             }))
         }
         "fp:lobby:chat" => {
@@ -859,6 +881,7 @@ pub fn test_state(name: &str) -> Option<AppState> {
                 live_matches: Vec::new(),
                 challenge_pick: None,
                 incoming: None,
+                quick_match_status: None,
             }))
         }
         "fp:lobby:watch" => {
@@ -888,6 +911,7 @@ pub fn test_state(name: &str) -> Option<AppState> {
                 ],
                 challenge_pick: None,
                 incoming: None,
+                quick_match_status: None,
             }))
         }
         "fp:lobby:players" => {
@@ -906,6 +930,7 @@ pub fn test_state(name: &str) -> Option<AppState> {
                 live_matches: Vec::new(),
                 challenge_pick: None,
                 incoming: None,
+                quick_match_status: None,
             }))
         }
         "fp:lobby:incoming" => {
@@ -926,6 +951,7 @@ pub fn test_state(name: &str) -> Option<AppState> {
                     from_username: "ScorpionKiller".into(),
                     format: LobbyMatchFormat::RankedFt5,
                 }),
+                quick_match_status: None,
             }))
         }
         "fp:sessionended" => {

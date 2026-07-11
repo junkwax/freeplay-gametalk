@@ -466,6 +466,55 @@ fn set_username_screen(state: &mut AppState, value: String, status: String, chec
     }
 }
 
+/// Same "stay in whichever UI we're already in" pattern as `set_username_screen`,
+/// for the matchmaking search screen. Every place that used to hardcode
+/// `AppState::Menu(MenuScreen::Matchmaking { .. })` — including several fp_ui
+/// `FpResult` handlers (`SendChallenge`, `AcceptChallenge`, `ToggleDiscordConnect`)
+/// that forced a drop to the legacy screen mid-fp_ui-session — now goes through
+/// here instead.
+fn set_matchmaking_screen(state: &mut AppState, status: String) {
+    if matches!(state, AppState::FpUi(_)) {
+        *state = AppState::FpUi(fp_ui::FpScreen::Matchmaking { status });
+    } else {
+        *state = AppState::Menu(MenuScreen::Matchmaking { status });
+    }
+}
+
+fn is_matchmaking_screen(state: &AppState) -> bool {
+    matches!(
+        state,
+        AppState::Menu(MenuScreen::Matchmaking { .. })
+            | AppState::FpUi(fp_ui::FpScreen::Matchmaking { .. })
+            | AppState::FpUi(fp_ui::FpScreen::Lobby { quick_match_status: Some(_), .. })
+    )
+}
+
+/// Quick Match specifically stays on `FpScreen::Lobby` through the search
+/// (per the mockup's own Quick Match tab, which shows its radar/searching
+/// state inline rather than navigating away) instead of using the separate
+/// `FpScreen::Matchmaking` screen `set_matchmaking_screen` sends every other
+/// matchmaking trigger to. If `state` isn't already `FpScreen::Lobby` (the
+/// first-time username-claim path leaves `FpScreen::ClaimUsername` and calls
+/// this once the check completes), land on a fresh Quick Match tab rather
+/// than losing the search entirely.
+fn set_quick_match_searching(state: &mut AppState, status: String) {
+    match state {
+        AppState::FpUi(fp_ui::FpScreen::Lobby { quick_match_status, .. }) => {
+            *quick_match_status = Some(status);
+        }
+        AppState::FpUi(_) => {
+            let mut lobby = fp_ui::FpScreen::lobby();
+            if let fp_ui::FpScreen::Lobby { quick_match_status, .. } = &mut lobby {
+                *quick_match_status = Some(status);
+            }
+            *state = AppState::FpUi(lobby);
+        }
+        _ => {
+            *state = AppState::Menu(MenuScreen::Matchmaking { status });
+        }
+    }
+}
+
 fn start_find_match_queue(
     cfg: &config::Config,
     mm_rx: &mut Option<std::sync::mpsc::Receiver<matchmaking::Update>>,
@@ -482,9 +531,7 @@ fn start_find_match_queue(
             *discord_id = matchmaking::discord_id_from_cached_token();
         }
         matchmaking::start(tx);
-        *state = AppState::Menu(MenuScreen::Matchmaking {
-            status: format!("Entering queue as {discord_name}"),
-        });
+        set_quick_match_searching(state, format!("Entering queue as {discord_name}"));
     } else {
         matchmaking::set_guest_profile(
             username.clone(),
@@ -492,9 +539,7 @@ fn start_find_match_queue(
             cfg.guest_device_id.clone(),
         );
         matchmaking::start_guest(tx);
-        *state = AppState::Menu(MenuScreen::Matchmaking {
-            status: format!("Entering queue as {username}"),
-        });
+        set_quick_match_searching(state, format!("Entering queue as {username}"));
     }
 }
 
@@ -2114,9 +2159,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let (tx, rx) = std::sync::mpsc::channel();
                 mm_rx = Some(rx);
                 matchmaking::start_join_room(tx, room_id);
-                state = AppState::Menu(MenuScreen::Matchmaking {
-                    status: "Joining spar room...".into(),
-                });
+                set_matchmaking_screen(&mut state, "Joining spar room...".into());
             }
         }
         if let Some(session_id) = rpc::take_spectate_request() {
@@ -2853,7 +2896,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     keycode: Some(Keycode::F11),
                     repeat: false,
                     ..
-                } if matches!(state, AppState::Menu(MenuScreen::Matchmaking { .. })) => {
+                } if is_matchmaking_screen(&state) => {
                     net_stats_visible = !net_stats_visible;
                     net_stats.on_overlay_toggle(net_stats_visible);
                     toast = Some((
@@ -2865,14 +2908,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ));
                 }
 
-                _ if matches!(state, AppState::Menu(MenuScreen::Matchmaking { .. })) => {
+                _ if is_matchmaking_screen(&state) => {
                     if is_cancel(&event) {
                         println!("[mm] matchmaking canceled by user");
                         mm_rx = None;
                         username_check_rx = None;
                         username_check_silent = false;
                         username_check_started_at = None;
-                        state = menu::main_menu_state(cfg.new_ui);
+                        // Quick Match stays on the Lobby's tab bar/chrome
+                        // throughout the search (see `set_quick_match_searching`)
+                        // — canceling just clears the searching state and
+                        // lands back on the pre-search prompt, rather than
+                        // leaving the Lobby entirely the way every other
+                        // matchmaking trigger's cancel does.
+                        if let AppState::FpUi(fp_ui::FpScreen::Lobby { quick_match_status, .. }) = &mut state {
+                            *quick_match_status = None;
+                        } else {
+                            state = menu::main_menu_state(cfg.new_ui);
+                        }
                     }
                 }
 
@@ -3056,9 +3109,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         target_id,
                                         fmt.wire().to_string(),
                                     );
-                                    state = AppState::Menu(MenuScreen::Matchmaking {
-                                        status: "Challenging player...".into(),
-                                    });
+                                    set_matchmaking_screen(&mut state, "Challenging player...".into());
                                 }
                             }
                         }
@@ -3335,9 +3386,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         target_id,
                                         format.wire().to_string(),
                                     );
-                                    state = AppState::Menu(MenuScreen::Matchmaking {
-                                        status: "Challenging player...".into(),
-                                    });
+                                    set_matchmaking_screen(&mut state, "Challenging player...".into());
                                 }
                                 fp_ui::FpResult::AcceptChallenge(challenge_id) => {
                                     // Mirrors legacy's NavResult::AcceptChallenge exactly.
@@ -3350,9 +3399,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     let (tx, rx) = std::sync::mpsc::channel();
                                     mm_rx = Some(rx);
                                     matchmaking::start_accept_challenge(tx, challenge_id);
-                                    state = AppState::Menu(MenuScreen::Matchmaking {
-                                        status: "Accepting challenge...".into(),
-                                    });
+                                    set_matchmaking_screen(&mut state, "Accepting challenge...".into());
                                 }
                                 fp_ui::FpResult::DeclineChallenge(challenge_id) => {
                                     matchmaking::decline_challenge(challenge_id);
@@ -3476,14 +3523,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             "Discord disconnected".into(),
                                             Instant::now() + Duration::from_millis(2200),
                                         ));
-                                        state = AppState::Menu(MenuScreen::Main { cursor: 0 });
+                                        state = menu::main_menu_state(cfg.new_ui);
                                     } else {
                                         let (tx, rx) = std::sync::mpsc::channel();
                                         mm_rx = Some(rx);
                                         matchmaking::start_discord_connect(tx);
-                                        state = AppState::Menu(MenuScreen::Matchmaking {
-                                            status: "Opening Discord login...".into(),
-                                        });
+                                        set_matchmaking_screen(&mut state, "Opening Discord login...".into());
                                     }
                                 }
                                 fp_ui::FpResult::OpenGhostSelect => {
@@ -4215,9 +4260,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         let (tx, rx) = std::sync::mpsc::channel();
                                         mm_rx = Some(rx);
                                         matchmaking::start_discord_connect(tx);
-                                        state = AppState::Menu(MenuScreen::Matchmaking {
-                                            status: "Opening Discord login...".into(),
-                                        });
+                                        set_matchmaking_screen(&mut state, "Opening Discord login...".into());
                                     }
                                 }
                                 NavResult::ToggleDiscordRpc => {
@@ -4355,9 +4398,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         target_id,
                                         format.wire().to_string(),
                                     );
-                                    state = AppState::Menu(MenuScreen::Matchmaking {
-                                        status: "Challenging player...".into(),
-                                    });
+                                    set_matchmaking_screen(&mut state, "Challenging player...".into());
                                 }
                                 NavResult::AcceptChallenge(challenge_id) => {
                                     matchmaking::set_guest_profile(
@@ -4369,9 +4410,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     let (tx, rx) = std::sync::mpsc::channel();
                                     mm_rx = Some(rx);
                                     matchmaking::start_accept_challenge(tx, challenge_id);
-                                    state = AppState::Menu(MenuScreen::Matchmaking {
-                                        status: "Accepting challenge...".into(),
-                                    });
+                                    set_matchmaking_screen(&mut state, "Accepting challenge...".into());
                                 }
                                 NavResult::ToggleFullscreen => {
                                     cfg.fullscreen = !cfg.fullscreen;
@@ -7084,15 +7123,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 canvas.present();
             }
-            AppState::Menu(MenuScreen::Matchmaking { .. }) => {
+            AppState::Menu(MenuScreen::Matchmaking { .. })
+            | AppState::FpUi(fp_ui::FpScreen::Matchmaking { .. })
+            | AppState::FpUi(fp_ui::FpScreen::Lobby { quick_match_status: Some(_), .. }) => {
                 if let Some(rx) = &mm_rx {
                     loop {
                         match rx.try_recv() {
                             Ok(matchmaking::Update::Status(s)) => {
-                                if let AppState::Menu(MenuScreen::Matchmaking { ref mut status }) =
-                                    state
-                                {
-                                    *status = s;
+                                match &mut state {
+                                    AppState::Menu(MenuScreen::Matchmaking { status }) => *status = s,
+                                    AppState::FpUi(fp_ui::FpScreen::Matchmaking { status }) => *status = s,
+                                    AppState::FpUi(fp_ui::FpScreen::Lobby { quick_match_status, .. }) => {
+                                        *quick_match_status = Some(s);
+                                    }
+                                    _ => {}
                                 }
                                 if discord_user.is_none() {
                                     discord_user = matchmaking::username_from_cached_token();
@@ -7455,9 +7499,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     )
                     .map_err(|e| format!("menu draw: {e}"))?;
                 }
-                if net_stats_visible
-                    && matches!(state, AppState::Menu(MenuScreen::Matchmaking { .. }))
-                {
+                if net_stats_visible && is_matchmaking_screen(&state) {
                     draw_net_stats_overlay(
                         &mut canvas,
                         &mut font,
@@ -7503,8 +7545,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         state,
                         AppState::Menu(menu::MenuScreen::MatchUsername { .. })
                             | AppState::FpUi(fp_ui::FpScreen::ClaimUsername { .. })
-                    ) || (username_check_silent
-                        && matches!(state, AppState::Menu(menu::MenuScreen::Matchmaking { .. })));
+                    ) || (username_check_silent && is_matchmaking_screen(&state));
                     if waiting_for_username {
                         let timed_out = username_check_started_at
                             .map(|started| started.elapsed() >= Duration::from_secs(12))
@@ -7857,9 +7898,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 // First thumbnail a few seconds in (past the
                                 // round intro), then every ~25s.
                                 lobby_thumb_next_push = Instant::now() + Duration::from_secs(8);
-                                state = AppState::Menu(MenuScreen::Matchmaking {
-                                    status: "Match starting — connecting...".into(),
-                                });
+                                set_matchmaking_screen(&mut state, "Match starting — connecting...".into());
                             } else if let AppState::Menu(menu::MenuScreen::Lobby {
                                 id,
                                 view,
@@ -8528,7 +8567,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     rpc::RpcState::Netplay
                 }
-            } else if matches!(state, AppState::Menu(menu::MenuScreen::Matchmaking { .. })) {
+            } else if is_matchmaking_screen(&state) {
                 rpc::RpcState::Matchmaking
             } else if matches!(state, AppState::Menu(menu::MenuScreen::TestIp { .. })) {
                 rpc::RpcState::Joining

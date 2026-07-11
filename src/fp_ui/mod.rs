@@ -24,6 +24,7 @@ pub mod layout;
 mod lobby;
 mod lobby_room;
 mod main_menu;
+mod matchmaking;
 mod play_menu;
 mod profile;
 mod quit;
@@ -207,6 +208,16 @@ pub enum FpScreen {
         live_matches: Vec<crate::matchmaking::LiveMatch>,
         challenge_pick: Option<usize>,
         incoming: Option<crate::matchmaking::IncomingChallenge>,
+        /// `Some(status)` once Quick Match (tab 0) has actually queued —
+        /// the same human-readable progress string
+        /// `crate::menu::MenuScreen::Matchmaking` carries, updated by the
+        /// same background-thread round trip in `main.rs`. Matches the
+        /// mockup's own Quick Match tab, which shows its radar/searching
+        /// state directly in this tab rather than navigating to a separate
+        /// screen (`lobby.rs`'s `draw_quick_match` branches on this being
+        /// `None` vs `Some`). `None` shows the pre-search "READY TO SEARCH"
+        /// prompt.
+        quick_match_status: Option<String>,
     },
     /// Post-match summary shown after a netplay session ends (disconnect,
     /// timeout, or a completed set) — native redesign of legacy's
@@ -244,6 +255,16 @@ pub enum FpScreen {
         status: String,
         thumb: Option<(Vec<u8>, u32, u32)>,
     },
+    /// Automated matchmaking search — native redesign of legacy's
+    /// `MenuScreen::Matchmaking`. Reached from the Lobby's Quick Match tab
+    /// (`FpResult::StartFindMatch`) once actually queued, closing the
+    /// fidelity gap `lobby.rs`'s module doc used to flag ("actually
+    /// queueing hands off to the legacy `MenuScreen::Matchmaking` screen").
+    /// `status` is the exact same human-readable progress string the legacy
+    /// screen carries, updated by the same background-thread round trip in
+    /// `main.rs` — see `matchmaking.rs` (the fp_ui module, not
+    /// `crate::matchmaking`) for the radar-sweep animation.
+    Matchmaking { status: String },
 }
 
 impl FpScreen {
@@ -275,6 +296,7 @@ impl FpScreen {
             live_matches: Vec::new(),
             challenge_pick: None,
             incoming: None,
+            quick_match_status: None,
         }
     }
 }
@@ -991,6 +1013,11 @@ pub fn nav(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult {
             FpNav::Back => FpResult::LeaveLobby(id.clone()),
             _ => FpResult::Stay,
         },
+        // No Back/cancel handling here — same as legacy's own `MenuScreen::Matchmaking`
+        // (no `MenuNav` arm either): cancellation is a raw `is_cancel(&event)` check in
+        // main.rs's event loop (`is_matchmaking_screen` guard), which intercepts the
+        // event before it ever reaches this dispatch.
+        FpScreen::Matchmaking { .. } => FpResult::Stay,
     }
 }
 
@@ -1075,6 +1102,7 @@ pub fn draw(
             live_matches,
             challenge_pick,
             incoming,
+            quick_match_status,
         } => lobby::draw(
             canvas,
             fonts,
@@ -1089,6 +1117,7 @@ pub fn draw(
             live_matches,
             *challenge_pick,
             incoming.as_ref(),
+            quick_match_status.as_deref(),
             username,
         )?,
         FpScreen::SessionEnded { lines, replay_path, choice } => session_ended::draw(
@@ -1106,6 +1135,7 @@ pub fn draw(
         FpScreen::LobbyRoom { view, status, thumb, .. } => {
             lobby_room::draw(canvas, fonts, &scale, view.as_ref(), status, thumb.as_ref(), username)?
         }
+        FpScreen::Matchmaking { status } => matchmaking::draw(canvas, fonts, &scale, status, username)?,
     }
 
     Ok(())

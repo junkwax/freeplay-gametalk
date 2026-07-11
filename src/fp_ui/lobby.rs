@@ -10,22 +10,28 @@
 //! ping-sorted shape, which has no real analog — see `mod.rs`'s `FpResult`
 //! doc comments for exactly which legacy actions each tab delegates to.
 //!
-//! Quick Match fidelity gap (flagged, not silently approximated): the
-//! mockup auto-starts searching on tab view and shows live elapsed/queue/
-//! wait-estimate stats. Actually queueing hands off to the legacy
-//! `MenuScreen::Matchmaking` screen instead of staying in this one — see
-//! `mod.rs`'s `FpResult::StartFindMatch` doc comment for why re-implementing
-//! the match-found/session-start pipeline here was assessed as out of scope
-//! for this step. This screen only shows the pre-search state.
+//! Quick Match now stays on this tab through the whole search rather than
+//! handing off to a separate screen once queued — `quick_match_status`
+//! (`FpScreen::Lobby`'s field, `None` until `FpResult::StartFindMatch` is
+//! confirmed) switches `draw_quick_match` from the pre-search "READY TO
+//! SEARCH" prompt to the searching state, matching the mockup's own
+//! `isQuick` branch (which shows the radar/searching UI immediately, no
+//! separate pre-search state at all — `fp-radar`/`fp-sweep` keyframes in
+//! `FREEPLAY Arcade.dc.html`). The mockup's ELAPSED/IN QUEUE/EST. WAIT tiles
+//! and REGION selector aren't reproduced — none of that is real data this
+//! app's matchmaking backend exposes (just the one human-readable `status`
+//! string), and fabricating queue-size/wait-estimate numbers isn't worth
+//! the fake precision.
 //!
 //! Players tab (6th tab, added later): direct-challenge flow matching a
 //! newer mockup revision's `isPlayers`/`hasIncomingChallenge` branches —
 //! native redesign of legacy's `MenuScreen::OnlineHub`'s own Players tab and
 //! its incoming-challenge modal. Reuses the exact same `presence` roster the
 //! Chat tab's sidebar already renders (no second fetch pipeline); sending a
-//! challenge or accepting an incoming one hands off to the same shared
-//! legacy `MenuScreen::Matchmaking` "connecting" screen Quick Match uses,
-//! same reasoning as the fidelity gap noted above.
+//! challenge or accepting an incoming one still hands off to the separate
+//! `FpScreen::Matchmaking` screen (`matchmaking.rs`) — there's no "tab to
+//! stay on" for a challenge sent from the Players tab the way there is for
+//! Quick Match, so that hand-off remains appropriate there.
 
 use super::chrome::{self, FooterRight};
 use super::geometry;
@@ -63,6 +69,7 @@ pub fn draw(
     live_matches: &[crate::matchmaking::LiveMatch],
     challenge_pick: Option<usize>,
     incoming: Option<&IncomingChallenge>,
+    quick_match_status: Option<&str>,
     username: &str,
 ) -> Result<(), String> {
     chrome::draw_header(canvas, fonts, scale, username, true, None)?;
@@ -97,7 +104,7 @@ pub fn draw(
     canvas.draw_rect(scale.rect(SIDE_PAD, PANEL_TOP, PANEL_W, PANEL_H))?;
 
     match tab {
-        0 => draw_quick_match(canvas, fonts, scale)?,
+        0 => draw_quick_match(canvas, fonts, scale, quick_match_status)?,
         1 => draw_host_join(canvas, fonts, scale, host_join_focus)?,
         2 => draw_server_browser(canvas, fonts, scale, lobbies, cursor, status)?,
         3 => draw_chat(canvas, fonts, scale, chat, presence, cursor)?,
@@ -182,41 +189,72 @@ fn draw_tab(
     Ok(())
 }
 
-fn draw_quick_match(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scale: &Scale) -> Result<(), String> {
+fn draw_quick_match(
+    canvas: &mut Canvas<Window>,
+    fonts: &mut FpFontCache,
+    scale: &Scale,
+    quick_match_status: Option<&str>,
+) -> Result<(), String> {
     let cx = SIDE_PAD + 60.0 + 170.0;
     let cy = PANEL_TOP + PANEL_H / 2.0;
-    for r in [150.0, 95.0] {
-        geometry::stroke_circle(canvas, scale, cx, cy, r, 1.0, Color::RGBA(255, 255, 255, 15));
-    }
-    geometry::stroke_circle(canvas, scale, cx, cy, 150.0, 1.5, Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 90));
+    super::matchmaking::draw_radar(canvas, scale, cx, cy, 150.0)?;
     geometry::fill_circle(canvas, scale, cx, cy, 37.0, Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 230));
     let (vw, vh) = fonts.text_size(FpFont::SairaCondensedBold, scale.font_px(26.0), "VS");
     let (vx, vy) = scale.point(cx - (vw as f32 / scale.s) / 2.0, cy - (vh as f32 / scale.s) / 2.0);
     fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(26.0), "VS", vx, vy, Color::RGB(255, 255, 255))?;
 
     let text_x = SIDE_PAD + 60.0 + 340.0 + 64.0;
-    let (tx, ty) = scale.point(text_x, cy - 90.0);
-    fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(38.0), "READY TO SEARCH", tx, ty, theme::TEXT)?;
-    let (sx, sy) = scale.point(text_x, cy - 46.0);
-    fonts.draw(
-        canvas,
-        FpFont::SairaSemiBold,
-        scale.font_px(16.0),
-        "Matching by connection quality \u{b7} Best of 1 \u{b7} No time limit",
-        sx,
-        sy,
-        Color::RGB(0x8a, 0x8a, 0x92),
-    )?;
-    let (px, py) = scale.point(text_x, cy);
-    fonts.draw(
-        canvas,
-        FpFont::SairaSemiBold,
-        scale.font_px(15.0),
-        "Press Cross to search for an opponent",
-        px,
-        py,
-        theme::ACCENT,
-    )?;
+    match quick_match_status {
+        None => {
+            let (tx, ty) = scale.point(text_x, cy - 90.0);
+            fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(38.0), "READY TO SEARCH", tx, ty, theme::TEXT)?;
+            let (sx, sy) = scale.point(text_x, cy - 46.0);
+            fonts.draw(
+                canvas,
+                FpFont::SairaSemiBold,
+                scale.font_px(16.0),
+                "Matching by connection quality \u{b7} Best of 1 \u{b7} No time limit",
+                sx,
+                sy,
+                Color::RGB(0x8a, 0x8a, 0x92),
+            )?;
+            let (px, py) = scale.point(text_x, cy);
+            fonts.draw(
+                canvas,
+                FpFont::SairaSemiBold,
+                scale.font_px(15.0),
+                "Press Cross to search for an opponent",
+                px,
+                py,
+                theme::ACCENT,
+            )?;
+        }
+        Some(status) => {
+            let line = format!("{status}{}", super::matchmaking::dots());
+            let (tx, ty) = scale.point(text_x, cy - 90.0);
+            fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(34.0), &line, tx, ty, theme::TEXT)?;
+            let (sx, sy) = scale.point(text_x, cy - 46.0);
+            fonts.draw(
+                canvas,
+                FpFont::SairaSemiBold,
+                scale.font_px(16.0),
+                "Matching by connection quality \u{b7} Best of 1 \u{b7} No time limit",
+                sx,
+                sy,
+                Color::RGB(0x8a, 0x8a, 0x92),
+            )?;
+            let (px, py) = scale.point(text_x, cy);
+            fonts.draw(
+                canvas,
+                FpFont::SairaSemiBold,
+                scale.font_px(15.0),
+                "Press Circle to cancel",
+                px,
+                py,
+                theme::ACCENT,
+            )?;
+        }
+    }
     Ok(())
 }
 

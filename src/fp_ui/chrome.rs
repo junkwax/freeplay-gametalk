@@ -408,17 +408,26 @@ pub fn draw_footer(
             // from an earlier pass here, which only ever drew the badge.
             let mut cursor_x = badge_x - 32.0;
             let credit = "CREDIT \u{221e}";
-            let (cw, _) = fonts.text_size(FpFont::ChakraPetchSemiBold, scale.font_px(13.0), credit);
+            let credit_px = scale.font_px(13.0);
+            let (cw, _) = fonts.text_size(FpFont::ChakraPetchSemiBold, credit_px, credit);
             cursor_x -= cw as f32 / scale.s;
-            let (crx, cry) = scale.point(cursor_x, row_cy - 7.0);
-            fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(13.0), credit, crx, cry, theme::DIM)?;
+            // `visible_span`-based centering, matching SELECT below — a flat
+            // `row_cy - 7.0` offset (the old approach) doesn't land on the
+            // same center line as SELECT's true glyph-height centering.
+            let (c_inset, c_vis_h) = fonts.visible_span(FpFont::ChakraPetchSemiBold, credit_px, credit);
+            let c_vis_h_l = c_vis_h as f32 / scale.s;
+            let (crx, cry) = scale.point(cursor_x, row_cy - c_vis_h_l / 2.0 - c_inset as f32 / scale.s);
+            fonts.draw(canvas, FpFont::ChakraPetchSemiBold, credit_px, credit, crx, cry, theme::DIM)?;
 
             cursor_x -= 28.0;
             let about = "ABOUT";
-            let (aw, _) = fonts.text_size(FpFont::SairaCondensedSemiBold, scale.font_px(13.0), about);
+            let about_px = scale.font_px(13.0);
+            let (aw, _) = fonts.text_size(FpFont::SairaCondensedSemiBold, about_px, about);
             cursor_x -= aw as f32 / scale.s;
-            let (ax, ay) = scale.point(cursor_x, row_cy - 7.0);
-            fonts.draw(canvas, FpFont::SairaCondensedSemiBold, scale.font_px(13.0), about, ax, ay, theme::DIM)?;
+            let (a_inset, a_vis_h) = fonts.visible_span(FpFont::SairaCondensedSemiBold, about_px, about);
+            let a_vis_h_l = a_vis_h as f32 / scale.s;
+            let (ax, ay) = scale.point(cursor_x, row_cy - a_vis_h_l / 2.0 - a_inset as f32 / scale.s);
+            fonts.draw(canvas, FpFont::SairaCondensedSemiBold, about_px, about, ax, ay, theme::DIM)?;
 
             cursor_x -= 10.0;
             let select = "SELECT";
