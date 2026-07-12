@@ -223,6 +223,11 @@ pub enum EditField {
     ReplayNote { path: String },
     /// Entering a lobby invite code to join a private lobby.
     JoinCode,
+    /// Composing a free-text lobby chat message from fp_ui's Chat tab —
+    /// commit sends it (`matchmaking::send_lobby_chat`) and returns to
+    /// `came_from`, replacing the old whole-screen handoff to legacy's
+    /// OnlineHub just to reach an on-screen keyboard.
+    ChatMessage,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -739,6 +744,62 @@ pub fn test_state(name: &str) -> Option<AppState> {
             return Some(AppState::FpUi(crate::fp_ui::FpScreen::Matchmaking {
                 status: "Entering queue as SUDDEN_RECLINE".into(),
             }))
+        }
+        "fp:failure" => {
+            return Some(AppState::FpUi(crate::fp_ui::FpScreen::ConnectionFailed {
+                lines: vec![
+                    "FAIL Match connect failed: relay handshake timed out after 12s".into(),
+                    "WARN Peer NAT type: symmetric (TURN relay required)".into(),
+                    "OK Local network and ROM checksum verified".into(),
+                    "Log: freeplay-net.log".into(),
+                    "OK Incident report submitted automatically".into(),
+                ],
+            }))
+        }
+        "fp:discord" => {
+            return Some(AppState::FpUi(crate::fp_ui::FpScreen::DiscordConnect {
+                status: "Waiting for authorization".into(),
+            }))
+        }
+        "fp:osk" => {
+            return Some(AppState::Menu(MenuScreen::TextEdit {
+                title: "USERNAME".into(),
+                label: "2-16 characters - letters, digits, _ or -".into(),
+                value: "SUDDEN_REC".into(),
+                field: EditField::Username,
+                came_from: Box::new(AppState::FpUi(crate::fp_ui::FpScreen::settings_account(
+                    &crate::config::load(),
+                ))),
+            }))
+        }
+        "fp:osk:joincode" => {
+            return Some(AppState::Menu(MenuScreen::TextEdit {
+                title: "JOIN LOBBY".into(),
+                label: "Enter the 6-character invite code".into(),
+                value: "X9K".into(),
+                field: EditField::JoinCode,
+                came_from: Box::new(AppState::FpUi(crate::fp_ui::FpScreen::lobby())),
+            }))
+        }
+        "fp:rebind" => {
+            return Some(AppState::Rebinding {
+                action: Action::HighPunch,
+                player: Player::P1,
+                came_from: Box::new(AppState::FpUi(crate::fp_ui::FpScreen::settings_from_cfg(
+                    &crate::config::load(),
+                ))),
+            })
+        }
+        "fp:spectate" => {
+            let mut status = SpectateStatus::waiting();
+            status.p1_name = "SUDDEN_RECLINE".into();
+            status.p2_name = "IRON_MONGER".into();
+            status.p1_score = 1;
+            status.p2_score = 1;
+            return Some(AppState::Menu(MenuScreen::Spectate {
+                session_id: "test".into(),
+                status,
+            }));
         }
         "fp:rankings" => return Some(AppState::FpUi(crate::fp_ui::FpScreen::Rankings)),
         "fp:about" => return Some(AppState::FpUi(crate::fp_ui::FpScreen::About)),
@@ -2038,6 +2099,12 @@ impl AppState {
                     }
                     EditField::StatsEmail | EditField::ReplayNote { .. } => {
                         if !c.is_control() && value.len() < 96 {
+                            value.push(c);
+                        }
+                    }
+                    // Same 180-char cap as legacy OnlineHub's `chat_draft`.
+                    EditField::ChatMessage => {
+                        if !c.is_control() && value.chars().count() < 180 {
                             value.push(c);
                         }
                     }

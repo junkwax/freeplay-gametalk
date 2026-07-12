@@ -486,7 +486,50 @@ fn is_matchmaking_screen(state: &AppState) -> bool {
         AppState::Menu(MenuScreen::Matchmaking { .. })
             | AppState::FpUi(fp_ui::FpScreen::Matchmaking { .. })
             | AppState::FpUi(fp_ui::FpScreen::Lobby { quick_match_status: Some(_), .. })
+            | AppState::FpUi(fp_ui::FpScreen::DiscordConnect { .. })
     )
+}
+
+/// The netplay-failure report screen: the native Connection Failed card
+/// when the new UI is on, legacy `TestResult` otherwise. Both failure
+/// sites auto-submit an incident report just before calling this, so the
+/// appended line is a real fact, not reassurance theater — surfaced on
+/// the native card (legacy's fixed layout has no room for it).
+fn connection_failed_state(new_ui: bool, mut lines: Vec<String>) -> AppState {
+    if new_ui {
+        lines.push("OK Incident report submitted automatically".into());
+        AppState::FpUi(fp_ui::FpScreen::ConnectionFailed { lines })
+    } else {
+        AppState::Menu(MenuScreen::TestResult { lines })
+    }
+}
+
+/// A legacy `TextEdit` capture that was opened *from* an fp_ui screen —
+/// rendered with the native on-screen keyboard (`fp_ui::text_entry`) over
+/// the dimmed parent screen instead of legacy's full-screen editor, and
+/// eligible for controller-driven key-grid input. The state machine itself
+/// (value filtering, commit, `came_from` round trip) is identical either
+/// way.
+fn is_fp_text_edit(state: &AppState) -> bool {
+    matches!(
+        state,
+        AppState::Menu(MenuScreen::TextEdit { came_from, .. })
+            if matches!(**came_from, AppState::FpUi(_))
+    )
+}
+
+/// States that live outside `FpScreen` but get native fp_ui *rendering*:
+/// TextEdit/Rebinding captures whose `came_from` is an fp screen (modal over
+/// the dimmed parent), and Spectate while still waiting for a first status
+/// frame (native "connecting to live match" — the viewer that takes over
+/// once frames flow stays legacy).
+fn fp_native_overlay(state: &AppState, new_ui: bool) -> bool {
+    match state {
+        AppState::Menu(MenuScreen::TextEdit { came_from, .. })
+        | AppState::Rebinding { came_from, .. } => matches!(**came_from, AppState::FpUi(_)),
+        AppState::Menu(MenuScreen::Spectate { status, .. }) => new_ui && status.frame.is_none(),
+        _ => false,
+    }
 }
 
 /// Quick Match specifically stays on `FpScreen::Lobby` through the search
@@ -1912,6 +1955,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut net_runtime = NetRuntime::default();
     let mut net_stats_visible = false;
     let mut net_stats = NetStatsUi::default();
+    // Grid cursor for the native on-screen keyboard (`fp_ui::text_entry`) —
+    // a loop-local rather than a `MenuScreen::TextEdit` field since only one
+    // edit can be active at a time; persists across edits, which is
+    // harmless (the cursor just stays where the player left it).
+    let mut fp_osk: (usize, usize) = (0, 0);
     let mut audio_tail_sample: Option<(i16, i16)> = None;
     let mut render_debug_visible = false;
     let mut net_spectate_next: u32 = 165; // ~3s
@@ -2920,9 +2968,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         // — canceling just clears the searching state and
                         // lands back on the pre-search prompt, rather than
                         // leaving the Lobby entirely the way every other
-                        // matchmaking trigger's cancel does.
+                        // matchmaking trigger's cancel does. A Discord
+                        // connect similarly returns to the Settings→Account
+                        // row it started from, not the main menu.
                         if let AppState::FpUi(fp_ui::FpScreen::Lobby { quick_match_status, .. }) = &mut state {
                             *quick_match_status = None;
+                        } else if matches!(state, AppState::FpUi(fp_ui::FpScreen::DiscordConnect { .. })) {
+                            state = AppState::FpUi(fp_ui::FpScreen::settings_account(&cfg));
                         } else {
                             state = menu::main_menu_state(cfg.new_ui);
                         }
@@ -3114,6 +3166,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                         _ => {}
+                    }
+                }
+
+                // Controller input driving the native on-screen keyboard —
+                // only for TextEdit captures opened from fp_ui, and only for
+                // the events the grid claims (`wants_event`): D-pad moves the
+                // key cursor, Cross presses the highlighted cell. A Cross on
+                // the CONFIRM cell is deliberately *not* claimed, so it falls
+                // into the normal Accept translation below and commits
+                // through the same `NavResult::CommitText` path Enter does.
+                // Keyboard events are never claimed — typing/Enter/Esc keep
+                // working exactly as before.
+                _ if is_fp_text_edit(&state) && fp_ui::text_entry::wants_event(&event, fp_osk) => {
+                    match fp_ui::text_entry::apply(&event, &mut fp_osk) {
+                        fp_ui::text_entry::OskAction::Moved => {}
+                        fp_ui::text_entry::OskAction::Char(c) => state.text_input(&c.to_string()),
+                        fp_ui::text_entry::OskAction::Space => state.text_input(" "),
+                        fp_ui::text_entry::OskAction::Backspace => state.text_backspace(),
+                        fp_ui::text_entry::OskAction::Cancel => state.nav_back(cfg.new_ui),
                     }
                 }
 
@@ -3512,7 +3583,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     });
                                 }
                                 fp_ui::FpResult::ToggleDiscordConnect => {
-                                    // Mirrors legacy's NavResult::ConnectDiscord exactly.
+                                    // Mirrors legacy's NavResult::ConnectDiscord, but
+                                    // both directions land back on the native
+                                    // Settings→Account category they started from
+                                    // (disconnect immediately; connect via the
+                                    // DiscordConnect waiting screen and the
+                                    // AuthConnected/cancel handlers).
                                     if matchmaking::connected_discord_user_from_cached_token()
                                         .is_some()
                                     {
@@ -3523,12 +3599,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             "Discord disconnected".into(),
                                             Instant::now() + Duration::from_millis(2200),
                                         ));
-                                        state = menu::main_menu_state(cfg.new_ui);
+                                        state = AppState::FpUi(fp_ui::FpScreen::settings_account(&cfg));
                                     } else {
                                         let (tx, rx) = std::sync::mpsc::channel();
                                         mm_rx = Some(rx);
                                         matchmaking::start_discord_connect(tx);
-                                        set_matchmaking_screen(&mut state, "Opening Discord login...".into());
+                                        state = AppState::FpUi(fp_ui::FpScreen::DiscordConnect {
+                                            status: "Opening Discord login...".into(),
+                                        });
                                     }
                                 }
                                 fp_ui::FpResult::OpenGhostSelect => {
@@ -3688,29 +3766,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     lobby_chat_post_rx = Some(rx);
                                     matchmaking::send_lobby_chat(message, tx);
                                 }
-                                fp_ui::FpResult::OpenLegacyChat { chat, presence } => {
-                                    // fp_ui has no on-screen keyboard — hand off to the
-                                    // real legacy OnlineHub Chat tab (which has one),
-                                    // seeded with the chat/presence already fetched here
-                                    // instead of starting from empty. Known rough edge:
-                                    // lands back on legacy once the player backs out,
-                                    // same shape as BeginAccountEdit/OpenJoinCode.
-                                    state = AppState::Menu(MenuScreen::OnlineHub {
-                                        tab: menu::OnlineTab::Chat,
-                                        focus: menu::HubFocus::Content,
-                                        cursor: 0,
-                                        challenge_format: menu::ChallengeFormat::UnrankedVs,
-                                        chat_draft: String::new(),
-                                        chat,
-                                        presence,
-                                        chat_scroll: 0,
-                                        osk_row: 0,
-                                        osk_col: 0,
-                                        challenge_pick: None,
-                                        incoming: None,
-                                        lobbies: Vec::new(),
-                                        live_matches: Vec::new(),
-                                        status: "Choose a section".into(),
+                                fp_ui::FpResult::ComposeChat => {
+                                    // Native text-entry capture (shared on-screen
+                                    // keyboard) — commit sends the message and lands
+                                    // back on this Chat tab via `came_from`, replacing
+                                    // the old whole-screen handoff to legacy's
+                                    // OnlineHub just to reach a keyboard.
+                                    let came_from = state.clone();
+                                    state = AppState::Menu(MenuScreen::TextEdit {
+                                        title: "LOBBY CHAT".into(),
+                                        label: "Send a message to everyone online".into(),
+                                        value: String::new(),
+                                        field: menu::EditField::ChatMessage,
+                                        came_from: Box::new(came_from),
                                     });
                                 }
                                 fp_ui::FpResult::WatchSession(session_id) => {
@@ -4091,7 +4159,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         menu::EditField::Username => cfg.player_username.clone(),
                                         menu::EditField::StatsEmail => cfg.stats_email.clone(),
                                         menu::EditField::ReplayNote { .. }
-                                        | menu::EditField::JoinCode => String::new(),
+                                        | menu::EditField::JoinCode
+                                        | menu::EditField::ChatMessage => String::new(),
                                     };
                                     let label = match &field {
                                         menu::EditField::Username => {
@@ -4102,6 +4171,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         }
                                         menu::EditField::ReplayNote { .. } => "Replay note",
                                         menu::EditField::JoinCode => "Enter invite code",
+                                        menu::EditField::ChatMessage => {
+                                            "Send a message to everyone online"
+                                        }
                                     };
                                     // `state` is already `AppState::Menu(MenuScreen::Settings
                                     // { .. })` here (this only fires from that screen's own
@@ -4160,6 +4232,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         state = *came_from;
                                         refresh_replay_select(&mut state, Some(status));
                                     }
+                                    menu::EditField::ChatMessage => {
+                                        // Same send path as FpResult::SendLobbyChat /
+                                        // legacy's NavResult::SendLobbyChat; an empty
+                                        // commit just returns without sending.
+                                        let message = value.trim().to_string();
+                                        if !message.is_empty() {
+                                            matchmaking::set_guest_profile(
+                                                cfg.player_username.clone(),
+                                                cfg.stats_email.clone(),
+                                                cfg.guest_device_id.clone(),
+                                            );
+                                            let (tx, rx) = std::sync::mpsc::channel();
+                                            lobby_chat_post_rx = Some(rx);
+                                            matchmaking::send_lobby_chat(message, tx);
+                                        }
+                                        state = *came_from;
+                                    }
                                     field => {
                                         match field {
                                             menu::EditField::Username => {
@@ -4200,7 +4289,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 }
                                             }
                                             menu::EditField::ReplayNote { .. }
-                                            | menu::EditField::JoinCode => {}
+                                            | menu::EditField::JoinCode
+                                            | menu::EditField::ChatMessage => {}
                                         }
                                         config::save(&cfg);
                                         matchmaking::clear_cached_token();
@@ -7125,7 +7215,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             AppState::Menu(MenuScreen::Matchmaking { .. })
             | AppState::FpUi(fp_ui::FpScreen::Matchmaking { .. })
-            | AppState::FpUi(fp_ui::FpScreen::Lobby { quick_match_status: Some(_), .. }) => {
+            | AppState::FpUi(fp_ui::FpScreen::Lobby { quick_match_status: Some(_), .. })
+            | AppState::FpUi(fp_ui::FpScreen::DiscordConnect { .. }) => {
                 if let Some(rx) = &mm_rx {
                     loop {
                         match rx.try_recv() {
@@ -7133,6 +7224,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 match &mut state {
                                     AppState::Menu(MenuScreen::Matchmaking { status }) => *status = s,
                                     AppState::FpUi(fp_ui::FpScreen::Matchmaking { status }) => *status = s,
+                                    AppState::FpUi(fp_ui::FpScreen::DiscordConnect { status }) => *status = s,
                                     AppState::FpUi(fp_ui::FpScreen::Lobby { quick_match_status, .. }) => {
                                         *quick_match_status = Some(s);
                                     }
@@ -7156,24 +7248,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     format!("Discord connected as {username}"),
                                     Instant::now() + Duration::from_millis(2600),
                                 ));
-                                state = AppState::Menu(MenuScreen::Settings {
-                                    cursor: 2,
-                                    player_username: cfg.player_username.clone(),
-                                    stats_email: cfg.stats_email.clone(),
-                                    discord_connected: true,
-                                    discord_rpc_enabled: cfg.discord_rpc_enabled,
-                                    fullscreen: cfg.fullscreen,
-                                    volume_percent: cfg.volume_percent,
-                                    audio_buffer: cfg.audio_buffer,
-                                    video_filter: cfg.video_filter,
-                                    crt_corner_bend: cfg.crt_corner_bend,
-                                    aspect_mode: cfg.aspect_mode,
-                                    scorebar_style: cfg.scorebar_style,
-                                    input_delay: cfg.input_delay,
-                                    render_profile: cfg.render_profile,
-                                    runahead: cfg.runahead,
-                                    runahead_online: cfg.runahead_online,
-                                });
+                                // Land back on the Settings→Account row the connect
+                                // started from — the *native* one when the new UI is
+                                // on (this used to always drop to legacy Settings,
+                                // the one real leak in the fp_ui Account flow).
+                                state = if cfg.new_ui {
+                                    AppState::FpUi(fp_ui::FpScreen::settings_account(&cfg))
+                                } else {
+                                    AppState::Menu(MenuScreen::Settings {
+                                        cursor: 2,
+                                        player_username: cfg.player_username.clone(),
+                                        stats_email: cfg.stats_email.clone(),
+                                        discord_connected: true,
+                                        discord_rpc_enabled: cfg.discord_rpc_enabled,
+                                        fullscreen: cfg.fullscreen,
+                                        volume_percent: cfg.volume_percent,
+                                        audio_buffer: cfg.audio_buffer,
+                                        video_filter: cfg.video_filter,
+                                        crt_corner_bend: cfg.crt_corner_bend,
+                                        aspect_mode: cfg.aspect_mode,
+                                        scorebar_style: cfg.scorebar_style,
+                                        input_delay: cfg.input_delay,
+                                        render_profile: cfg.render_profile,
+                                        runahead: cfg.runahead,
+                                        runahead_online: cfg.runahead_online,
+                                    })
+                                };
                                 break;
                             }
                             Ok(matchmaking::Update::Connected {
@@ -7388,7 +7488,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         inc.rom_hash = Some(format!("{:016x}", hash));
                                         incident::submit(inc);
 
-                                        state = AppState::Menu(MenuScreen::TestResult { lines });
+                                        state = connection_failed_state(cfg.new_ui, lines);
                                     }
                                 }
                                 break;
@@ -7432,14 +7532,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 mm_rx = None;
                                 net_transport_path = None;
                                 relay_chat = None;
-                                state = AppState::Menu(MenuScreen::TestResult {
-                                    lines: vec![
+                                state = connection_failed_state(
+                                    cfg.new_ui,
+                                    vec![
                                         String::new(),
                                         format!("FAIL {e}"),
                                         String::new(),
                                         "ESC to go back".into(),
                                     ],
-                                });
+                                );
                                 break;
                             }
                             Err(std::sync::mpsc::TryRecvError::Empty) => break,
@@ -8529,6 +8630,100 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // reading as "nothing happened" to the user. Draw it
                     // as an overlay on top with the same legacy bitmap font
                     // legacy screens use for it.
+                    if let Some(toast) = toast_payload(&toast) {
+                        menu::draw_toast(&mut canvas, &mut font, &toast, win_w as i32, win_h as i32)
+                            .map_err(|e| format!("fp_ui toast overlay: {e}"))?;
+                    }
+                } else if let Some(fpf) = fp_fonts.as_mut().filter(|_| fp_native_overlay(&state, cfg.new_ui)) {
+                    // Non-FpScreen states rendered natively: TextEdit and
+                    // Rebinding captures opened from fp_ui draw their parent
+                    // screen dimmed under a modal; the Spectate connecting
+                    // state is its own full native frame. State machines are
+                    // unchanged — only the rendering swaps.
+                    let fp_username = discord_user.as_deref().unwrap_or(&cfg.player_username);
+                    match &state {
+                        AppState::Menu(menu::MenuScreen::TextEdit {
+                            title,
+                            label,
+                            value,
+                            field,
+                            came_from,
+                        }) => {
+                            if let AppState::FpUi(under) = &**came_from {
+                                fp_ui::draw(
+                                    under,
+                                    &mut canvas,
+                                    fpf,
+                                    win_w as i32,
+                                    win_h as i32,
+                                    fp_username,
+                                    &main_leaderboard,
+                                    &main_profile,
+                                    &cfg.bindings,
+                                    &cfg.stats_email,
+                                    discord_user.is_some(),
+                                    rom_present.check(),
+                                )
+                                .map_err(|e| format!("fp_ui under draw: {e}"))?;
+                            }
+                            fp_ui::draw_text_entry_modal(
+                                &mut canvas,
+                                fpf,
+                                win_w as i32,
+                                win_h as i32,
+                                title,
+                                label,
+                                value,
+                                field,
+                                fp_osk,
+                            )
+                            .map_err(|e| format!("fp_ui text entry: {e}"))?;
+                        }
+                        AppState::Rebinding {
+                            action,
+                            player,
+                            came_from,
+                        } => {
+                            if let AppState::FpUi(under) = &**came_from {
+                                fp_ui::draw(
+                                    under,
+                                    &mut canvas,
+                                    fpf,
+                                    win_w as i32,
+                                    win_h as i32,
+                                    fp_username,
+                                    &main_leaderboard,
+                                    &main_profile,
+                                    &cfg.bindings,
+                                    &cfg.stats_email,
+                                    discord_user.is_some(),
+                                    rom_present.check(),
+                                )
+                                .map_err(|e| format!("fp_ui under draw: {e}"))?;
+                            }
+                            fp_ui::draw_rebind_capture_modal(
+                                &mut canvas,
+                                fpf,
+                                win_w as i32,
+                                win_h as i32,
+                                *action,
+                                *player,
+                            )
+                            .map_err(|e| format!("fp_ui rebind capture: {e}"))?;
+                        }
+                        AppState::Menu(menu::MenuScreen::Spectate { status, .. }) => {
+                            fp_ui::draw_spectate_connecting(
+                                &mut canvas,
+                                fpf,
+                                win_w as i32,
+                                win_h as i32,
+                                status,
+                                fp_username,
+                            )
+                            .map_err(|e| format!("fp_ui spectate connecting: {e}"))?;
+                        }
+                        _ => {}
+                    }
                     if let Some(toast) = toast_payload(&toast) {
                         menu::draw_toast(&mut canvas, &mut font, &toast, win_w as i32, win_h as i32)
                             .map_err(|e| format!("fp_ui toast overlay: {e}"))?;

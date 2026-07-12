@@ -16,6 +16,8 @@ pub mod about;
 pub mod bandwidth;
 mod claim_username;
 pub mod chrome;
+mod connection_failed;
+mod discord_connect;
 mod ghost_select;
 pub mod geometry;
 pub mod input;
@@ -29,9 +31,12 @@ mod play_menu;
 mod profile;
 mod quit;
 pub mod rankings;
+mod rebind_capture;
 mod replay_select;
 mod session_ended;
 pub mod settings;
+mod spectate_connecting;
+pub mod text_entry;
 pub mod theme;
 
 pub use input::{event_to_fp_nav, FpNav};
@@ -189,7 +194,7 @@ pub enum FpScreen {
     /// `MenuScreen::OnlineHub`'s fields from `lobby_list_rx`.
     /// `chat`/`presence` (tab 3) and `live_matches` (tab 4) are kept in sync
     /// the same way — see `mod.rs`'s `FpResult::SendLobbyChat`/
-    /// `WatchSession`/`OpenLegacyChat` doc comments. `cursor` doubles as the
+    /// `WatchSession`/`ComposeChat` doc comments. `cursor` doubles as the
     /// quick-phrase index on tab 3 and the live-match index on tab 4 (same
     /// per-tab reuse `Settings`' `row` already does across categories).
     /// `challenge_pick`/`incoming` back tab 5 (Players) — see
@@ -265,6 +270,17 @@ pub enum FpScreen {
     /// `main.rs` — see `matchmaking.rs` (the fp_ui module, not
     /// `crate::matchmaking`) for the radar-sweep animation.
     Matchmaking { status: String },
+    /// Netplay failure report — native replacement for the legacy
+    /// `MenuScreen::TestResult` screen's role when a matchmade session
+    /// fails to start. `lines` is the exact same verdict list main.rs
+    /// builds for the legacy screen — see `connection_failed.rs`.
+    ConnectionFailed { lines: Vec<String> },
+    /// Discord OAuth waiting screen — reached from Settings→Account's
+    /// Connect row (`FpResult::ToggleDiscordConnect`). `status` is updated
+    /// by the same `matchmaking::Update::Status` round trip the
+    /// `Matchmaking` screen uses; cancel/completion handling lives in
+    /// main.rs — see `discord_connect.rs`.
+    DiscordConnect { status: String },
 }
 
 impl FpScreen {
@@ -281,6 +297,33 @@ impl FpScreen {
             controls_player: crate::input::Player::P1,
             test_conn_address: String::new(),
             test_conn_lines: Vec::new(),
+        }
+    }
+
+    /// Settings opened directly onto the Account category — the landing
+    /// target for Discord connect/disconnect round trips, so they return to
+    /// the row they started from instead of legacy Settings or the main
+    /// menu.
+    pub fn settings_account(cfg: &crate::config::Config) -> Self {
+        let FpScreen::Settings {
+            fields,
+            sidebar_focus,
+            controls_player,
+            test_conn_address,
+            test_conn_lines,
+            ..
+        } = Self::settings_from_cfg(cfg)
+        else {
+            unreachable!()
+        };
+        FpScreen::Settings {
+            cat: settings::ACCOUNT_CAT_INDEX,
+            row: 0,
+            fields,
+            sidebar_focus,
+            controls_player,
+            test_conn_address,
+            test_conn_lines,
         }
     }
 
@@ -364,14 +407,15 @@ pub enum FpResult {
     ClearAllBindings(crate::input::Player),
     /// Confirm on the Account category's Username or Stats Email row.
     /// Caller opens the same legacy `MenuScreen::TextEdit` capture
-    /// `NavResult::EditText` does, same known rough edge as
-    /// `OpenJoinCode` — lands back on legacy Main (not fp_ui Settings) once
-    /// submitted/cancelled, rather than threading a `came_from` back to
-    /// fp_ui for what's a one-off action.
+    /// `NavResult::EditText` does, with `came_from` set to this Settings
+    /// screen so commit/cancel return here — rendered natively via
+    /// `text_entry.rs` (the shared on-screen keyboard) since the capture
+    /// was opened from fp_ui.
     BeginAccountEdit(crate::menu::EditField),
-    /// Confirm on the Account category's Discord row. Caller does exactly
-    /// what legacy's `NavResult::ConnectDiscord` does (same rough edge as
-    /// above: lands on legacy Settings/Matchmaking, not fp_ui).
+    /// Confirm on the Account category's Discord row. Caller mirrors
+    /// legacy's `NavResult::ConnectDiscord`, but stays native end to end:
+    /// connect waits on `FpScreen::DiscordConnect`, and both directions
+    /// land back on this Settings→Account category.
     ToggleDiscordConnect,
     /// Entered the (native) Load Drones screen. Caller does exactly what
     /// legacy's `NavResult::OpenGhostSelect` does — scans `ghosts/` for
@@ -402,17 +446,13 @@ pub enum FpResult {
     SendLobbyChat(String),
     /// Confirm on the Chat tab's "compose a message" slot (one past the
     /// last quick phrase). fp_ui has no on-screen keyboard of its own —
-    /// same as the mockup itself, whose Chat tab shows a "△ TO OPEN
-    /// KEYBOARD" hint rather than an inline keyboard — so this hands off
-    /// to the real legacy `MenuScreen::OnlineHub` (tab Chat, focus
-    /// Content), which has the actual OSK, seeded with the chat/presence
-    /// already fetched here rather than re-fetching from empty. Known
-    /// rough edge, same shape as `BeginAccountEdit`/`OpenJoinCode`: lands
-    /// back on legacy once the player backs out, not on this screen.
-    OpenLegacyChat {
-        chat: Vec<crate::matchmaking::LobbyChatMessage>,
-        presence: Vec<crate::matchmaking::LobbyUser>,
-    },
+    /// the caller opens the shared native text-entry capture
+    /// (`MenuScreen::TextEdit` with `EditField::ChatMessage`, rendered by
+    /// `text_entry.rs`) with `came_from` set to this Lobby screen, so
+    /// commit sends the message and cancel returns here — replacing the
+    /// old whole-screen handoff to legacy's OnlineHub just to reach an
+    /// on-screen keyboard.
+    ComposeChat,
     /// Confirm on a Watch tab live-match row. Caller does exactly what
     /// legacy's `NavResult::WatchSession(session_id)` does — the spectator
     /// *view* itself stays legacy (`MenuScreen::Spectate`), same as replay/
@@ -839,7 +879,6 @@ pub fn nav(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult {
             host_join_focus,
             cursor,
             lobbies,
-            chat,
             presence,
             live_matches,
             challenge_pick,
@@ -879,9 +918,8 @@ pub fn nav(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult {
                     FpResult::Stay
                 }
                 // Chat: cursor walks the quick-phrase row, plus one sentinel
-                // slot past the last phrase for "compose a message" (see
-                // `FpResult::OpenLegacyChat`'s doc comment for why that's a
-                // screen swap rather than native text entry).
+                // slot past the last phrase for "compose a message" (the
+                // native text-entry capture — see `FpResult::ComposeChat`).
                 FpNav::Up if *tab == 3 => {
                     *cursor = cursor.saturating_sub(1);
                     FpResult::Stay
@@ -932,7 +970,7 @@ pub fn nav(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult {
                     3 if *cursor < crate::menu::QUICK_PHRASES.len() => {
                         FpResult::SendLobbyChat(crate::menu::quick_phrase(*cursor).to_string())
                     }
-                    3 => FpResult::OpenLegacyChat { chat: chat.clone(), presence: presence.clone() },
+                    3 => FpResult::ComposeChat,
                     4 => match live_matches.get(*cursor) {
                         Some(m) => FpResult::WatchSession(m.session_id.clone()),
                         None => FpResult::Stay,
@@ -1016,8 +1054,16 @@ pub fn nav(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult {
         // No Back/cancel handling here — same as legacy's own `MenuScreen::Matchmaking`
         // (no `MenuNav` arm either): cancellation is a raw `is_cancel(&event)` check in
         // main.rs's event loop (`is_matchmaking_screen` guard), which intercepts the
-        // event before it ever reaches this dispatch.
-        FpScreen::Matchmaking { .. } => FpResult::Stay,
+        // event before it ever reaches this dispatch. `DiscordConnect` cancels through
+        // the same guard.
+        FpScreen::Matchmaking { .. } | FpScreen::DiscordConnect { .. } => FpResult::Stay,
+        FpScreen::ConnectionFailed { .. } => match input {
+            FpNav::Confirm | FpNav::Back => {
+                *screen = FpScreen::main();
+                FpResult::Stay
+            }
+            _ => FpResult::Stay,
+        },
     }
 }
 
@@ -1136,7 +1182,58 @@ pub fn draw(
             lobby_room::draw(canvas, fonts, &scale, view.as_ref(), status, thumb.as_ref(), username)?
         }
         FpScreen::Matchmaking { status } => matchmaking::draw(canvas, fonts, &scale, status, username)?,
+        FpScreen::ConnectionFailed { lines } => connection_failed::draw(canvas, fonts, &scale, lines, username)?,
+        FpScreen::DiscordConnect { status } => discord_connect::draw(canvas, fonts, &scale, status, username)?,
     }
 
     Ok(())
+}
+
+/// Overlay/companion frames for states that live *outside* `FpScreen` —
+/// legacy state machines (`MenuScreen::TextEdit`, `AppState::Rebinding`,
+/// `MenuScreen::Spectate`) whose rendering swaps to the new visual language
+/// when they were entered from fp_ui. Each is called by main.rs's draw
+/// dispatch after (or instead of) the legacy `menu::draw` — see the
+/// individual modules for what stays legacy.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_text_entry_modal(
+    canvas: &mut Canvas<Window>,
+    fonts: &mut FpFontCache,
+    win_w: i32,
+    win_h: i32,
+    title: &str,
+    label: &str,
+    value: &str,
+    field: &crate::menu::EditField,
+    cursor: (usize, usize),
+) -> Result<(), String> {
+    let scale = Scale::compute(win_w, win_h);
+    text_entry::draw_modal(canvas, fonts, &scale, title, label, value, field, cursor)
+}
+
+pub fn draw_rebind_capture_modal(
+    canvas: &mut Canvas<Window>,
+    fonts: &mut FpFontCache,
+    win_w: i32,
+    win_h: i32,
+    action: crate::input::Action,
+    player: crate::input::Player,
+) -> Result<(), String> {
+    let scale = Scale::compute(win_w, win_h);
+    rebind_capture::draw_modal(canvas, fonts, &scale, action, player)
+}
+
+pub fn draw_spectate_connecting(
+    canvas: &mut Canvas<Window>,
+    fonts: &mut FpFontCache,
+    win_w: i32,
+    win_h: i32,
+    status: &crate::menu::SpectateStatus,
+    username: &str,
+) -> Result<(), String> {
+    let scale = Scale::compute(win_w, win_h);
+    fonts.begin_frame(scale.s);
+    canvas.set_draw_color(theme::BG);
+    canvas.clear();
+    spectate_connecting::draw(canvas, fonts, &scale, status, username)
 }
