@@ -115,7 +115,7 @@ pub fn draw(
         canvas,
         fonts,
         scale,
-        &[chrome::PROMPT_SELECT],
+        &[chrome::PROMPT_SELECT, chrome::PROMPT_BACK],
         FooterRight::Text("TYPE TO EDIT \u{b7} ENTER TO CLAIM"),
     )?;
     Ok(())

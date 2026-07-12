@@ -469,6 +469,11 @@ pub enum FpResult {
     /// sanitizes, kicks off `matchmaking::check_username_available`, and
     /// targets this screen's fields instead of the legacy screen's.
     SubmitUsername(String),
+    /// Back on the Claim Username screen. Caller drops any in-flight
+    /// `check_username_available` round trip (`username_check_rx` and its
+    /// bookkeeping) and returns to the Lobby's Quick Match tab the claim
+    /// was triggered from.
+    CancelUsernameClaim,
     /// Confirm on the Lobby Room when not in a ready check. Caller does
     /// exactly what legacy's `NavResult::SetLobbyQueue(id, queued)` does —
     /// `queued` is the *current* queued state, toggling it via
@@ -1033,11 +1038,14 @@ pub fn nav(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult {
         },
         FpScreen::ClaimUsername { value, checking, .. } => match input {
             FpNav::Confirm if !*checking => FpResult::SubmitUsername(value.clone()),
-            // No cancel path — same as legacy's `MatchUsername` (no Back
-            // handling in its own `accept()`/nav arm either): the player
-            // arrived here specifically because they have no confirmed
-            // identity yet, so backing out would just re-trigger this same
-            // screen the next time they try to go online.
+            // Back abandons the claim and returns to the Lobby's Quick
+            // Match tab it was triggered from (matching legacy
+            // `MatchUsername`, whose `nav_back` arm exits to the main
+            // menu). Allowed even mid-check — a hung availability check is
+            // exactly when a player most wants out — so the caller must
+            // also drop the in-flight check, which is why this is an
+            // `FpResult` rather than an in-place screen swap.
+            FpNav::Back => FpResult::CancelUsernameClaim,
             _ => FpResult::Stay,
         },
         FpScreen::LobbyRoom { id, view, .. } => match input {

@@ -3418,6 +3418,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         }
                                     }
                                 }
+                                fp_ui::FpResult::CancelUsernameClaim => {
+                                    // Abandon the claim: drop any in-flight
+                                    // availability check (same bookkeeping the
+                                    // matchmaking cancel path clears) and return to
+                                    // the Lobby's Quick Match tab the claim was
+                                    // triggered from. The background thread's late
+                                    // reply, if any, lands on a dropped receiver.
+                                    username_check_rx = None;
+                                    username_check_silent = false;
+                                    username_check_started_at = None;
+                                    state = AppState::FpUi(fp_ui::FpScreen::lobby());
+                                }
                                 fp_ui::FpResult::SetLobbyQueue(lobby_id, queued) => {
                                     // Mirrors legacy's NavResult::SetLobbyQueue exactly.
                                     let (tx, rx) = std::sync::mpsc::channel();
