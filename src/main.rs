@@ -7590,11 +7590,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // replay found for this match" from
                     // WatchLastMatchReplay) was silently never drawn,
                     // reading as "nothing happened" to the user. Draw it
-                    // as an overlay on top with the same legacy bitmap font
-                    // legacy screens use for it.
+                    // as a native-styled overlay on top (legacy screens
+                    // keep menu::draw_toast).
                     if let Some(toast) = toast_payload(&toast) {
-                        menu::draw_toast(&mut canvas, &mut font, &toast, win_w as i32, win_h as i32)
-                            .map_err(|e| format!("fp_ui toast overlay: {e}"))?;
+                        fp_ui::draw_toast_overlay(
+                            &mut canvas,
+                            fpf,
+                            win_w as i32,
+                            win_h as i32,
+                            toast.message,
+                            toast.remaining_ms,
+                        )
+                        .map_err(|e| format!("fp_ui toast overlay: {e}"))?;
                     }
                 } else {
                     menu::draw(
@@ -8640,11 +8647,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // replay found for this match" from
                     // WatchLastMatchReplay) was silently never drawn,
                     // reading as "nothing happened" to the user. Draw it
-                    // as an overlay on top with the same legacy bitmap font
-                    // legacy screens use for it.
+                    // as a native-styled overlay on top (legacy screens
+                    // keep menu::draw_toast).
                     if let Some(toast) = toast_payload(&toast) {
-                        menu::draw_toast(&mut canvas, &mut font, &toast, win_w as i32, win_h as i32)
-                            .map_err(|e| format!("fp_ui toast overlay: {e}"))?;
+                        fp_ui::draw_toast_overlay(
+                            &mut canvas,
+                            fpf,
+                            win_w as i32,
+                            win_h as i32,
+                            toast.message,
+                            toast.remaining_ms,
+                        )
+                        .map_err(|e| format!("fp_ui toast overlay: {e}"))?;
                     }
                 } else if let Some(fpf) = fp_fonts.as_mut().filter(|_| fp_native_overlay(&state, cfg.new_ui)) {
                     // Non-FpScreen states rendered natively: TextEdit and
@@ -8737,8 +8751,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         _ => {}
                     }
                     if let Some(toast) = toast_payload(&toast) {
-                        menu::draw_toast(&mut canvas, &mut font, &toast, win_w as i32, win_h as i32)
-                            .map_err(|e| format!("fp_ui toast overlay: {e}"))?;
+                        fp_ui::draw_toast_overlay(
+                            &mut canvas,
+                            fpf,
+                            win_w as i32,
+                            win_h as i32,
+                            toast.message,
+                            toast.remaining_ms,
+                        )
+                        .map_err(|e| format!("fp_ui toast overlay: {e}"))?;
                     }
                 } else {
                     menu::draw(

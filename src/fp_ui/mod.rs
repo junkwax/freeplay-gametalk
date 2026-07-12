@@ -38,6 +38,7 @@ pub mod settings;
 mod spectate_connecting;
 pub mod text_entry;
 pub mod theme;
+mod toast;
 
 pub use input::{event_to_fp_nav, FpNav};
 pub use layout::Scale;
@@ -1229,6 +1230,21 @@ pub fn draw_rebind_capture_modal(
 ) -> Result<(), String> {
     let scale = Scale::compute(win_w, win_h);
     rebind_capture::draw_modal(canvas, fonts, &scale, action, player)
+}
+
+/// Toast notification in the new visual language, drawn on top of an
+/// already-rendered fp_ui frame (so no clear, and the font cache's
+/// `begin_frame` has already run for this scale this frame).
+pub fn draw_toast_overlay(
+    canvas: &mut Canvas<Window>,
+    fonts: &mut FpFontCache,
+    win_w: i32,
+    win_h: i32,
+    message: &str,
+    remaining_ms: u128,
+) -> Result<(), String> {
+    let scale = Scale::compute(win_w, win_h);
+    toast::draw(canvas, fonts, &scale, message, remaining_ms)
 }
 
 pub fn draw_spectate_connecting(

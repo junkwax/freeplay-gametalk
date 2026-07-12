@@ -230,13 +230,13 @@ pub fn draw_header(
     // letterform with a layered red chromatic-ghost effect no font can
     // reproduce); falls back to plain text if the asset isn't next to the
     // binary, same graceful-degradation pattern as the SDL_ttf fallback.
-    let (x, y) = scale.point(SIDE_PAD, HEADER_H / 2.0 - 28.0);
-    let logo_h = scale.len(46.0).round().max(1.0) as u32;
+    let (x, y) = scale.point(SIDE_PAD, HEADER_H / 2.0 - 24.0);
+    let logo_h = scale.len(38.0).round().max(1.0) as u32;
     let word_w = match fonts.draw_logo(canvas, x, y, logo_h) {
         Some(w) => w,
         None => {
             fonts
-                .draw(canvas, FpFont::SairaCondensedBlack, scale.font_px(56.0), "FREEPLAY", x, y, theme::TEXT)?
+                .draw(canvas, FpFont::SairaCondensedBlack, scale.font_px(46.0), "FREEPLAY", x, y, theme::TEXT)?
                 .0
         }
     };
