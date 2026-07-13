@@ -1,16 +1,12 @@
-//! New UI: a controller-only, 1920x1080-logical-canvas screen set
-//! recreating `freeplay-frontend/FREEPLAY Arcade.dc.html` in SDL2
-//! primitives. Lives entirely alongside the legacy `crate::menu` screens —
-//! gated behind `Config::new_ui` (default off = byte-for-byte legacy
-//! behavior). See `AppState::FpUi` in `crate::menu` for how the two connect
-//! in `main.rs`.
-//!
-//! Only the screens this module actually draws are listed in `FpScreen`;
-//! everything else (Lab, Replays, Ghost Select, Profile, Controls, and the
-//! non-Quick-Match Online tabs) stays on `crate::menu::MenuScreen` per
-//! `freeplay-frontend/uploads/ui-handoff-legacy-screens.md` — reached via
-//! `menu::main_menu_state`'s round trip and `FpResult::ActivateMainItem`
-//! delegating to the legacy `nav_accept`, not reimplemented here.
+//! The app's menu UI: a controller-only, 1920x1080-logical-canvas screen
+//! set recreating `freeplay-frontend/FREEPLAY Arcade.dc.html` in SDL2
+//! primitives. This is the only menu UI — the legacy `crate::menu` screens
+//! it was originally gated alongside (`Config::new_ui`) are gone; what
+//! remains of `crate::menu` is the state machine/action plumbing these
+//! screens delegate to (`FpResult::ActivateMainItem` riding `nav_accept`),
+//! plus the in-game states (Spectate viewer, TextEdit, Rebinding) whose
+//! menu-side rendering this module also provides. See `AppState::FpUi` in
+//! `crate::menu` for how the two connect in `main.rs`.
 
 pub mod about;
 pub mod bandwidth;

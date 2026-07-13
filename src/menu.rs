@@ -41,16 +41,12 @@ pub enum AppState {
     },
 }
 
-/// The app's "main menu" state: the new fp_ui Main Menu when `new_ui` is on,
-/// otherwise the legacy `Menu(MenuScreen::Main)`. Centralizes every "return
-/// to the main menu" transition so flipping `new_ui` doesn't require hunting
-/// down each call site individually.
-pub fn main_menu_state(new_ui: bool) -> AppState {
-    if new_ui {
-        AppState::FpUi(crate::fp_ui::FpScreen::main())
-    } else {
-        AppState::Menu(MenuScreen::Main { cursor: 0 })
-    }
+/// The app's "main menu" state — the fp_ui Main Menu. Centralizes every
+/// "return to the main menu" transition. (`MenuScreen::Main` still exists,
+/// but only as the action-dispatch vehicle fp_ui's `ActivateMainItem`
+/// fallthrough rides through `nav_accept` — it is never a resting state.)
+pub fn main_menu_state() -> AppState {
+    AppState::FpUi(crate::fp_ui::FpScreen::main())
 }
 
 /// All menu screens. Direct-IP Host/Join screens were removed when Find Match
@@ -1987,7 +1983,7 @@ impl AppState {
         }
     }
 
-    pub fn nav_back(&mut self, new_ui: bool) {
+    pub fn nav_back(&mut self) {
         // In the Online hub, Back closes the format chooser, then returns from
         // content to the rail, then from the rail out to the main menu. (The
         // incoming-challenge modal's decline is handled in main.rs, before
@@ -2006,7 +2002,7 @@ impl AppState {
                 *focus = HubFocus::Rail;
                 return;
             }
-            *self = main_menu_state(new_ui);
+            *self = main_menu_state();
             return;
         }
         match self {
@@ -2026,7 +2022,7 @@ impl AppState {
             | AppState::Menu(MenuScreen::Training { .. })
             | AppState::Menu(MenuScreen::LiveMatches { .. })
             | AppState::Menu(MenuScreen::Spectate { .. }) => {
-                *self = main_menu_state(new_ui);
+                *self = main_menu_state();
             }
             AppState::Menu(MenuScreen::TextEdit { came_from, .. }) => {
                 *self = (**came_from).clone();

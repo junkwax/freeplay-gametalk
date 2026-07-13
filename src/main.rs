@@ -490,18 +490,12 @@ fn is_matchmaking_screen(state: &AppState) -> bool {
     )
 }
 
-/// The netplay-failure report screen: the native Connection Failed card
-/// when the new UI is on, legacy `TestResult` otherwise. Both failure
-/// sites auto-submit an incident report just before calling this, so the
-/// appended line is a real fact, not reassurance theater — surfaced on
-/// the native card (legacy's fixed layout has no room for it).
-fn connection_failed_state(new_ui: bool, mut lines: Vec<String>) -> AppState {
-    if new_ui {
-        lines.push("OK Incident report submitted automatically".into());
-        AppState::FpUi(fp_ui::FpScreen::ConnectionFailed { lines })
-    } else {
-        AppState::Menu(MenuScreen::TestResult { lines })
-    }
+/// The netplay-failure report screen (native Connection Failed card). Both
+/// failure sites auto-submit an incident report just before calling this,
+/// so the appended line is a real fact, not reassurance theater.
+fn connection_failed_state(mut lines: Vec<String>) -> AppState {
+    lines.push("OK Incident report submitted automatically".into());
+    AppState::FpUi(fp_ui::FpScreen::ConnectionFailed { lines })
 }
 
 /// A legacy `TextEdit` capture that was opened *from* an fp_ui screen —
@@ -523,11 +517,11 @@ fn is_fp_text_edit(state: &AppState) -> bool {
 /// the dimmed parent), and Spectate while still waiting for a first status
 /// frame (native "connecting to live match" — the viewer that takes over
 /// once frames flow stays legacy).
-fn fp_native_overlay(state: &AppState, new_ui: bool) -> bool {
+fn fp_native_overlay(state: &AppState) -> bool {
     match state {
         AppState::Menu(MenuScreen::TextEdit { came_from, .. })
         | AppState::Rebinding { came_from, .. } => matches!(**came_from, AppState::FpUi(_)),
-        AppState::Menu(MenuScreen::Spectate { status, .. }) => new_ui && status.frame.is_none(),
+        AppState::Menu(MenuScreen::Spectate { status, .. }) => status.frame.is_none(),
         _ => false,
     }
 }
@@ -1169,18 +1163,13 @@ fn scan_local_replay_entries() -> Vec<menu::ReplayEntry> {
         .collect()
 }
 
-/// Exiting replay review (Escape/Back, controller B, or natural playback
-/// completion) used to always land on the *legacy* ReplaySelect regardless
-/// of `cfg.new_ui` — the fp_ui Replays screen has no `came_from` to return
-/// to (review reuses `AppState::Playing`, not a dedicated state), so this
-/// picks the right screen shape to return to instead.
-fn replay_select_exit_state(new_ui: bool, status: impl Into<String>) -> AppState {
+/// Where exiting replay review (Escape/Back, controller B, or natural
+/// playback completion) lands: a fresh fp_ui Replays screen. Review reuses
+/// `AppState::Playing`, not a dedicated state, so there is no `came_from`
+/// to return to — the screen is reconstructed instead.
+fn replay_select_exit_state(status: impl Into<String>) -> AppState {
     let status = Some(status.into());
-    if new_ui {
-        AppState::FpUi(fp_ui::FpScreen::ReplaySelect { cursor: 0, entries: Vec::new(), status })
-    } else {
-        AppState::Menu(MenuScreen::ReplaySelect { cursor: 0, entries: Vec::new(), status })
-    }
+    AppState::FpUi(fp_ui::FpScreen::ReplaySelect { cursor: 0, entries: Vec::new(), status })
 }
 
 fn refresh_replay_select(state: &mut AppState, status: Option<String>) {
@@ -1810,22 +1799,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut fp_fonts = ttf_ctx
         .as_ref()
         .map(|ctx| font::FpFontCache::new(&texture_creator, ctx));
-    if cfg.new_ui && fp_fonts.is_some() && !font::fp_font_assets_present() {
-        // Fonts load lazily at first draw, so without this probe a package
-        // missing assets/fonts/ wouldn't fail until the first fp_ui frame —
-        // whose error aborts main(), i.e. the app "doesn't launch".
-        println!("[fp_ui] assets/fonts/ not found next to the binary; falling back to the legacy UI despite new_ui=true");
-        fp_fonts = None;
+    // The menu UI is fp_ui only — there is no legacy fallback anymore, so
+    // its prerequisites are hard requirements (same philosophy as ROM
+    // loading: fail loudly up front, not mysteriously later). Fonts load
+    // lazily at first draw; probing here turns "aborts on the first frame"
+    // into an actionable startup error.
+    if fp_fonts.is_none() {
+        return Err("SDL2_ttf failed to initialize; the menu UI cannot render without it".into());
     }
-    if cfg.new_ui && fp_fonts.is_none() {
-        // The asset probe above already printed its own message.
-        if ttf_ctx.is_none() {
-            println!("[fp_ui] SDL2_ttf unavailable; falling back to the legacy UI despite new_ui=true");
-        }
-        // In-memory downgrade only (config.toml keeps new_ui=true unless a
-        // later settings change saves it): with no fp fonts, an
-        // AppState::FpUi state has no draw path at all.
-        cfg.new_ui = false;
+    if !font::fp_font_assets_present() {
+        return Err(
+            "assets/fonts/ not found next to the binary; restore the package's assets folder"
+                .into(),
+        );
     }
 
     let mut event_pump = sdl_context.event_pump()?;
@@ -1838,7 +1824,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     incident::set_guest_device_id(cfg.guest_device_id.clone());
     install_panic_incident_hook();
     install_native_crash_handler();
-    let mut state = menu::main_menu_state(cfg.new_ui);
+    let mut state = menu::main_menu_state();
     // Debug: `--test-screen online:chat` (or :players/:lobbies/:watch/:play)
     // jumps straight into a hub section with sample data so layout/fonts can be
     // checked without the live server. `--test-osk` also shows the chat keyboard.
@@ -2100,7 +2086,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if let Some(url) = startup_replay_url.take() {
         println!("[replay] Downloading remote replay: {url}");
-        state = replay_select_exit_state(cfg.new_ui, "Downloading replay...");
+        state = replay_select_exit_state("Downloading replay...");
         match download_remote_replay(&url) {
             Ok(path) => match ensure_core_loaded(&mut core, &mut audio_queue, &audio_subsystem) {
                 Ok(()) => {
@@ -2990,7 +2976,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         } else if matches!(state, AppState::FpUi(fp_ui::FpScreen::DiscordConnect { .. })) {
                             state = AppState::FpUi(fp_ui::FpScreen::settings_account(&cfg));
                         } else {
-                            state = menu::main_menu_state(cfg.new_ui);
+                            state = menu::main_menu_state();
                         }
                     }
                 }
@@ -3198,7 +3184,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         fp_ui::text_entry::OskAction::Char(c) => state.text_input(&c.to_string()),
                         fp_ui::text_entry::OskAction::Space => state.text_input(" "),
                         fp_ui::text_entry::OskAction::Backspace => state.text_backspace(),
-                        fp_ui::text_entry::OskAction::Cancel => state.nav_back(cfg.new_ui),
+                        fp_ui::text_entry::OskAction::Cancel => state.nav_back(),
                     }
                 }
 
@@ -3464,7 +3450,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         matchmaking::leave_lobby(lobby_id);
                                     }
                                     lobby_view_rx = None;
-                                    state = menu::main_menu_state(cfg.new_ui);
+                                    state = menu::main_menu_state();
                                 }
                                 fp_ui::FpResult::SendChallenge(target_id, format) => {
                                     // Mirrors legacy's NavResult::SendChallenge exactly —
@@ -4136,29 +4122,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     matchmaking::fetch_leaderboard(cfg.stats_url.clone(), tx);
                                 }
                                 NavResult::OpenSettings => {
-                                    state = AppState::Menu(MenuScreen::Settings {
-                                        cursor: 0,
-                                        player_username: cfg.player_username.clone(),
-                                        stats_email: cfg.stats_email.clone(),
-                                        discord_connected:
-                                            matchmaking::connected_discord_user_from_cached_token()
-                                                .is_some(),
-                                        discord_rpc_enabled: cfg.discord_rpc_enabled,
-                                        fullscreen: cfg.fullscreen,
-                                        volume_percent: cfg.volume_percent,
-                                        audio_buffer: cfg.audio_buffer,
-                                        video_filter: cfg.video_filter,
-                                        crt_corner_bend: cfg.crt_corner_bend,
-                                        aspect_mode: cfg.aspect_mode,
-                                        scorebar_style: cfg.scorebar_style,
-                                        input_delay: cfg.input_delay,
-                                        render_profile: cfg.render_profile,
-                                        runahead: cfg.runahead,
-                                        runahead_online: cfg.runahead_online,
-                                    });
-                                    if cfg.new_ui {
-                                        state = AppState::FpUi(fp_ui::FpScreen::settings_from_cfg(&cfg));
-                                    }
+                                    state = AppState::FpUi(fp_ui::FpScreen::settings_from_cfg(&cfg));
                                 }
                                 NavResult::OpenTraining => {
                                     state = AppState::Menu(MenuScreen::Training {
@@ -4219,7 +4183,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         let code = value.trim().to_uppercase();
                                         if code.is_empty() {
                                             state =
-                                                menu::main_menu_state(cfg.new_ui);
+                                                menu::main_menu_state();
                                         } else {
                                             matchmaking::set_guest_profile(
                                                 cfg.player_username.clone(),
@@ -4229,21 +4193,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             let (tx, rx) = std::sync::mpsc::channel();
                                             lobby_view_rx = Some(rx);
                                             matchmaking::join_lobby(tx, code.clone(), false);
-                                            state = if cfg.new_ui {
-                                                AppState::FpUi(fp_ui::FpScreen::LobbyRoom {
-                                                    id: code,
-                                                    view: None,
-                                                    status: "Joining lobby...".into(),
-                                                    thumb: None,
-                                                })
-                                            } else {
-                                                AppState::Menu(MenuScreen::Lobby {
-                                                    id: code,
-                                                    view: None,
-                                                    status: "Joining lobby...".into(),
-                                                    thumb: None,
-                                                })
-                                            };
+                                            state = AppState::FpUi(fp_ui::FpScreen::LobbyRoom {
+                                                id: code,
+                                                view: None,
+                                                status: "Joining lobby...".into(),
+                                                thumb: None,
+                                            });
                                         }
                                     }
                                     menu::EditField::ReplayNote { path } => {
@@ -4866,16 +4821,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     // "Online" (Main Menu item 0) landed in legacy's
                                     // OnlineHub/Play tab via ActivateMainItem's
                                     // delegation — hand off to fp_ui's own Lobby
-                                    // screen instead when the new UI is on, same
-                                    // pattern as OpenSettings just above.
-                                    if cfg.new_ui {
-                                        if let AppState::Menu(MenuScreen::OnlineHub {
-                                            tab: menu::OnlineTab::Play,
-                                            ..
-                                        }) = &state
-                                        {
-                                            state = AppState::FpUi(fp_ui::FpScreen::lobby());
-                                        }
+                                    // screen, same pattern as OpenSettings above.
+                                    if let AppState::Menu(MenuScreen::OnlineHub {
+                                        tab: menu::OnlineTab::Play,
+                                        ..
+                                    }) = &state
+                                    {
+                                        state = AppState::FpUi(fp_ui::FpScreen::lobby());
                                     }
                                 }
                                 NavResult::LoadGhost(path) => {
@@ -5039,9 +4991,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         matchmaking::leave_lobby(id);
                                     }
                                     lobby_view_rx = None;
-                                    state = menu::main_menu_state(cfg.new_ui);
+                                    state = menu::main_menu_state();
                                 } else {
-                                    state.nav_back(cfg.new_ui);
+                                    state.nav_back();
                                 }
                             }
                             MenuNav::ToggleMenu => {}
@@ -5150,7 +5102,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         replay_clip_in = None;
                         replay_clip_out = None;
                         input::clear_all_inputs();
-                        state = replay_select_exit_state(cfg.new_ui, "Replay stopped");
+                        state = replay_select_exit_state("Replay stopped");
                         refresh_replay_select(&mut state, Some("Replay stopped".into()));
                     }
                     Event::ControllerButtonDown {
@@ -5165,7 +5117,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         replay_clip_in = None;
                         replay_clip_out = None;
                         input::clear_all_inputs();
-                        state = replay_select_exit_state(cfg.new_ui, "Replay stopped");
+                        state = replay_select_exit_state("Replay stopped");
                         refresh_replay_select(&mut state, Some("Replay stopped".into()));
                     }
                     Event::KeyDown {
@@ -5569,7 +5521,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ..
                     } if net_session.is_none() && match_replay_playback.is_none() => {
                         input::clear_all_inputs();
-                        state = menu::main_menu_state(cfg.new_ui);
+                        state = menu::main_menu_state();
                     }
                     Event::KeyDown {
                         keycode: Some(Keycode::F9),
@@ -6510,7 +6462,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 replay_clip_in = None;
                                 replay_clip_out = None;
                                 input::clear_all_inputs();
-                                state = replay_select_exit_state(cfg.new_ui, "Replay complete");
+                                state = replay_select_exit_state("Replay complete");
                                 refresh_replay_select(&mut state, Some("Replay complete".into()));
                             }
                         }
@@ -6923,31 +6875,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             // stays, loser re-queues); we just resume polling.
                             lobby_view_rx = None;
                             lobby_view_next_refresh = Instant::now();
-                            state = if cfg.new_ui {
-                                AppState::FpUi(fp_ui::FpScreen::LobbyRoom {
-                                    id: lobby_id,
-                                    view: None,
-                                    status: "Returning to lobby...".into(),
-                                    thumb: None,
-                                })
-                            } else {
-                                AppState::Menu(MenuScreen::Lobby {
-                                    id: lobby_id,
-                                    view: None,
-                                    status: "Returning to lobby...".into(),
-                                    thumb: None,
-                                })
-                            };
-                        } else if cfg.new_ui {
+                            state = AppState::FpUi(fp_ui::FpScreen::LobbyRoom {
+                                id: lobby_id,
+                                view: None,
+                                status: "Returning to lobby...".into(),
+                                thumb: None,
+                            });
+                        } else {
                             state = AppState::FpUi(fp_ui::FpScreen::SessionEnded {
                                 lines: teardown_lines,
                                 replay_path,
                                 choice: 0,
-                            });
-                        } else {
-                            state = AppState::Menu(MenuScreen::SessionEnded {
-                                lines: teardown_lines,
-                                replay_path,
                             });
                         }
                     }
@@ -7274,32 +7212,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     format!("Discord connected as {username}"),
                                     Instant::now() + Duration::from_millis(2600),
                                 ));
-                                // Land back on the Settings→Account row the connect
-                                // started from — the *native* one when the new UI is
-                                // on (this used to always drop to legacy Settings,
-                                // the one real leak in the fp_ui Account flow).
-                                state = if cfg.new_ui {
-                                    AppState::FpUi(fp_ui::FpScreen::settings_account(&cfg))
-                                } else {
-                                    AppState::Menu(MenuScreen::Settings {
-                                        cursor: 2,
-                                        player_username: cfg.player_username.clone(),
-                                        stats_email: cfg.stats_email.clone(),
-                                        discord_connected: true,
-                                        discord_rpc_enabled: cfg.discord_rpc_enabled,
-                                        fullscreen: cfg.fullscreen,
-                                        volume_percent: cfg.volume_percent,
-                                        audio_buffer: cfg.audio_buffer,
-                                        video_filter: cfg.video_filter,
-                                        crt_corner_bend: cfg.crt_corner_bend,
-                                        aspect_mode: cfg.aspect_mode,
-                                        scorebar_style: cfg.scorebar_style,
-                                        input_delay: cfg.input_delay,
-                                        render_profile: cfg.render_profile,
-                                        runahead: cfg.runahead,
-                                        runahead_online: cfg.runahead_online,
-                                    })
-                                };
+                                // Land back on the Settings→Account row the
+                                // connect started from.
+                                state = AppState::FpUi(fp_ui::FpScreen::settings_account(&cfg));
                                 break;
                             }
                             Ok(matchmaking::Update::Connected {
@@ -7315,7 +7230,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     Err(e) => {
                                         println!("[mm] bad peer addr from matchmaking: {e}");
                                         mm_rx = None;
-                                        state = menu::main_menu_state(cfg.new_ui);
+                                        state = menu::main_menu_state();
                                         break;
                                     }
                                 };
@@ -7514,7 +7429,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         inc.rom_hash = Some(format!("{:016x}", hash));
                                         incident::submit(inc);
 
-                                        state = connection_failed_state(cfg.new_ui, lines);
+                                        state = connection_failed_state(lines);
                                     }
                                 }
                                 break;
@@ -7558,21 +7473,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 mm_rx = None;
                                 net_transport_path = None;
                                 relay_chat = None;
-                                state = connection_failed_state(
-                                    cfg.new_ui,
-                                    vec![
-                                        String::new(),
-                                        format!("FAIL {e}"),
-                                        String::new(),
-                                        "ESC to go back".into(),
-                                    ],
-                                );
+                                state = connection_failed_state(vec![
+                                    String::new(),
+                                    format!("FAIL {e}"),
+                                    String::new(),
+                                    "ESC to go back".into(),
+                                ]);
                                 break;
                             }
                             Err(std::sync::mpsc::TryRecvError::Empty) => break,
                             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                                 mm_rx = None;
-                                state = menu::main_menu_state(cfg.new_ui);
+                                state = menu::main_menu_state();
                                 break;
                             }
                         }
@@ -8674,7 +8586,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         )
                         .map_err(|e| format!("fp_ui toast overlay: {e}"))?;
                     }
-                } else if let Some(fpf) = fp_fonts.as_mut().filter(|_| fp_native_overlay(&state, cfg.new_ui)) {
+                } else if let Some(fpf) = fp_fonts.as_mut().filter(|_| fp_native_overlay(&state)) {
                     // Non-FpScreen states rendered natively: TextEdit and
                     // Rebinding captures opened from fp_ui draw their parent
                     // screen dimmed under a modal; the Spectate connecting
