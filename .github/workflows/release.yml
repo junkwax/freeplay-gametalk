@@ -421,50 +421,8 @@ jobs:
             gh "${args[@]}"
           fi
 
-  bump-version:
-    name: Bump Cargo.toml past the released version
-    # Only for a real tag push — a workflow_dispatch test release may target
-    # an arbitrary/past tag and shouldn't move main. Waits on all three
-    # platform jobs so a failed release build never bumps main past a
-    # version that didn't actually ship.
-    if: github.event_name == 'push'
-    needs: [version, windows, linux, macos]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: main
-
-      - name: Bump Cargo.toml to the next patch version
-        id: bump
-        env:
-          RELEASED: ${{ needs.version.outputs.version }}
-        run: |
-          IFS='.' read -r major minor patch <<< "$RELEASED"
-          if ! [[ "$patch" =~ ^[0-9]+$ ]]; then
-            echo "Released version '$RELEASED' isn't plain X.Y.Z (patch='$patch'); skipping auto-bump." >&2
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          next="$major.$minor.$((patch + 1))"
-          if grep -q "^version = \"$next\"" Cargo.toml; then
-            echo "Cargo.toml already at $next; nothing to do."
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          perl -i -pe 'BEGIN{$d=0} if(!$d && /^version = /){s/^version = .*/version = "'"$next"'"/; $d=1}' Cargo.toml
-          grep -m1 '^version = ' Cargo.toml
-          echo "next=$next" >> "$GITHUB_OUTPUT"
-          echo "changed=true" >> "$GITHUB_OUTPUT"
-
-      - name: Commit and push to main
-        if: steps.bump.outputs.changed == 'true'
-        env:
-          NEXT: ${{ steps.bump.outputs.next }}
-          RELEASED: ${{ needs.version.outputs.version }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Cargo.toml
-          git commit -m "Bump version to $NEXT after releasing v$RELEASED"
-          git push origin HEAD:main
+# Note: there is deliberately no post-release version bump here. Cargo.toml's
+# version changes only in the human release commit (bump + changelog + tag),
+# so main always reports the last released version between releases. The
+# build jobs stamp the version from the tag anyway, so released artifacts
+# never depend on Cargo.toml being current.
