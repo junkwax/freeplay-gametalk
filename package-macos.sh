@@ -48,6 +48,24 @@ if [ -n "$ENV_SOURCE" ]; then
   echo "Bundled .env from $ENV_SOURCE (public defaults, no secrets)"
 fi
 [ -f "src/media/mk2.ttf" ] && cp "src/media/mk2.ttf" "$OUT_DIR/media/mk2.ttf"
+
+# fp_ui assets (fonts + wordmark). The new UI (config new_ui = true) resolves
+# these next to the binary; without assets/fonts/ it can't render at all (the
+# app falls back to the legacy UI). OFL-*.txt license files must ship
+# alongside the TTFs (SIL Open Font License requirement).
+if [ ! -d "assets/fonts" ]; then
+  echo "error: assets/fonts not found; the new UI (new_ui = true) cannot render without it" >&2
+  exit 1
+fi
+mkdir -p "$OUT_DIR/assets/fonts"
+cp assets/fonts/* "$OUT_DIR/assets/fonts/"
+if [ -f "assets/logo/wordmark.png" ]; then
+  mkdir -p "$OUT_DIR/assets/logo"
+  cp "assets/logo/wordmark.png" "$OUT_DIR/assets/logo/wordmark.png"
+else
+  echo "warning: assets/logo/wordmark.png not found — header falls back to text" >&2
+fi
+
 if [ ! -f "appicon.png" ]; then
   echo "error: appicon.png not found; packaged builds require a transparent PNG app icon" >&2
   exit 1
