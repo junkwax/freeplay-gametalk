@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.8.3 - 2026-07-13
+
+### Changed
+
+- The new angular/red UI is now the one and only menu UI. The `new_ui`
+  config flag is gone (a leftover line in config.toml is harmless), and
+  the legacy menu screens — main menu, online hub, settings, controls,
+  profile, replay/drone browsers, and friends — have been removed
+  (~7,600 lines). In-game views (Lab trainer overlay, drone gameplay,
+  replay/spectate playback) are unchanged by design.
+- Completed the native screen set from the updated design mockup: an
+  on-screen keyboard for controller text entry (username, email, lobby
+  chat, join codes), a rebind-capture modal, a "connecting to live
+  match" spectate screen, a netplay Connection Failed report card, and
+  a Discord OAuth waiting card.
+- Toast notifications over menu screens now match the new visual
+  language; slightly smaller header wordmark.
+
+### Fixed
+
+- Packaged builds failed to launch on Windows: the fp_ui fonts and logo
+  were never bundled, and the app aborted on its first frame. All three
+  platform packages now ship `assets/fonts/` (with OFL licenses) and the
+  wordmark, and the app fails loudly at startup with a clear message if
+  they are missing.
+- The username-claim screen can now back out to the Lobby.
+- The matchmaking radar animation no longer freezes (f32 timestamp
+  precision loss).
+
 ## 0.8.1 - 2026-07-07
 
 ### Fixed
