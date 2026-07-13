@@ -617,10 +617,16 @@ pub fn list_replays() -> Vec<ReplayMeta> {
     out
 }
 
+/// Replays shorter than this never appear in any list — a sub-minute file
+/// is a join failure or an instantly-abandoned session, not a match worth
+/// reviewing. (~1 minute at MK2's ~55 Hz.)
+pub const MIN_LISTED_REPLAY_FRAMES: u32 = 55 * 60;
+
 pub fn list_online_replays() -> Vec<ReplayMeta> {
     list_replays()
         .into_iter()
         .filter(looks_like_online_replay)
+        .filter(|meta| meta.frame_count >= MIN_LISTED_REPLAY_FRAMES)
         .collect()
 }
 

@@ -112,6 +112,38 @@ pub fn apply_position_preset(core: &Core, preset: PositionPreset) {
     memory::poke_u16(core, mk2_addrs::P2_Y_ADDR, 0, memory::Endian::Little);
 }
 
+/// Value MKSEL.ASM's `player_select` writes into `p1_char`/`p2_char` on
+/// select-screen entry ("null the characters"). Each side's real fighter id
+/// replaces it when that side locks in, and attract-mode fights write real
+/// ids too — so this value unambiguously means "on the select screen, not
+/// picked yet".
+pub const CHAR_NULLED: u16 = 0xFFFF;
+
+/// Where the game is between "Lab launched" and "fight running", derived
+/// from RAM once per tick by main.rs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LabPhase {
+    /// Attract, VS screen, continue countdowns — anything that isn't the
+    /// select screen or a live fight.
+    PreFight,
+    /// Character select. Each flag = that side has locked a character in.
+    Select { p1_picked: bool, p2_picked: bool },
+    Fight,
+}
+
+pub fn phase_from_ram(fight_loaded: bool, p1_char: u16, p2_char: u16) -> LabPhase {
+    if fight_loaded {
+        LabPhase::Fight
+    } else if p1_char == CHAR_NULLED || p2_char == CHAR_NULLED {
+        LabPhase::Select {
+            p1_picked: p1_char != CHAR_NULLED,
+            p2_picked: p2_char != CHAR_NULLED,
+        }
+    } else {
+        LabPhase::PreFight
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DummyMode {
     Stand,
@@ -171,6 +203,11 @@ pub struct DummyController {
     loop_cursor: usize,
     loop_completed: Option<usize>,
     auto_finished_loop: Option<usize>,
+    /// P1's confirm button is usually still held on the frames right after
+    /// their pick lands in `p1_char`; mirroring it to P2 immediately would
+    /// insta-confirm whatever square P2's cursor starts on. Buttons only
+    /// mirror once P1 has fully released them at least one frame.
+    select_mirror_armed: bool,
 }
 
 impl Default for DummyController {
@@ -184,6 +221,7 @@ impl Default for DummyController {
             loop_cursor: 0,
             loop_completed: None,
             auto_finished_loop: None,
+            select_mirror_armed: false,
         }
     }
 }
@@ -266,10 +304,16 @@ impl DummyController {
         }
     }
 
-    pub fn next_bits(&mut self, fight_loaded: bool, live_p2_bits: u16) -> Option<u16> {
+    pub fn next_bits(
+        &mut self,
+        phase: LabPhase,
+        live_p1_bits: u16,
+        live_p2_bits: u16,
+    ) -> Option<u16> {
         if !self.active() {
             return None;
         }
+        let fight_loaded = phase == LabPhase::Fight;
         self.frame = self.frame.wrapping_add(1);
         if self.recording {
             if fight_loaded {
@@ -280,7 +324,7 @@ impl DummyController {
                 }
                 return Some(live_p2_bits);
             }
-            return Some(self.pre_fight_bits());
+            return Some(self.pre_fight_bits(phase, live_p1_bits, live_p2_bits));
         }
         if fight_loaded && !self.loop_frames.is_empty() {
             let bits = self.loop_frames[self.loop_cursor % self.loop_frames.len()];
@@ -293,19 +337,51 @@ impl DummyController {
         if fight_loaded {
             Some(self.fight_bits())
         } else {
-            Some(self.pre_fight_bits())
+            Some(self.pre_fight_bits(phase, live_p1_bits, live_p2_bits))
         }
     }
 
-    fn pre_fight_bits(&self) -> u16 {
-        let mut bits = 0;
-        if self.frame % 24 < 5 {
-            set_action(&mut bits, Action::Start);
+    /// Pre-fight P2 port bits. The dummy's only pre-fight jobs are getting
+    /// P2 joined in (Start pulses — the select screen picks with the attack
+    /// buttons, so stray Starts can't lock a character) and, once P1 has
+    /// locked in on the select screen, handing the P2 cursor to the player
+    /// by mirroring P1's controls. A physical P2 controller keeps working
+    /// throughout: its steer bits are OR'd in unconditionally.
+    fn pre_fight_bits(&mut self, phase: LabPhase, live_p1_bits: u16, live_p2_bits: u16) -> u16 {
+        let live_p2_steer = live_p2_bits & steer_mask();
+        match phase {
+            LabPhase::Select {
+                p2_picked: true, ..
+            } => {
+                // P2 locked in — press nothing; the game runs the VS intro
+                // on its own.
+                self.select_mirror_armed = false;
+                0
+            }
+            LabPhase::Select {
+                p1_picked: true,
+                p2_picked: false,
+            } => {
+                let mut bits = live_p1_bits & direction_mask();
+                let p1_buttons = live_p1_bits & button_mask();
+                if self.select_mirror_armed {
+                    bits |= p1_buttons;
+                } else if p1_buttons == 0 {
+                    self.select_mirror_armed = true;
+                }
+                bits | live_p2_steer
+            }
+            _ => {
+                // Attract / select-before-P1-picks / transitions: keep P2
+                // joining in so select never ends with the dummy absent.
+                self.select_mirror_armed = false;
+                let mut bits = 0;
+                if self.frame % 24 < 5 {
+                    set_action(&mut bits, Action::Start);
+                }
+                bits | live_p2_steer
+            }
         }
-        if self.frame % 32 < 6 {
-            set_action(&mut bits, Action::LowPunch);
-        }
-        bits
     }
 
     fn fight_bits(&self) -> u16 {
@@ -572,6 +648,36 @@ pub fn format_frames(frames: usize) -> String {
     format!("{:.1}s", frames as f32 / 55.0)
 }
 
+fn direction_mask() -> u16 {
+    let mut bits = 0;
+    for action in [Action::Up, Action::Down, Action::Left, Action::Right] {
+        set_action(&mut bits, action);
+    }
+    bits
+}
+
+/// The five buttons the select screen treats as "choice made"
+/// (MKSEL.ASM `psel_cursor_loop`). Start is deliberately absent — on the
+/// select screen it's only the Scorpion start+coin palette cheat, and
+/// mirroring it from P1 could trigger that by accident.
+fn button_mask() -> u16 {
+    let mut bits = 0;
+    for action in [
+        Action::HighPunch,
+        Action::LowPunch,
+        Action::HighKick,
+        Action::LowKick,
+        Action::Block,
+    ] {
+        set_action(&mut bits, action);
+    }
+    bits
+}
+
+fn steer_mask() -> u16 {
+    direction_mask() | button_mask()
+}
+
 fn set_action(bits: &mut u16, action: Action) {
     if let Some(index) = Action::ALL
         .iter()
@@ -666,7 +772,7 @@ mod tests {
             frame: 0,
             ..DummyController::default()
         };
-        let bits = dummy.next_bits(true, 0).unwrap();
+        let bits = dummy.next_bits(LabPhase::Fight, 0, 0).unwrap();
         assert!(has(bits, Action::Down));
         assert!(has(bits, Action::Block));
     }
@@ -678,7 +784,7 @@ mod tests {
             frame: 0,
             ..DummyController::default()
         };
-        assert_eq!(dummy.next_bits(true, 0), None);
+        assert_eq!(dummy.next_bits(LabPhase::Fight, 0, 0), None);
     }
 
     #[test]
@@ -688,7 +794,7 @@ mod tests {
             frame: 0,
             ..DummyController::default()
         };
-        let bits = jump_in.next_bits(true, 0).unwrap();
+        let bits = jump_in.next_bits(LabPhase::Fight, 0, 0).unwrap();
         assert!(has(bits, Action::Up));
         assert!(has(bits, Action::Left));
 
@@ -697,7 +803,7 @@ mod tests {
             frame: 0,
             ..DummyController::default()
         };
-        let bits = reversal.next_bits(true, 0).unwrap();
+        let bits = reversal.next_bits(LabPhase::Fight, 0, 0).unwrap();
         assert!(has(bits, Action::Block));
         assert!(has(bits, Action::LowPunch));
 
@@ -706,7 +812,7 @@ mod tests {
             frame: 0,
             ..DummyController::default()
         };
-        let bits = wake_block.next_bits(true, 0).unwrap();
+        let bits = wake_block.next_bits(LabPhase::Fight, 0, 0).unwrap();
         assert!(has(bits, Action::Down));
         assert!(has(bits, Action::Block));
     }
@@ -716,27 +822,120 @@ mod tests {
         let mut dummy = DummyController::default();
         dummy.start_recording();
         assert!(dummy.is_recording());
-        assert_eq!(dummy.next_bits(true, 0x0001), Some(0x0001));
-        assert_eq!(dummy.next_bits(true, 0x0002), Some(0x0002));
+        assert_eq!(dummy.next_bits(LabPhase::Fight, 0, 0x0001), Some(0x0001));
+        assert_eq!(dummy.next_bits(LabPhase::Fight, 0, 0x0002), Some(0x0002));
         assert_eq!(dummy.stop_recording(), 2);
         assert!(!dummy.is_recording());
-        assert_eq!(dummy.next_bits(true, 0), Some(0x0001));
-        assert_eq!(dummy.next_bits(true, 0), Some(0x0002));
-        assert_eq!(dummy.next_bits(true, 0), Some(0x0001));
+        assert_eq!(dummy.next_bits(LabPhase::Fight, 0, 0), Some(0x0001));
+        assert_eq!(dummy.next_bits(LabPhase::Fight, 0, 0), Some(0x0002));
+        assert_eq!(dummy.next_bits(LabPhase::Fight, 0, 0), Some(0x0001));
     }
 
     #[test]
     fn loop_completion_is_reported_once() {
         let mut dummy = DummyController::default();
         dummy.start_recording();
-        dummy.next_bits(true, 0x0001);
-        dummy.next_bits(true, 0x0002);
+        dummy.next_bits(LabPhase::Fight, 0, 0x0001);
+        dummy.next_bits(LabPhase::Fight, 0, 0x0002);
         dummy.stop_recording();
-        dummy.next_bits(true, 0);
+        dummy.next_bits(LabPhase::Fight, 0, 0);
         assert_eq!(dummy.take_loop_completed(), None);
-        dummy.next_bits(true, 0);
+        dummy.next_bits(LabPhase::Fight, 0, 0);
         assert_eq!(dummy.take_loop_completed(), Some(2));
         assert_eq!(dummy.take_loop_completed(), None);
+    }
+
+    fn bit(action: Action) -> u16 {
+        let mut bits = 0;
+        set_action(&mut bits, action);
+        bits
+    }
+
+    #[test]
+    fn phase_from_ram_classifies_select_states() {
+        assert_eq!(phase_from_ram(true, 0, 0), LabPhase::Fight);
+        assert_eq!(
+            phase_from_ram(false, CHAR_NULLED, CHAR_NULLED),
+            LabPhase::Select {
+                p1_picked: false,
+                p2_picked: false
+            }
+        );
+        assert_eq!(
+            phase_from_ram(false, 3, CHAR_NULLED),
+            LabPhase::Select {
+                p1_picked: true,
+                p2_picked: false
+            }
+        );
+        assert_eq!(
+            phase_from_ram(false, 3, 7),
+            LabPhase::PreFight,
+            "both ids real outside a fight = attract or a transition screen"
+        );
+    }
+
+    #[test]
+    fn select_pulses_start_but_never_picks_before_p1_locks_in() {
+        let mut dummy = DummyController::default();
+        let waiting = LabPhase::Select {
+            p1_picked: false,
+            p2_picked: false,
+        };
+        let mut saw_start = false;
+        for _ in 0..24 {
+            let bits = dummy.next_bits(waiting, 0, 0).unwrap();
+            saw_start |= has(bits, Action::Start);
+            assert_eq!(bits & button_mask(), 0, "no pick button before P1 locks in");
+        }
+        assert!(saw_start, "P2 must keep joining in during select");
+    }
+
+    #[test]
+    fn select_mirrors_p1_to_p2_after_p1_locks_in() {
+        let mut dummy = DummyController::default();
+        let mirror = LabPhase::Select {
+            p1_picked: true,
+            p2_picked: false,
+        };
+        // P1's confirm press is still held: directions pass, buttons don't.
+        let held = bit(Action::LowPunch) | bit(Action::Left);
+        let bits = dummy.next_bits(mirror, held, 0).unwrap();
+        assert!(has(bits, Action::Left));
+        assert!(!has(bits, Action::LowPunch));
+        // Release arms the mirror; the next press confirms P2's pick.
+        let bits = dummy.next_bits(mirror, 0, 0).unwrap();
+        assert_eq!(bits, 0);
+        let bits = dummy.next_bits(mirror, held, 0).unwrap();
+        assert!(has(bits, Action::Left));
+        assert!(has(bits, Action::LowPunch));
+        // Start never mirrors (select-screen palette cheat).
+        let bits = dummy.next_bits(mirror, bit(Action::Start), 0).unwrap();
+        assert!(!has(bits, Action::Start));
+    }
+
+    #[test]
+    fn select_goes_quiet_once_p2_is_picked() {
+        let mut dummy = DummyController::default();
+        let done = LabPhase::Select {
+            p1_picked: true,
+            p2_picked: true,
+        };
+        assert_eq!(dummy.next_bits(done, bit(Action::LowPunch), 0), Some(0));
+    }
+
+    #[test]
+    fn physical_p2_controls_steer_during_select() {
+        let mut dummy = DummyController::default();
+        let waiting = LabPhase::Select {
+            p1_picked: false,
+            p2_picked: false,
+        };
+        let bits = dummy
+            .next_bits(waiting, 0, bit(Action::Right) | bit(Action::HighKick))
+            .unwrap();
+        assert!(has(bits, Action::Right));
+        assert!(has(bits, Action::HighKick));
     }
 
     #[test]

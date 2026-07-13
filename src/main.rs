@@ -770,6 +770,36 @@ fn write_replay_summary(
     std::fs::write(replay_path.with_extension("ncrp.json"), out)
 }
 
+/// Persist the public index's score/winner for a just-downloaded replay as
+/// the same `.ncrp.json` sidecar netplay teardown writes — without one the
+/// downloaded copy lists forever as a bare score-less "—" row.
+fn write_downloaded_replay_summary(
+    path: &str,
+    p1_name: &str,
+    p2_name: &str,
+    p1_score: Option<u16>,
+    p2_score: Option<u16>,
+    frame_count: u32,
+) {
+    let (Some(p1_score), Some(p2_score)) = (p1_score, p2_score) else {
+        return;
+    };
+    if let Err(e) = write_replay_summary(
+        std::path::Path::new(path),
+        p1_name,
+        p2_name,
+        p1_score as u32,
+        p2_score as u32,
+        frame_count,
+        0,
+        None,
+        "public replay download",
+        false,
+    ) {
+        println!("[replay] Downloaded replay summary write failed: {e}");
+    }
+}
+
 fn format_duration_frames(frames: u32) -> String {
     let total_seconds = (frames as u64 + 27) / 55;
     let minutes = total_seconds / 60;
@@ -1064,6 +1094,12 @@ fn set_replay_select_status(state: &mut AppState, status: impl Into<String>) {
     let status = status.into();
     if let AppState::FpUi(fp_ui::FpScreen::ReplaySelect { status: screen_status, .. }) = state {
         *screen_status = Some(status.clone());
+    }
+}
+
+fn set_ghost_select_status(state: &mut AppState, status: impl Into<String>) {
+    if let AppState::FpUi(fp_ui::FpScreen::GhostSelect { status: screen_status, .. }) = state {
+        *screen_status = Some(status.into());
     }
 }
 
@@ -2849,17 +2885,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     auto_start_frame = 0;
                                                     state = AppState::Playing;
                                                 } else {
+                                                    // The usual cause: the anchor savestate was
+                                                    // captured on a different ROM/core build than
+                                                    // the one now running — every ROM rebuild
+                                                    // orphans previously recorded drones.
                                                     println!("[ghost] Anchor state rejected by core.");
-                                                    state = AppState::FpUi(fp_ui::FpScreen::LabMenu { cursor: 1 });
+                                                    set_ghost_select_status(
+                                                        &mut state,
+                                                        "Drone rejected: recorded on a different ROM/core build",
+                                                    );
                                                 }
                                             }
                                             Err(e) => {
                                                 println!("[ghost] Load failed: {e}");
-                                                state = AppState::FpUi(fp_ui::FpScreen::LabMenu { cursor: 1 });
+                                                set_ghost_select_status(
+                                                    &mut state,
+                                                    format!("Drone load failed: {e}"),
+                                                );
                                             }
                                         }
                                     } else {
-                                        state = AppState::FpUi(fp_ui::FpScreen::LabMenu { cursor: 1 });
+                                        set_ghost_select_status(
+                                            &mut state,
+                                            "Game core unavailable - check ROM setup",
+                                        );
                                     }
                                 }
                                 fp_ui::FpResult::DownloadGhost(ghost_id) => {
@@ -2918,6 +2967,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     set_replay_select_status(&mut state, "Downloading public replay...");
                                     match download_remote_replay(&url) {
                                         Ok(path) => {
+                                            // The URL came from the selected entry, whose
+                                            // index metadata carries the score the bare
+                                            // .ncrp file doesn't.
+                                            if let Some(entry) = selected_replay_entry(&state)
+                                                .filter(|e| e.remote_url.as_deref() == Some(url.as_str()))
+                                            {
+                                                write_downloaded_replay_summary(
+                                                    &path,
+                                                    &entry.p1_name,
+                                                    &entry.p2_name,
+                                                    entry.p1_score,
+                                                    entry.p2_score,
+                                                    entry.frame_count,
+                                                );
+                                            }
                                             ensure_core_loaded(&mut core, &mut audio_queue, &audio_subsystem)?;
                                             if let Some(c) = &core {
                                                 match prepare_replay_review(c, &path) {
@@ -4726,8 +4790,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let p1_hp = memory::peek_u16(c, P1_HP_ADDR, memory::Endian::Little)
                                 .unwrap_or(0);
                             let fight_loaded = matches!(gstate, GS_FIGHTING | 0x03) && p1_hp > 0;
+                            // A failed peek reads as 0 (a real fighter id), so
+                            // the phase degrades to PreFight — the old
+                            // join-mash behavior — rather than stranding the
+                            // select screen waiting on a mirror that can't
+                            // happen.
+                            let p1_char =
+                                memory::peek_u16(c, mk2_addrs::P1_CHAR_ADDR, memory::Endian::Little)
+                                    .unwrap_or(0);
+                            let p2_char =
+                                memory::peek_u16(c, mk2_addrs::P2_CHAR_ADDR, memory::Endian::Little)
+                                    .unwrap_or(0);
+                            let phase = lab::phase_from_ram(fight_loaded, p1_char, p2_char);
+                            let live_p1_bits = input::snapshot_player(Player::P1);
                             let live_p2_bits = input::snapshot_player(Player::P2);
-                            if let Some(bits) = lab_dummy.next_bits(fight_loaded, live_p2_bits) {
+                            if let Some(bits) = lab_dummy.next_bits(phase, live_p1_bits, live_p2_bits)
+                            {
                                 input::apply_snapshot(Player::P2, bits);
                             }
                             if let Some(frames) = lab_dummy.take_auto_finished_loop() {
@@ -6274,6 +6352,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     match match_replay::find_matching_remote_replay(&row, &replays) {
                         Some(meta) => match download_remote_replay(&meta.url) {
                             Ok(path) => {
+                                write_downloaded_replay_summary(
+                                    &path,
+                                    &meta.p1_name,
+                                    &meta.p2_name,
+                                    meta.p1_score,
+                                    meta.p2_score,
+                                    meta.frame_count,
+                                );
                                 ensure_core_loaded(&mut core, &mut audio_queue, &audio_subsystem)?;
                                 if let Some(c) = &core {
                                     match prepare_replay_review(c, &path) {
@@ -6413,15 +6499,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Some((entries, status)) = entries_status {
                         match rx.try_recv() {
                             Ok(matchmaking::PublicReplayUpdate::Loaded(replays)) => {
-                                let loaded_count = replays.len();
+                                let mut loaded_count = 0;
                                 let mut existing = std::collections::HashSet::new();
-                                for entry in entries.iter() {
+                                let mut local_by_filename =
+                                    std::collections::HashMap::new();
+                                for (i, entry) in entries.iter().enumerate() {
                                     if let Some(url) = &entry.remote_url {
                                         existing.insert(url.clone());
+                                    } else {
+                                        local_by_filename.insert(entry.filename.clone(), i);
                                     }
                                 }
                                 for meta in replays {
+                                    // Same "never list" rule the local scan applies.
+                                    if meta.frame_count < match_replay::MIN_LISTED_REPLAY_FRAMES {
+                                        continue;
+                                    }
+                                    // A public replay that's already been watched exists
+                                    // locally under its download filename — list it once
+                                    // (as the local copy), and backfill the score/winner
+                                    // the bare downloaded file has no sidecar for, so it
+                                    // doesn't sit there as a "—" row.
+                                    if let Some(&i) =
+                                        local_by_filename.get(&remote_replay_filename(&meta.url))
+                                    {
+                                        let entry = &mut entries[i];
+                                        if entry.p1_score.is_none() {
+                                            entry.p1_score = meta.p1_score;
+                                        }
+                                        if entry.p2_score.is_none() {
+                                            entry.p2_score = meta.p2_score;
+                                        }
+                                        if entry.winner.is_empty() {
+                                            entry.winner = meta.winner;
+                                        }
+                                        if entry.duration.is_empty() {
+                                            entry.duration = meta.duration;
+                                        }
+                                        if entry.recorded_at.is_empty() {
+                                            entry.recorded_at = meta.recorded_at;
+                                        }
+                                        loaded_count += 1;
+                                        continue;
+                                    }
                                     if existing.insert(meta.url.clone()) {
+                                        loaded_count += 1;
                                         entries.push(menu::ReplayEntry {
                                             filename: meta.filename,
                                             path: String::new(),
@@ -6553,8 +6675,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 state = AppState::Playing;
                                             } else {
                                                 println!("[ghost] Anchor state rejected.");
-                                                *download_status =
-                                                    Some("Error: anchor state rejected".into());
+                                                *download_status = Some(
+                                                    "Drone rejected: recorded on a different ROM/core build"
+                                                        .into(),
+                                                );
                                             }
                                         }
                                         Err(e) => {
