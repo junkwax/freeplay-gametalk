@@ -23,15 +23,19 @@ const MENU_KEYS: [(&str, &str); 6] = [
     ("About", "SELECT"),
 ];
 
-const LAB_KEYS: [(&str, &str); 9] = [
+// Must stay in step with the `Event::KeyDown` lab arms in main.rs and the
+// in-lab hotkey overlay (`render::draw_lab_assist_overlay`).
+const LAB_KEYS: [(&str, &str); 11] = [
     ("Hitbox overlay", "F2"),
-    ("Infinite health P1", "F3"),
-    ("Infinite health P2", "F4"),
-    ("Freeze timer", "F5"),
-    ("Dummy behavior", "F6"),
-    ("Punish trainer", "F7"),
-    ("Save RAM state", "F8"),
-    ("Load RAM state / record ghost", "F9"),
+    ("Infinite health (both)", "F3"),
+    ("Freeze timer", "F4"),
+    ("Dummy behavior / record", "F5"),
+    ("Load reset slot", "F6"),
+    ("Save reset slot", "F7"),
+    ("Load drone", "F8"),
+    ("Save drone", "F9"),
+    ("Punish trainer", "F10"),
+    ("Hide lab overlay", "F11"),
     ("Play vs. drone", "F12"),
 ];
 

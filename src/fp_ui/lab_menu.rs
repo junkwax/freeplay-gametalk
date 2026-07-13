@@ -45,16 +45,21 @@ pub const ITEMS: [(&str, &str); 2] = [
 /// (key, label, hint) — F-key shortcuts available inside the in-game Lab
 /// trainer overlay (legacy-rendered; see this module's doc comment). Static
 /// reference text, not read from any live binding table — the Lab overlay's
-/// F-key assignments are hardcoded in `main.rs`, not user-rebindable.
-const TOOLS: [(&str, &str, &str); 8] = [
+/// F-key assignments are hardcoded in `main.rs`, not user-rebindable. Must
+/// stay in step with the `Event::KeyDown` lab arms there and the in-lab
+/// hotkey overlay (`render::draw_lab_assist_overlay`).
+const TOOLS: [(&str, &str, &str); 11] = [
     ("F2", "Hitbox Overlay", "Show collision boxes"),
-    ("F3", "Infinite Health P1", "Toggle on / off"),
-    ("F4", "Infinite Health P2", "Toggle on / off"),
-    ("F5", "Freeze Timer", "Pause match clock"),
-    ("F6", "Dummy Behavior", "CPU / crouch / jump / block"),
-    ("F7", "Punish Trainer", "Mark unsafe moves on block"),
-    ("F8", "Save RAM State", "Snapshot current frame"),
-    ("F9", "Load RAM State / Record Ghost", "Restore snapshot or record ghost"),
+    ("F3", "Infinite Health", "Both players, toggle on / off"),
+    ("F4", "Freeze Timer", "Pause match clock"),
+    ("F5", "Dummy Behavior", "Cycle modes \u{b7} Ctrl records a loop"),
+    ("F6", "Load Reset Slot", "Ctrl+F6 cycles position preset"),
+    ("F7", "Save Reset Slot", "Ctrl+F7 cycles slot 1-3"),
+    ("F8", "Load Drone", "Play back saved recording"),
+    ("F9", "Save Drone", "Record inputs to a drone file"),
+    ("F10", "Punish Trainer", "Shift+F10 resets lab stats"),
+    ("F11", "Hide Overlay", "Toggle in-lab help panels"),
+    ("F12", "VS Drone", "Fight a recorded opponent"),
 ];
 
 pub fn draw(
@@ -209,9 +214,10 @@ fn draw_shortcut_panel(
     let grid_top = y + 22.0 + 34.0;
     let col_w = (w - pad * 2.0) / 2.0;
     let row_h = 60.0;
+    let rows_per_col = TOOLS.len().div_ceil(2);
     for (i, (key, label, hint)) in TOOLS.iter().enumerate() {
-        let col = i / 4;
-        let row = i % 4;
+        let col = i / rows_per_col;
+        let row = i % rows_per_col;
         let cx = x + pad + col as f32 * col_w;
         let cy = grid_top + row as f32 * row_h;
 
