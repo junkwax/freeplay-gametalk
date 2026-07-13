@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.8.5 - 2026-07-13
+
+### Fixed
+
+- Replay takeover was laggy to the point of unplayable: the viewer's
+  scrub controls stayed active during takeover, so every movement input
+  also triggered a timeline seek that re-simulates the recording from
+  the start (seconds-long stalls when deep into a set), jumping changed
+  playback speed, and attack buttons dropped bookmarks and clip points.
+  While a takeover is active, your inputs now go only to the fighter.
+- Takeover no longer arms with under 3 seconds of recording left — it
+  would freeze straight into the retry screen mid-countdown. A toast
+  explains instead.
+- Finished sets no longer appear twice in Replays. The auto-uploaded
+  copy of your own recording coming back from the public index is now
+  recognized and collapses onto its local row (which also picks up the
+  score/winner from the index).
+
+### Added
+
+- Replay viewer visibility toggles: **H** hides the whole review panel,
+  **E** hides the event sidebar and timeline markers. Purely visual —
+  every control (seeks, pause, speed, bookmarks, clips, takeover) keeps
+  working while hidden, and the choice sticks for the session.
+
 ## 0.8.4 - 2026-07-13
 
 ### Changed
