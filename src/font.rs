@@ -406,6 +406,19 @@ fn font_search_paths(candidates: &[&str]) -> Vec<PathBuf> {
     paths
 }
 
+/// True when every bundled fp_ui font file is resolvable (working directory
+/// or next to the exe). The fp font cache loads files lazily at first draw,
+/// so a package missing `assets/fonts/` wouldn't fail until the first fp_ui
+/// frame — whose error aborts `main()`. Probing up front lets startup fall
+/// back to the legacy UI with a console message instead of a silent exit.
+pub fn fp_font_assets_present() -> bool {
+    FpFont::ALL.iter().all(|font| {
+        let candidates = font.candidates();
+        let refs: Vec<&str> = candidates.iter().map(String::as_str).collect();
+        resolve_font(&refs).is_some()
+    })
+}
+
 fn overlay_font_candidates() -> Vec<String> {
     ["media/mk2.ttf", "src/media/mk2.ttf", "mk2.ttf"]
         .into_iter()
@@ -447,6 +460,29 @@ pub enum FpFont {
 }
 
 impl FpFont {
+    const ALL: [FpFont; 12] = [
+        FpFont::SairaCondensedMedium,
+        FpFont::SairaCondensedSemiBold,
+        FpFont::SairaCondensedBold,
+        FpFont::SairaCondensedExtraBold,
+        FpFont::SairaCondensedBlack,
+        FpFont::SairaRegular,
+        FpFont::SairaMedium,
+        FpFont::SairaSemiBold,
+        FpFont::SairaBold,
+        FpFont::ChakraPetchMedium,
+        FpFont::ChakraPetchSemiBold,
+        FpFont::ChakraPetchBold,
+    ];
+
+    fn candidates(self) -> [String; 3] {
+        [
+            format!("assets/fonts/{}", self.filename()),
+            format!("src/assets/fonts/{}", self.filename()),
+            self.filename().to_string(),
+        ]
+    }
+
     fn filename(self) -> &'static str {
         match self {
             FpFont::SairaCondensedMedium => "SairaCondensed-Medium.ttf",
@@ -540,11 +576,7 @@ impl<'ttf, 'tc> FpFontCache<'ttf, 'tc> {
         if self.fonts.contains_key(&(font, px, italic)) {
             return Ok(());
         }
-        let candidates = [
-            format!("assets/fonts/{}", font.filename()),
-            format!("src/assets/fonts/{}", font.filename()),
-            font.filename().to_string(),
-        ];
+        let candidates = font.candidates();
         let candidate_refs: Vec<&str> = candidates.iter().map(String::as_str).collect();
         let path = resolve_font(&candidate_refs)
             .ok_or_else(|| format!("{} not found in assets/fonts/", font.filename()))?;

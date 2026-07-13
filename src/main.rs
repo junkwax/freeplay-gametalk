@@ -1810,8 +1810,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut fp_fonts = ttf_ctx
         .as_ref()
         .map(|ctx| font::FpFontCache::new(&texture_creator, ctx));
+    if cfg.new_ui && fp_fonts.is_some() && !font::fp_font_assets_present() {
+        // Fonts load lazily at first draw, so without this probe a package
+        // missing assets/fonts/ wouldn't fail until the first fp_ui frame —
+        // whose error aborts main(), i.e. the app "doesn't launch".
+        println!("[fp_ui] assets/fonts/ not found next to the binary; falling back to the legacy UI despite new_ui=true");
+        fp_fonts = None;
+    }
     if cfg.new_ui && fp_fonts.is_none() {
-        println!("[fp_ui] SDL2_ttf unavailable; falling back to the legacy UI despite new_ui=true");
+        // The asset probe above already printed its own message.
+        if ttf_ctx.is_none() {
+            println!("[fp_ui] SDL2_ttf unavailable; falling back to the legacy UI despite new_ui=true");
+        }
+        // In-memory downgrade only (config.toml keeps new_ui=true unless a
+        // later settings change saves it): with no fp fonts, an
+        // AppState::FpUi state has no draw path at all.
+        cfg.new_ui = false;
     }
 
     let mut event_pump = sdl_context.event_pump()?;

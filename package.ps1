@@ -218,6 +218,28 @@ if ($ttf_path) {
     Write-Host "  ⚠ mk2.ttf not found — app will use bitmap fallback" -ForegroundColor Yellow
 }
 
+# ── Copy fp_ui assets (fonts + wordmark) ─────────────────────────────────────
+# The new UI (config new_ui = true) resolves these next to the exe and loads
+# them lazily at its first frame — a package without assets\fonts\ used to
+# exit on that first frame, i.e. "doesn't launch". The OFL-*.txt license
+# files must ship alongside the TTFs (SIL Open Font License requirement).
+if (Test-Path "assets\fonts") {
+    New-Item -ItemType Directory -Force -Path "$OUT_DIR\assets\fonts" | Out-Null
+    Copy-Item "assets\fonts\*" "$OUT_DIR\assets\fonts\" -Force
+    $fontCount = (Get-ChildItem "$OUT_DIR\assets\fonts").Count
+    Write-Host "  ✓ Copied assets\fonts ($fontCount files)"
+} else {
+    Write-Host "  ❌ assets\fonts not found; the new UI (new_ui = true) cannot render without it" -ForegroundColor Red
+    exit 1
+}
+if (Test-Path "assets\logo\wordmark.png") {
+    New-Item -ItemType Directory -Force -Path "$OUT_DIR\assets\logo" | Out-Null
+    Copy-Item "assets\logo\wordmark.png" "$OUT_DIR\assets\logo\" -Force
+    Write-Host "  ✓ Copied assets\logo\wordmark.png"
+} else {
+    Write-Host "  ⚠ assets\logo\wordmark.png not found — header falls back to text" -ForegroundColor Yellow
+}
+
 if (-not (Test-Path "appicon.png")) {
     Write-Host "  ❌ appicon.png not found; packaged builds require a transparent PNG app icon" -ForegroundColor Red
     exit 1
