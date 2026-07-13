@@ -1033,8 +1033,18 @@ pub fn nav(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult {
             }
             _ => FpResult::Stay,
         },
-        FpScreen::ClaimUsername { value, checking, .. } => match input {
+        FpScreen::ClaimUsername { value, status, checking } => match input {
             FpNav::Confirm if !*checking => FpResult::SubmitUsername(value.clone()),
+            // Triangle rolls a fresh Wu-style name into the field — the
+            // "regenerate" affordance the generator's `variant` seed was
+            // built for but that lost its caller when the legacy menus
+            // were deleted. Purely in-screen: nothing is claimed until
+            // the player confirms.
+            FpNav::Action if !*checking => {
+                *value = crate::wuname::reroll_username();
+                *status = "New callsign rolled - Enter to claim it".into();
+                FpResult::Stay
+            }
             // Back abandons the claim and returns to the Lobby's Quick
             // Match tab it was triggered from (matching legacy
             // `MatchUsername`, whose `nav_back` arm exits to the main

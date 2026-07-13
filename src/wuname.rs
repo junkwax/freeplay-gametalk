@@ -100,6 +100,15 @@ pub fn random_username() -> String {
     random_username_variant(0)
 }
 
+/// Roll a fresh name, guaranteed to differ across rapid presses — the
+/// monotonic counter feeds `variant`, which exists precisely because
+/// Windows' SystemTime is too coarse to tell a re-roll loop's calls apart.
+pub fn reroll_username() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static REROLL_COUNTER: AtomicU64 = AtomicU64::new(1);
+    random_username_variant(REROLL_COUNTER.fetch_add(1, Ordering::Relaxed))
+}
+
 /// Like `random_username` but mixes in a caller-supplied variant so successive
 /// calls yield distinct names even when the system clock resolution is too
 /// coarse to differ between calls (notably on Windows, where SystemTime can

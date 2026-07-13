@@ -25,6 +25,12 @@ pub enum FpNav {
     /// same physical button in `sdl2::controller`) rather than a face
     /// button.
     Info,
+    /// Screen-specific tertiary action on Triangle (SDL `Button::Y`) —
+    /// currently only the Claim Username screen's "roll a new name".
+    /// Keyboard fallback is Tab, deliberately not a letter key: screens
+    /// with this action also take live hardware-keyboard text input, and a
+    /// letter would type into the field instead.
+    Action,
 }
 
 pub fn event_to_fp_nav(ev: &Event) -> Option<FpNav> {
@@ -41,6 +47,7 @@ pub fn event_to_fp_nav(ev: &Event) -> Option<FpNav> {
             Keycode::PageUp => Some(FpNav::PrevTab),
             Keycode::PageDown => Some(FpNav::NextTab),
             Keycode::I => Some(FpNav::Info),
+            Keycode::Tab => Some(FpNav::Action),
             _ => None,
         },
         Event::ControllerButtonDown { button, .. } => match button {
@@ -53,6 +60,7 @@ pub fn event_to_fp_nav(ev: &Event) -> Option<FpNav> {
             Button::LeftShoulder => Some(FpNav::PrevTab),
             Button::RightShoulder => Some(FpNav::NextTab),
             Button::Back => Some(FpNav::Info),
+            Button::Y => Some(FpNav::Action),
             _ => None,
         },
         _ => None,
@@ -96,12 +104,22 @@ mod tests {
     }
 
     #[test]
-    fn ignores_unmapped_buttons() {
+    fn maps_triangle_to_tertiary_action() {
         let y = Event::ControllerButtonDown {
             timestamp: 0,
             which: 0,
             button: Button::Y,
         };
-        assert_eq!(event_to_fp_nav(&y), None);
+        assert_eq!(event_to_fp_nav(&y), Some(FpNav::Action));
+    }
+
+    #[test]
+    fn ignores_unmapped_buttons() {
+        let guide = Event::ControllerButtonDown {
+            timestamp: 0,
+            which: 0,
+            button: Button::Guide,
+        };
+        assert_eq!(event_to_fp_nav(&guide), None);
     }
 }

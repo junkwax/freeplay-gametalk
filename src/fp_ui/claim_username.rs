@@ -115,7 +115,14 @@ pub fn draw(
         canvas,
         fonts,
         scale,
-        &[chrome::PROMPT_SELECT, chrome::PROMPT_BACK],
+        &[
+            chrome::PROMPT_SELECT,
+            // "TRI" letters rather than the Unicode triangle glyph
+            // (U+25B3) — missing from Saira Condensed Bold, same tofu
+            // issue as PROMPT_BACK's U+25CB.
+            chrome::FooterPrompt { glyph: "TRI", label: "New Name", color: theme::BTN_TRIANGLE },
+            chrome::PROMPT_BACK,
+        ],
         FooterRight::Text("TYPE TO EDIT \u{b7} ENTER TO CLAIM"),
     )?;
     Ok(())
