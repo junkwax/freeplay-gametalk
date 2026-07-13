@@ -1001,13 +1001,22 @@ pub fn draw_fight_overlay(
     style: crate::config::ScorebarStyle,
 ) -> Result<(), String> {
     match style {
-        crate::config::ScorebarStyle::Plates => {
-            draw_fight_overlay_plates(canvas, font, window_w, p1_name, p2_name, p1_wins, p2_wins)
-        }
+        crate::config::ScorebarStyle::Plates => draw_fight_overlay_plates(
+            canvas, font, window_w, window_h, p1_name, p2_name, p1_wins, p2_wins,
+        ),
         crate::config::ScorebarStyle::Centered => {
             draw_fight_overlay_centered(canvas, font, window_w, window_h, p1_name, p2_name)
         }
     }
+}
+
+/// Integer HUD scale for the fight scoreboard, derived from window height so
+/// the overhead text keeps its proportions instead of staying at a fixed
+/// pixel size (readable in a small window, tiny in fullscreen). 540 as the
+/// divisor keeps the default 762-tall window at scale 1 and doubles at
+/// 1080p; bitmap overlay text only scales in whole steps.
+fn fight_overlay_scale(window_h: i32) -> i32 {
+    ((window_h as f32 / 540.0).round() as i32).max(1)
 }
 
 pub fn draw_chat_overlay(
@@ -1774,16 +1783,19 @@ fn format_input_frames(frames: u32) -> String {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_fight_overlay_plates(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     font: &mut Font,
     window_w: i32,
+    window_h: i32,
     p1_name: &str,
     p2_name: &str,
     p1_wins: u32,
     p2_wins: u32,
 ) -> Result<(), String> {
-    let name_scale: u32 = 1;
+    let s = fight_overlay_scale(window_h);
+    let name_scale: u32 = s as u32;
     let score_scale: u32 = name_scale;
     let white = sdl2::pixels::Color::RGBA(248, 248, 250, 230);
     let accent = sdl2::pixels::Color::RGBA(45, 20, 55, 200);
@@ -1791,28 +1803,28 @@ fn draw_fight_overlay_plates(
 
     let center_x = window_w / 2;
     let gap = ((window_w as f32) * 0.18) as i32;
-    let gap = gap.clamp(190, 280);
-    let outer_pad = -22;
-    let bar_y = -10;
-    let bar_h = 36;
-    let slant = 13;
+    let gap = gap.clamp(190 * s, 280 * s);
+    let outer_pad = -22 * s;
+    let bar_y = -10 * s;
+    let bar_h = 36 * s;
+    let slant = 13 * s;
     let left_x = outer_pad;
     let right_x = center_x + gap / 2;
-    let half_w = (center_x - gap / 2 - outer_pad).max(150);
-    let name_max_w = (half_w - 102).max(90);
+    let half_w = (center_x - gap / 2 - outer_pad).max(150 * s);
+    let name_max_w = (half_w - 102 * s).max(90 * s);
 
     let left = draw_scoreplate(
-        canvas, left_x, bar_y, half_w, bar_h, slant, false, fill, accent,
+        canvas, left_x, bar_y, half_w, bar_h, slant, s, false, fill, accent,
     )?;
     let right = draw_scoreplate(
-        canvas, right_x, bar_y, half_w, bar_h, slant, true, fill, accent,
+        canvas, right_x, bar_y, half_w, bar_h, slant, s, true, fill, accent,
     )?;
 
     let p1 = fit_overlay_text(font, &p1_name.to_uppercase(), name_scale, name_max_w);
     let p2 = fit_overlay_text(font, &p2_name.to_uppercase(), name_scale, name_max_w);
 
     let p2_w = font.text_width_overlay(&p2, name_scale);
-    let name_y = bar_y + 9;
+    let name_y = bar_y + 9 * s;
     font.draw_overlay(canvas, &p1, left.name_x, name_y, name_scale, white)?;
     font.draw_overlay(canvas, &p2, right.name_x - p2_w, name_y, name_scale, white)?;
 
@@ -1851,7 +1863,8 @@ fn draw_fight_overlay_centered(
     p1_name: &str,
     p2_name: &str,
 ) -> Result<(), String> {
-    let name_scale: u32 = 1;
+    let s = fight_overlay_scale(window_h);
+    let name_scale: u32 = s as u32;
     let white = sdl2::pixels::Color::RGBA(248, 248, 250, 235);
     let shadow = sdl2::pixels::Color::RGBA(8, 6, 14, 200);
 
@@ -1859,12 +1872,12 @@ fn draw_fight_overlay_centered(
     // Tighter gap than before — gamertags should hug the MK2 timer rather than
     // float far apart.
     let inner_gap = ((window_w as f32) * 0.10).round() as i32;
-    let inner_gap = inner_gap.clamp(90, 170);
-    let name_max_w = ((center_x - inner_gap / 2) - 12).max(80);
+    let inner_gap = inner_gap.clamp(90 * s, 170 * s);
+    let name_max_w = ((center_x - inner_gap / 2) - 12 * s).max(80 * s);
     // Sit just under MK2's timer (top-center of emu frame). Anchor proportionally
     // to window height so it stays put across windowed/fullscreen sizes.
     let name_y = ((window_h as f32) * 0.065).round() as i32;
-    let name_y = name_y.clamp(36, 84);
+    let name_y = name_y.clamp(36 * s, 84 * s);
 
     let p1 = fit_overlay_text(font, &p1_name.to_uppercase(), name_scale, name_max_w);
     let p2 = fit_overlay_text(font, &p2_name.to_uppercase(), name_scale, name_max_w);
@@ -1874,8 +1887,8 @@ fn draw_fight_overlay_centered(
     let p1_x = center_x - inner_gap / 2 - p1_w;
     let p2_x = center_x + inner_gap / 2;
 
-    font.draw_overlay(canvas, &p1, p1_x + 1, name_y + 1, name_scale, shadow)?;
-    font.draw_overlay(canvas, &p2, p2_x + 1, name_y + 1, name_scale, shadow)?;
+    font.draw_overlay(canvas, &p1, p1_x + s, name_y + s, name_scale, shadow)?;
+    font.draw_overlay(canvas, &p2, p2_x + s, name_y + s, name_scale, shadow)?;
     font.draw_overlay(canvas, &p1, p1_x, name_y, name_scale, white)?;
     font.draw_overlay(canvas, &p2, p2_x, name_y, name_scale, white)?;
 
@@ -1887,6 +1900,7 @@ struct ScoreplateLayout {
     score_x: i32,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_scoreplate(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     x: i32,
@@ -1894,34 +1908,35 @@ fn draw_scoreplate(
     w: i32,
     h: i32,
     slant: i32,
+    s: i32,
     mirror: bool,
     fill: sdl2::pixels::Color,
     accent: sdl2::pixels::Color,
 ) -> Result<ScoreplateLayout, String> {
-    let tab_w = 70;
-    let gap = 8;
+    let tab_w = 70 * s;
+    let gap = 8 * s;
     let main_x = if mirror { x } else { x + tab_w + gap };
     let main_w = w - tab_w - gap;
     let tab_x = if mirror { x + w - tab_w } else { x };
 
-    draw_slanted_rect(canvas, main_x, y + 3, main_w, h - 3, slant, mirror, accent)?;
+    draw_slanted_rect(canvas, main_x, y + 3 * s, main_w, h - 3 * s, slant, mirror, accent)?;
     draw_slanted_rect(
         canvas,
-        main_x + if mirror { 2 } else { 4 },
-        y + 7,
-        main_w - 8,
-        h - 11,
+        main_x + if mirror { 2 * s } else { 4 * s },
+        y + 7 * s,
+        main_w - 8 * s,
+        h - 11 * s,
         slant,
         mirror,
         fill,
     )?;
-    draw_slanted_rect(canvas, tab_x, y + 3, tab_w, h - 3, slant, mirror, accent)?;
+    draw_slanted_rect(canvas, tab_x, y + 3 * s, tab_w, h - 3 * s, slant, mirror, accent)?;
     draw_slanted_rect(
         canvas,
-        tab_x + if mirror { 4 } else { 2 },
-        y + 7,
-        tab_w - 8,
-        h - 11,
+        tab_x + if mirror { 4 * s } else { 2 * s },
+        y + 7 * s,
+        tab_w - 8 * s,
+        h - 11 * s,
         slant,
         mirror,
         fill,
@@ -1929,14 +1944,14 @@ fn draw_scoreplate(
 
     Ok(ScoreplateLayout {
         name_x: if mirror {
-            main_x + main_w - 30
+            main_x + main_w - 30 * s
         } else {
-            main_x + 30
+            main_x + 30 * s
         },
         score_x: if mirror {
-            tab_x + tab_w / 2 - 4
+            tab_x + tab_w / 2 - 4 * s
         } else {
-            tab_x + tab_w / 2 + 4
+            tab_x + tab_w / 2 + 4 * s
         },
     })
 }

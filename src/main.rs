@@ -3918,10 +3918,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         && ghost_playback.is_none() =>
                     {
                         let on = punish_trainer.toggle();
-                        toast = Some((
-                            format!("Punish trainer {}", if on { "ON" } else { "OFF" }),
-                            Instant::now() + Duration::from_millis(1800),
-                        ));
+                        // The trainer only arms when a recorded dummy loop
+                        // wraps — turning it on without one looks dead, so
+                        // the toast teaches the missing step.
+                        let (message, ms) = if !on {
+                            ("Punish trainer OFF".to_string(), 1800)
+                        } else if lab_dummy.has_loop() {
+                            (
+                                "Punish ON - window arms each loop, hit the dummy fast".to_string(),
+                                3200,
+                            )
+                        } else {
+                            (
+                                "Punish ON - Ctrl+F5: record dummy's move, Ctrl+F5 again to loop it"
+                                    .to_string(),
+                                4200,
+                            )
+                        };
+                        toast = Some((message, Instant::now() + Duration::from_millis(ms)));
                     }
                     Event::KeyDown {
                         keycode: Some(Keycode::F10),
@@ -4006,7 +4020,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     {
                         if lab_dummy.is_recording() {
                             let frames = lab_dummy.stop_recording();
-                            let message = if frames > 0 {
+                            let message = if frames > 0 && punish_trainer.is_enabled() {
+                                format!(
+                                    "Dummy loop saved {} - punish window arms each loop",
+                                    lab::format_frames(frames)
+                                )
+                            } else if frames > 0 {
                                 format!("Dummy loop saved {}", lab::format_frames(frames))
                             } else {
                                 "Dummy loop empty".into()
@@ -4849,9 +4868,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 memory::peek_u16(c, mk2_addrs::P2_CHAR_ADDR, memory::Endian::Little)
                                     .unwrap_or(0);
                             let phase = lab::phase_from_ram(fight_loaded, p1_char, p2_char);
+                            let p1_x = memory::peek_u16(c, mk2_addrs::P1_X_ADDR, memory::Endian::Little)
+                                .unwrap_or(0);
+                            let p2_x = memory::peek_u16(c, mk2_addrs::P2_X_ADDR, memory::Endian::Little)
+                                .unwrap_or(u16::MAX);
+                            let p2_right_of_p1 = p2_x >= p1_x;
                             let live_p1_bits = input::snapshot_player(Player::P1);
                             let live_p2_bits = input::snapshot_player(Player::P2);
-                            if let Some(bits) = lab_dummy.next_bits(phase, live_p1_bits, live_p2_bits)
+                            if let Some(bits) =
+                                lab_dummy.next_bits(phase, p2_right_of_p1, live_p1_bits, live_p2_bits)
                             {
                                 input::apply_snapshot(Player::P2, bits);
                             }

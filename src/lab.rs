@@ -282,6 +282,13 @@ impl DummyController {
         self.auto_finished_loop = None;
     }
 
+    /// True when a recorded loop is armed for playback — the punish
+    /// trainer's arming signal only fires on loop wrap, so without one the
+    /// trainer never scores.
+    pub fn has_loop(&self) -> bool {
+        !self.loop_frames.is_empty()
+    }
+
     pub fn take_auto_finished_loop(&mut self) -> Option<usize> {
         self.auto_finished_loop.take()
     }
@@ -304,9 +311,13 @@ impl DummyController {
         }
     }
 
+    /// `p2_right_of_p1` orients side-relative presets (Jump In) toward the
+    /// player — hardcoding a direction sends the dummy the wrong way after
+    /// a side switch.
     pub fn next_bits(
         &mut self,
         phase: LabPhase,
+        p2_right_of_p1: bool,
         live_p1_bits: u16,
         live_p2_bits: u16,
     ) -> Option<u16> {
@@ -335,7 +346,7 @@ impl DummyController {
             return Some(bits);
         }
         if fight_loaded {
-            Some(self.fight_bits())
+            Some(self.fight_bits(p2_right_of_p1))
         } else {
             Some(self.pre_fight_bits(phase, live_p1_bits, live_p2_bits))
         }
@@ -384,7 +395,7 @@ impl DummyController {
         }
     }
 
-    fn fight_bits(&self) -> u16 {
+    fn fight_bits(&self, p2_right_of_p1: bool) -> u16 {
         let mut bits = 0;
         match self.mode {
             DummyMode::Stand | DummyMode::Off => {}
@@ -401,23 +412,35 @@ impl DummyController {
             }
             DummyMode::JumpIn => {
                 let phase = self.frame % 72;
+                let toward_p1 = if p2_right_of_p1 {
+                    Action::Left
+                } else {
+                    Action::Right
+                };
                 if phase < 14 {
                     set_action(&mut bits, Action::Up);
-                    set_action(&mut bits, Action::Left);
+                    set_action(&mut bits, toward_p1);
                 } else if (24..31).contains(&phase) {
                     set_action(&mut bits, Action::HighKick);
                 }
             }
+            // MK2 ignores attack buttons while Block is held, so both mash
+            // modes must *release* block for the press frames — Block+LP on
+            // the same frame just blocks and the "mash" never comes out.
             DummyMode::ReversalMash => {
-                set_action(&mut bits, Action::Block);
                 if self.frame % 16 < 4 {
                     set_action(&mut bits, Action::LowPunch);
+                } else {
+                    set_action(&mut bits, Action::Block);
                 }
             }
             DummyMode::ThrowTech => {
-                if self.frame % 24 < 6 {
-                    set_action(&mut bits, Action::Block);
+                // Guarded most of the cycle (blocking also denies throws in
+                // MK2), with periodic counter-throw attempts (close LP).
+                if self.frame % 24 < 4 {
                     set_action(&mut bits, Action::LowPunch);
+                } else {
+                    set_action(&mut bits, Action::Block);
                 }
             }
             DummyMode::WakeBlock => {
@@ -540,6 +563,10 @@ impl DamageTracker {
 }
 
 impl PunishTrainer {
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
     pub fn toggle(&mut self) -> bool {
         self.enabled = !self.enabled;
         self.window_remaining = 0;
@@ -772,7 +799,7 @@ mod tests {
             frame: 0,
             ..DummyController::default()
         };
-        let bits = dummy.next_bits(LabPhase::Fight, 0, 0).unwrap();
+        let bits = dummy.next_bits(LabPhase::Fight, true, 0, 0).unwrap();
         assert!(has(bits, Action::Down));
         assert!(has(bits, Action::Block));
     }
@@ -784,35 +811,64 @@ mod tests {
             frame: 0,
             ..DummyController::default()
         };
-        assert_eq!(dummy.next_bits(LabPhase::Fight, 0, 0), None);
+        assert_eq!(dummy.next_bits(LabPhase::Fight, true, 0, 0), None);
     }
 
     #[test]
-    fn advanced_dummy_presets_emit_expected_inputs() {
-        let mut jump_in = DummyController {
+    fn jump_in_jumps_toward_p1_from_either_side() {
+        let mut from_right = DummyController {
             mode: DummyMode::JumpIn,
             frame: 0,
             ..DummyController::default()
         };
-        let bits = jump_in.next_bits(LabPhase::Fight, 0, 0).unwrap();
+        let bits = from_right.next_bits(LabPhase::Fight, true, 0, 0).unwrap();
         assert!(has(bits, Action::Up));
         assert!(has(bits, Action::Left));
 
-        let mut reversal = DummyController {
-            mode: DummyMode::ReversalMash,
+        let mut from_left = DummyController {
+            mode: DummyMode::JumpIn,
             frame: 0,
             ..DummyController::default()
         };
-        let bits = reversal.next_bits(LabPhase::Fight, 0, 0).unwrap();
-        assert!(has(bits, Action::Block));
-        assert!(has(bits, Action::LowPunch));
+        let bits = from_left.next_bits(LabPhase::Fight, false, 0, 0).unwrap();
+        assert!(has(bits, Action::Up));
+        assert!(has(bits, Action::Right));
+    }
 
+    #[test]
+    fn mash_modes_release_block_for_the_press_frames() {
+        // MK2 ignores attacks while Block is held — the press frames must
+        // carry LP *without* block or the mash never comes out.
+        for mode in [DummyMode::ReversalMash, DummyMode::ThrowTech] {
+            let mut dummy = DummyController {
+                mode,
+                frame: 0,
+                ..DummyController::default()
+            };
+            let mut saw_clean_press = false;
+            let mut saw_guard = false;
+            for _ in 0..24 {
+                let bits = dummy.next_bits(LabPhase::Fight, true, 0, 0).unwrap();
+                if has(bits, Action::LowPunch) {
+                    assert!(!has(bits, Action::Block), "{mode:?} pressed LP under block");
+                    saw_clean_press = true;
+                } else if has(bits, Action::Block) {
+                    saw_guard = true;
+                }
+            }
+            assert!(saw_clean_press, "{mode:?} never attempted its press");
+            assert!(saw_guard, "{mode:?} never guarded between presses");
+        }
+    }
+
+    #[test]
+    fn wake_block_crouch_blocks() {
         let mut wake_block = DummyController {
             mode: DummyMode::WakeBlock,
             frame: 0,
             ..DummyController::default()
         };
-        let bits = wake_block.next_bits(LabPhase::Fight, 0, 0).unwrap();
+        let bits = wake_block.next_bits(LabPhase::Fight, true, 0, 0).unwrap();
         assert!(has(bits, Action::Down));
         assert!(has(bits, Action::Block));
     }
@@ -822,25 +878,33 @@ mod tests {
         let mut dummy = DummyController::default();
         dummy.start_recording();
         assert!(dummy.is_recording());
-        assert_eq!(dummy.next_bits(LabPhase::Fight, 0, 0x0001), Some(0x0001));
-        assert_eq!(dummy.next_bits(LabPhase::Fight, 0, 0x0002), Some(0x0002));
+        assert!(!dummy.has_loop());
+        assert_eq!(
+            dummy.next_bits(LabPhase::Fight, true, 0, 0x0001),
+            Some(0x0001)
+        );
+        assert_eq!(
+            dummy.next_bits(LabPhase::Fight, true, 0, 0x0002),
+            Some(0x0002)
+        );
         assert_eq!(dummy.stop_recording(), 2);
         assert!(!dummy.is_recording());
-        assert_eq!(dummy.next_bits(LabPhase::Fight, 0, 0), Some(0x0001));
-        assert_eq!(dummy.next_bits(LabPhase::Fight, 0, 0), Some(0x0002));
-        assert_eq!(dummy.next_bits(LabPhase::Fight, 0, 0), Some(0x0001));
+        assert!(dummy.has_loop());
+        assert_eq!(dummy.next_bits(LabPhase::Fight, true, 0, 0), Some(0x0001));
+        assert_eq!(dummy.next_bits(LabPhase::Fight, true, 0, 0), Some(0x0002));
+        assert_eq!(dummy.next_bits(LabPhase::Fight, true, 0, 0), Some(0x0001));
     }
 
     #[test]
     fn loop_completion_is_reported_once() {
         let mut dummy = DummyController::default();
         dummy.start_recording();
-        dummy.next_bits(LabPhase::Fight, 0, 0x0001);
-        dummy.next_bits(LabPhase::Fight, 0, 0x0002);
+        dummy.next_bits(LabPhase::Fight, true, 0, 0x0001);
+        dummy.next_bits(LabPhase::Fight, true, 0, 0x0002);
         dummy.stop_recording();
-        dummy.next_bits(LabPhase::Fight, 0, 0);
+        dummy.next_bits(LabPhase::Fight, true, 0, 0);
         assert_eq!(dummy.take_loop_completed(), None);
-        dummy.next_bits(LabPhase::Fight, 0, 0);
+        dummy.next_bits(LabPhase::Fight, true, 0, 0);
         assert_eq!(dummy.take_loop_completed(), Some(2));
         assert_eq!(dummy.take_loop_completed(), None);
     }
@@ -884,7 +948,7 @@ mod tests {
         };
         let mut saw_start = false;
         for _ in 0..24 {
-            let bits = dummy.next_bits(waiting, 0, 0).unwrap();
+            let bits = dummy.next_bits(waiting, true, 0, 0).unwrap();
             saw_start |= has(bits, Action::Start);
             assert_eq!(bits & button_mask(), 0, "no pick button before P1 locks in");
         }
@@ -900,17 +964,17 @@ mod tests {
         };
         // P1's confirm press is still held: directions pass, buttons don't.
         let held = bit(Action::LowPunch) | bit(Action::Left);
-        let bits = dummy.next_bits(mirror, held, 0).unwrap();
+        let bits = dummy.next_bits(mirror, true, held, 0).unwrap();
         assert!(has(bits, Action::Left));
         assert!(!has(bits, Action::LowPunch));
         // Release arms the mirror; the next press confirms P2's pick.
-        let bits = dummy.next_bits(mirror, 0, 0).unwrap();
+        let bits = dummy.next_bits(mirror, true, 0, 0).unwrap();
         assert_eq!(bits, 0);
-        let bits = dummy.next_bits(mirror, held, 0).unwrap();
+        let bits = dummy.next_bits(mirror, true, held, 0).unwrap();
         assert!(has(bits, Action::Left));
         assert!(has(bits, Action::LowPunch));
         // Start never mirrors (select-screen palette cheat).
-        let bits = dummy.next_bits(mirror, bit(Action::Start), 0).unwrap();
+        let bits = dummy.next_bits(mirror, true, bit(Action::Start), 0).unwrap();
         assert!(!has(bits, Action::Start));
     }
 
@@ -921,7 +985,7 @@ mod tests {
             p1_picked: true,
             p2_picked: true,
         };
-        assert_eq!(dummy.next_bits(done, bit(Action::LowPunch), 0), Some(0));
+        assert_eq!(dummy.next_bits(done, true, bit(Action::LowPunch), 0), Some(0));
     }
 
     #[test]
@@ -932,7 +996,7 @@ mod tests {
             p2_picked: false,
         };
         let bits = dummy
-            .next_bits(waiting, 0, bit(Action::Right) | bit(Action::HighKick))
+            .next_bits(waiting, true, 0, bit(Action::Right) | bit(Action::HighKick))
             .unwrap();
         assert!(has(bits, Action::Right));
         assert!(has(bits, Action::HighKick));
