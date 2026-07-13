@@ -1357,6 +1357,7 @@ pub fn draw_replay_review_overlay(
     paused: bool,
     speed_label: &str,
     event_filter: crate::match_replay::ReplayEventFilter,
+    show_events: bool,
     clip_in: Option<usize>,
     clip_out: Option<usize>,
 ) -> Result<(), String> {
@@ -1377,7 +1378,9 @@ pub fn draw_replay_review_overlay(
         event_filter.label()
     );
 
-    draw_replay_event_sidebar(canvas, font, window_w, window_h, playback, event_filter)?;
+    if show_events {
+        draw_replay_event_sidebar(canvas, font, window_w, window_h, playback, event_filter)?;
+    }
 
     canvas.set_draw_color(Color::RGBA(8, 10, 18, 205));
     canvas.fill_rect(Rect::new(x, y, panel_w as u32, panel_h as u32))?;
@@ -1413,39 +1416,45 @@ pub fn draw_replay_review_overlay(
     canvas.set_draw_color(Color::RGBA(120, 210, 255, 230));
     canvas.fill_rect(Rect::new(timeline_x, timeline_y, progress_w, 5))?;
 
-    for marker in playback.markers() {
-        if !event_filter.matches_marker(marker.kind) {
-            continue;
-        }
-        let mx = timeline_x
-            + ((timeline_w as f32) * (marker.frame as f32 / total as f32))
-                .round()
-                .clamp(0.0, timeline_w as f32) as i32;
-        let color = replay_marker_color(marker.kind);
-        canvas.set_draw_color(color);
-        canvas.fill_rect(Rect::new(mx, timeline_y - 5, 2, 15))?;
-    }
-    if event_filter.matches_bookmarks() {
-        for bookmark in playback.bookmarks() {
+    if show_events {
+        for marker in playback.markers() {
+            if !event_filter.matches_marker(marker.kind) {
+                continue;
+            }
             let mx = timeline_x
-                + ((timeline_w as f32) * (bookmark.frame as f32 / total as f32))
+                + ((timeline_w as f32) * (marker.frame as f32 / total as f32))
                     .round()
                     .clamp(0.0, timeline_w as f32) as i32;
-            canvas.set_draw_color(replay_bookmark_color());
-            canvas.fill_rect(Rect::new(mx - 2, timeline_y - 7, 5, 17))?;
+            let color = replay_marker_color(marker.kind);
+            canvas.set_draw_color(color);
+            canvas.fill_rect(Rect::new(mx, timeline_y - 5, 2, 15))?;
+        }
+        if event_filter.matches_bookmarks() {
+            for bookmark in playback.bookmarks() {
+                let mx = timeline_x
+                    + ((timeline_w as f32) * (bookmark.frame as f32 / total as f32))
+                        .round()
+                        .clamp(0.0, timeline_w as f32) as i32;
+                canvas.set_draw_color(replay_bookmark_color());
+                canvas.fill_rect(Rect::new(mx - 2, timeline_y - 7, 5, 17))?;
+            }
         }
     }
 
     let inputs = playback.current_inputs().unwrap_or([0, 0]);
     let p1 = crate::input_history::format_bits(inputs[0]);
     let p2 = crate::input_history::format_bits(inputs[1]);
-    let next_marker = next_replay_event_line(playback, frame, event_filter);
+    let next_marker = if show_events {
+        next_replay_event_line(playback, frame, event_filter)
+    } else {
+        String::new()
+    };
     let input_line = format!("P1 {p1}     P2 {p2}     {next_marker}");
     let clip_line = replay_clip_line(clip_in, clip_out);
     let controls_1 = "SPACE/START PAUSE   . / A STEP   F/GUIDE FILTER";
     let controls_2 = "UP/DOWN SPEED   M/RS BOOKMARK   DEL/LS REMOVE";
     let controls_3 = "LEFT/RIGHT +/-5S   PGUP/PGDN/LB/RB EVENT   I/O X/Y CLIP";
-    let controls_4 = "1 TAKE OVER P1     2 TAKE OVER P2";
+    let controls_4 = "1 TAKE OVER P1   2 TAKE OVER P2   E EVENTS   H HIDE HUD";
     let input_line = fit_text_exact(font, &input_line, scale, timeline_w);
     let clip_line = fit_text_exact(font, &clip_line, scale, timeline_w);
     let controls_1 = fit_text_exact(font, controls_1, scale, timeline_w);

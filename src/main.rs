@@ -113,6 +113,9 @@ struct Takeover {
 /// ~3s of 3-2-1 at MK2's ~55 Hz, then a ~20s control window.
 const TAKEOVER_COUNTDOWN_FRAMES: u32 = 165;
 const TAKEOVER_ACTIVE_FRAMES: u32 = 20 * 55;
+/// Don't arm a takeover with less than ~3s of recording left — the opponent's
+/// inputs would run out mid-countdown and freeze straight into Done.
+const TAKEOVER_MIN_REMAINING_FRAMES: usize = 3 * 55;
 
 fn adopt_packaged_working_dir() {
     let Ok(exe) = std::env::current_exe() else {
@@ -477,6 +480,14 @@ fn start_replay_takeover(
     toast: &mut Option<(String, Instant)>,
 ) {
     if let (Some(c), Some(pb)) = (core.as_ref(), playback.as_ref()) {
+        let remaining = pb.frame_count().saturating_sub(pb.current_frame());
+        if remaining < TAKEOVER_MIN_REMAINING_FRAMES {
+            *toast = Some((
+                "Too close to the end of the recording to take over".into(),
+                Instant::now() + Duration::from_millis(2400),
+            ));
+            return;
+        }
         let Some(save) = c.save_state() else {
             *toast = Some((
                 "Couldn't snapshot this moment".into(),
@@ -1741,6 +1752,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut replay_review_paused = false;
     let mut replay_takeover: Option<Takeover> = None;
     let mut replay_review_speed = REPLAY_DEFAULT_SPEED;
+    // Visual-only toggles for the review overlay; every viewer control keeps
+    // working while hidden. Session-sticky on purpose — hiding the HUD for
+    // one replay means you want it hidden for the next one too.
+    let mut replay_hud_visible = true;
+    let mut replay_events_visible = true;
     let mut replay_review_tick: u64 = 0;
     let mut replay_event_filter = match_replay::ReplayEventFilter::All;
     let mut replay_clip_in: Option<usize> = None;
@@ -3396,7 +3412,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         keycode: Some(Keycode::Escape),
                         repeat: false,
                         ..
-                    } if match_replay_playback.is_some() => {
+                    } if match_replay_playback.is_some() && replay_takeover.is_none() => {
                         match_replay_playback = None;
                         replay_review_paused = false;
                         replay_review_speed = REPLAY_DEFAULT_SPEED;
@@ -3411,7 +3427,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Event::ControllerButtonDown {
                         button: sdl2::controller::Button::B | sdl2::controller::Button::Back,
                         ..
-                    } if match_replay_playback.is_some() => {
+                    } if match_replay_playback.is_some() && replay_takeover.is_none() => {
                         match_replay_playback = None;
                         replay_review_paused = false;
                         replay_review_speed = REPLAY_DEFAULT_SPEED;
@@ -3427,20 +3443,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         keycode: Some(Keycode::Space | Keycode::Return | Keycode::KpEnter),
                         repeat: false,
                         ..
-                    } if match_replay_playback.is_some() => {
+                    } if match_replay_playback.is_some() && replay_takeover.is_none() => {
                         replay_review_paused = !replay_review_paused;
                     }
                     Event::ControllerButtonDown {
                         button: sdl2::controller::Button::Start,
                         ..
-                    } if match_replay_playback.is_some() => {
+                    } if match_replay_playback.is_some() && replay_takeover.is_none() => {
                         replay_review_paused = !replay_review_paused;
                     }
                     Event::KeyDown {
                         keycode: Some(Keycode::Period),
                         repeat: false,
                         ..
-                    } if match_replay_playback.is_some() => {
+                    } if match_replay_playback.is_some() && replay_takeover.is_none() => {
                         if let (Some(c), Some(pb)) = (&core, match_replay_playback.as_mut()) {
                             replay_review_paused = true;
                             if !step_replay_frame(c, pb) {
@@ -3454,7 +3470,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Event::ControllerButtonDown {
                         button: sdl2::controller::Button::A,
                         ..
-                    } if match_replay_playback.is_some() => {
+                    } if match_replay_playback.is_some() && replay_takeover.is_none() => {
                         if let (Some(c), Some(pb)) = (&core, match_replay_playback.as_mut()) {
                             replay_review_paused = true;
                             if !step_replay_frame(c, pb) {
@@ -3469,7 +3485,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         keycode: Some(Keycode::I),
                         repeat: false,
                         ..
-                    } if match_replay_playback.is_some() => {
+                    } if match_replay_playback.is_some() && replay_takeover.is_none() => {
                         if let Some(pb) = match_replay_playback.as_ref() {
                             let frame = pb.current_frame();
                             replay_clip_in = Some(frame);
@@ -3482,7 +3498,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Event::ControllerButtonDown {
                         button: sdl2::controller::Button::X,
                         ..
-                    } if match_replay_playback.is_some() => {
+                    } if match_replay_playback.is_some() && replay_takeover.is_none() => {
                         if let Some(pb) = match_replay_playback.as_ref() {
                             let frame = pb.current_frame();
                             replay_clip_in = Some(frame);
@@ -3496,7 +3512,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         keycode: Some(Keycode::O),
                         repeat: false,
                         ..
-                    } if match_replay_playback.is_some() => {
+                    } if match_replay_playback.is_some() && replay_takeover.is_none() => {
                         if let Some(pb) = match_replay_playback.as_ref() {
                             let frame = pb.current_frame();
                             replay_clip_out = Some(frame);
@@ -3509,7 +3525,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Event::ControllerButtonDown {
                         button: sdl2::controller::Button::Y,
                         ..
-                    } if match_replay_playback.is_some() => {
+                    } if match_replay_playback.is_some() && replay_takeover.is_none() => {
                         if let Some(pb) = match_replay_playback.as_ref() {
                             let frame = pb.current_frame();
                             replay_clip_out = Some(frame);
@@ -3523,7 +3539,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         keycode: Some(Keycode::C),
                         repeat: false,
                         ..
-                    } if match_replay_playback.is_some() => {
+                    } if match_replay_playback.is_some() && replay_takeover.is_none() => {
                         replay_clip_in = None;
                         replay_clip_out = None;
                         toast = Some((
@@ -3539,7 +3555,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     | Event::ControllerButtonDown {
                         button: sdl2::controller::Button::RightStick,
                         ..
-                    } if match_replay_playback.is_some() => {
+                    } if match_replay_playback.is_some() && replay_takeover.is_none() => {
                         if let Some(pb) = match_replay_playback.as_mut() {
                             replay_review_paused = true;
                             let frame = pb.current_frame();
@@ -3573,7 +3589,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     | Event::ControllerButtonDown {
                         button: sdl2::controller::Button::LeftStick,
                         ..
-                    } if match_replay_playback.is_some() => {
+                    } if match_replay_playback.is_some() && replay_takeover.is_none() => {
                         if let Some(pb) = match_replay_playback.as_mut() {
                             replay_review_paused = true;
                             match pb.remove_bookmark_near_current(90) {
@@ -3602,7 +3618,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         keycode: Some(Keycode::Left),
                         repeat: false,
                         ..
-                    } if match_replay_playback.is_some() => {
+                    } if match_replay_playback.is_some() && replay_takeover.is_none() => {
                         if let (Some(c), Some(pb)) = (&core, match_replay_playback.as_mut()) {
                             let _ = seek_replay_relative(c, pb, -(REPLAY_SEEK_FRAMES as isize));
                             replay_review_tick = 0;
@@ -3611,7 +3627,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Event::ControllerButtonDown {
                         button: sdl2::controller::Button::DPadLeft,
                         ..
-                    } if match_replay_playback.is_some() => {
+                    } if match_replay_playback.is_some() && replay_takeover.is_none() => {
                         if let (Some(c), Some(pb)) = (&core, match_replay_playback.as_mut()) {
                             let _ = seek_replay_relative(c, pb, -(REPLAY_SEEK_FRAMES as isize));
                             replay_review_tick = 0;
@@ -3621,7 +3637,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         keycode: Some(Keycode::Right),
                         repeat: false,
                         ..
-                    } if match_replay_playback.is_some() => {
+                    } if match_replay_playback.is_some() && replay_takeover.is_none() => {
                         if let (Some(c), Some(pb)) = (&core, match_replay_playback.as_mut()) {
                             let _ = seek_replay_relative(c, pb, REPLAY_SEEK_FRAMES as isize);
                             replay_review_tick = 0;
@@ -3630,7 +3646,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Event::ControllerButtonDown {
                         button: sdl2::controller::Button::DPadRight,
                         ..
-                    } if match_replay_playback.is_some() => {
+                    } if match_replay_playback.is_some() && replay_takeover.is_none() => {
                         if let (Some(c), Some(pb)) = (&core, match_replay_playback.as_mut()) {
                             let _ = seek_replay_relative(c, pb, REPLAY_SEEK_FRAMES as isize);
                             replay_review_tick = 0;
@@ -3640,7 +3656,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         keycode: Some(Keycode::PageUp),
                         repeat: false,
                         ..
-                    } if match_replay_playback.is_some() => {
+                    } if match_replay_playback.is_some() && replay_takeover.is_none() => {
                         if let (Some(c), Some(pb)) = (&core, match_replay_playback.as_mut()) {
                             if seek_replay_marker(c, pb, -1, replay_event_filter) {
                                 replay_review_paused = true;
@@ -3651,7 +3667,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Event::ControllerButtonDown {
                         button: sdl2::controller::Button::LeftShoulder,
                         ..
-                    } if match_replay_playback.is_some() => {
+                    } if match_replay_playback.is_some() && replay_takeover.is_none() => {
                         if let (Some(c), Some(pb)) = (&core, match_replay_playback.as_mut()) {
                             if seek_replay_marker(c, pb, -1, replay_event_filter) {
                                 replay_review_paused = true;
@@ -3663,7 +3679,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         keycode: Some(Keycode::PageDown),
                         repeat: false,
                         ..
-                    } if match_replay_playback.is_some() => {
+                    } if match_replay_playback.is_some() && replay_takeover.is_none() => {
                         if let (Some(c), Some(pb)) = (&core, match_replay_playback.as_mut()) {
                             if seek_replay_marker(c, pb, 1, replay_event_filter) {
                                 replay_review_paused = true;
@@ -3674,7 +3690,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Event::ControllerButtonDown {
                         button: sdl2::controller::Button::RightShoulder,
                         ..
-                    } if match_replay_playback.is_some() => {
+                    } if match_replay_playback.is_some() && replay_takeover.is_none() => {
                         if let (Some(c), Some(pb)) = (&core, match_replay_playback.as_mut()) {
                             if seek_replay_marker(c, pb, 1, replay_event_filter) {
                                 replay_review_paused = true;
@@ -3686,14 +3702,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         keycode: Some(Keycode::Up),
                         repeat: false,
                         ..
-                    } if match_replay_playback.is_some() => {
+                    } if match_replay_playback.is_some() && replay_takeover.is_none() => {
                         adjust_replay_speed(&mut replay_review_speed, 1);
                         replay_review_tick = 0;
                     }
                     Event::ControllerButtonDown {
                         button: sdl2::controller::Button::DPadUp,
                         ..
-                    } if match_replay_playback.is_some() => {
+                    } if match_replay_playback.is_some() && replay_takeover.is_none() => {
                         adjust_replay_speed(&mut replay_review_speed, 1);
                         replay_review_tick = 0;
                     }
@@ -3701,16 +3717,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         keycode: Some(Keycode::Down),
                         repeat: false,
                         ..
-                    } if match_replay_playback.is_some() => {
+                    } if match_replay_playback.is_some() && replay_takeover.is_none() => {
                         adjust_replay_speed(&mut replay_review_speed, -1);
                         replay_review_tick = 0;
                     }
                     Event::ControllerButtonDown {
                         button: sdl2::controller::Button::DPadDown,
                         ..
-                    } if match_replay_playback.is_some() => {
+                    } if match_replay_playback.is_some() && replay_takeover.is_none() => {
                         adjust_replay_speed(&mut replay_review_speed, -1);
                         replay_review_tick = 0;
+                    }
+                    Event::KeyDown {
+                        keycode: Some(Keycode::H),
+                        repeat: false,
+                        ..
+                    } if match_replay_playback.is_some() && replay_takeover.is_none() => {
+                        replay_hud_visible = !replay_hud_visible;
+                        toast = Some((
+                            if replay_hud_visible {
+                                "Replay HUD shown".into()
+                            } else {
+                                "Replay HUD hidden - H to show".into()
+                            },
+                            Instant::now() + Duration::from_millis(1800),
+                        ));
+                    }
+                    Event::KeyDown {
+                        keycode: Some(Keycode::E),
+                        repeat: false,
+                        ..
+                    } if match_replay_playback.is_some() && replay_takeover.is_none() => {
+                        replay_events_visible = !replay_events_visible;
+                        toast = Some((
+                            if replay_events_visible {
+                                "Replay events shown".into()
+                            } else {
+                                "Replay events hidden - E to show".into()
+                            },
+                            Instant::now() + Duration::from_millis(1800),
+                        ));
                     }
                     Event::KeyDown {
                         keycode: Some(Keycode::F),
@@ -3718,6 +3764,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         repeat: false,
                         ..
                     } if match_replay_playback.is_some()
+                        && replay_takeover.is_none()
                         && !keymod.intersects(Mod::LCTRLMOD | Mod::RCTRLMOD) =>
                     {
                         replay_event_filter = replay_event_filter.next();
@@ -3729,7 +3776,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Event::ControllerButtonDown {
                         button: sdl2::controller::Button::Guide,
                         ..
-                    } if match_replay_playback.is_some() => {
+                    } if match_replay_playback.is_some() && replay_takeover.is_none() => {
                         replay_event_filter = replay_event_filter.next();
                         toast = Some((
                             format!("Replay events: {}", replay_event_filter.label()),
@@ -3740,7 +3787,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         keycode: Some(Keycode::Home),
                         repeat: false,
                         ..
-                    } if match_replay_playback.is_some() => {
+                    } if match_replay_playback.is_some() && replay_takeover.is_none() => {
                         if let (Some(c), Some(pb)) = (&core, match_replay_playback.as_mut()) {
                             let _ = seek_replay_to(c, pb, 0);
                             replay_review_tick = 0;
@@ -3750,7 +3797,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         keycode: Some(Keycode::End),
                         repeat: false,
                         ..
-                    } if match_replay_playback.is_some() => {
+                    } if match_replay_playback.is_some() && replay_takeover.is_none() => {
                         if let (Some(c), Some(pb)) = (&core, match_replay_playback.as_mut()) {
                             let end_frame = pb.frame_count();
                             let _ = seek_replay_to(c, pb, end_frame);
@@ -4337,13 +4384,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         keycode: Some(k),
                         repeat: false,
                         ..
-                    } if match_replay_playback.is_some() => {
+                    } if match_replay_playback.is_some() && replay_takeover.is_none() => {
                         let _ = k;
                     }
-                    Event::KeyUp { .. } if match_replay_playback.is_some() => {}
-                    Event::ControllerButtonDown { .. } if match_replay_playback.is_some() => {}
-                    Event::ControllerButtonUp { .. } if match_replay_playback.is_some() => {}
-                    Event::ControllerAxisMotion { .. } if match_replay_playback.is_some() => {}
+                    Event::KeyUp { .. } if match_replay_playback.is_some() && replay_takeover.is_none() => {}
+                    Event::ControllerButtonDown { .. } if match_replay_playback.is_some() && replay_takeover.is_none() => {}
+                    Event::ControllerButtonUp { .. } if match_replay_playback.is_some() && replay_takeover.is_none() => {}
+                    Event::ControllerAxisMotion { .. } if match_replay_playback.is_some() && replay_takeover.is_none() => {}
                     Event::KeyDown {
                         keycode: Some(k),
                         repeat: false,
@@ -5398,22 +5445,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .map_err(|e| format!("takeover overlay: {e}"))?;
                     canvas.set_logical_size(LOGICAL_W as u32, LOGICAL_H as u32)?;
                 } else if let Some(pb) = match_replay_playback.as_ref() {
-                    canvas.set_logical_size(0, 0)?;
-                    let (win_w, win_h) = canvas.output_size().unwrap_or((1200, 762));
-                    draw_replay_review_overlay(
-                        &mut canvas,
-                        &mut font,
-                        win_w as i32,
-                        win_h as i32,
-                        pb,
-                        replay_review_paused,
-                        REPLAY_SPEED_LABELS[replay_review_speed],
-                        replay_event_filter,
-                        replay_clip_in,
-                        replay_clip_out,
-                    )
-                    .map_err(|e| format!("replay review overlay: {e}"))?;
-                    canvas.set_logical_size(LOGICAL_W as u32, LOGICAL_H as u32)?;
+                    if replay_hud_visible {
+                        canvas.set_logical_size(0, 0)?;
+                        let (win_w, win_h) = canvas.output_size().unwrap_or((1200, 762));
+                        draw_replay_review_overlay(
+                            &mut canvas,
+                            &mut font,
+                            win_w as i32,
+                            win_h as i32,
+                            pb,
+                            replay_review_paused,
+                            REPLAY_SPEED_LABELS[replay_review_speed],
+                            replay_event_filter,
+                            replay_events_visible,
+                            replay_clip_in,
+                            replay_clip_out,
+                        )
+                        .map_err(|e| format!("replay review overlay: {e}"))?;
+                        canvas.set_logical_size(LOGICAL_W as u32, LOGICAL_H as u32)?;
+                    }
                 }
                 if net_session.is_none()
                     && match_replay_playback.is_none()
@@ -6515,13 +6565,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     if meta.frame_count < match_replay::MIN_LISTED_REPLAY_FRAMES {
                                         continue;
                                     }
-                                    // A public replay that's already been watched exists
-                                    // locally under its download filename — list it once
-                                    // (as the local copy), and backfill the score/winner
-                                    // the bare downloaded file has no sidecar for, so it
-                                    // doesn't sit there as a "—" row.
-                                    if let Some(&i) =
-                                        local_by_filename.get(&remote_replay_filename(&meta.url))
+                                    // A public replay can already exist locally two ways:
+                                    // it's a set this player recorded and auto-uploaded
+                                    // (index `filename` = the upload's original name, the
+                                    // same name the local file still has), or it was
+                                    // watched earlier (local copy named after its URL).
+                                    // Either way list it once, as the local copy, and
+                                    // backfill the score/winner a bare .ncrp has no
+                                    // sidecar for, so it doesn't sit there as a "—" row.
+                                    if let Some(&i) = local_by_filename
+                                        .get(&meta.filename)
+                                        .or_else(|| {
+                                            local_by_filename
+                                                .get(&remote_replay_filename(&meta.url))
+                                        })
                                     {
                                         let entry = &mut entries[i];
                                         if entry.p1_score.is_none() {
