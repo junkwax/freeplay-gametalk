@@ -53,7 +53,7 @@ use crate::audio_recovery::prepare_game_audio;
 use crate::cli::{parse_args, NetMode};
 use crate::controllers::{assign_pad, open_initial_controllers, pad_owner, Pads};
 use crate::font::Font;
-use crate::input::{set_action_source, Bindings, InputSource, Player};
+use crate::input::{set_action_source, InputSource, Player};
 use crate::menu::{AppState, MenuScreen, NavResult, LOGICAL_H, LOGICAL_W};
 use crate::menu_input::{capture_rebind, event_to_menu_nav, is_cancel, is_clear, MenuNav};
 use crate::net_set::{
@@ -271,139 +271,6 @@ fn video_filter_toast_message(filter: config::VideoFilter, renderer: &str) -> St
     }
 }
 
-fn adjust_settings_value(
-    cfg: &mut config::Config,
-    state: &mut AppState,
-    toast: &mut Option<(String, Instant)>,
-    cursor: usize,
-    delta: i8,
-    renderer: &str,
-) -> bool {
-    match cursor {
-        5 => {
-            if delta < 0 {
-                cfg.volume_percent = cfg.volume_percent.saturating_sub(10);
-            } else {
-                cfg.volume_percent = cfg.volume_percent.saturating_add(10).min(100);
-            }
-            config::save(cfg);
-            if let AppState::Menu(MenuScreen::Settings {
-                ref mut volume_percent,
-                ..
-            }) = state
-            {
-                *volume_percent = cfg.volume_percent;
-            }
-            *toast = Some((
-                format!("Volume {}%", cfg.volume_percent),
-                Instant::now() + Duration::from_millis(1800),
-            ));
-            true
-        }
-        6 => {
-            cfg.audio_buffer = cfg.audio_buffer.cycle(delta);
-            config::save(cfg);
-            if let AppState::Menu(MenuScreen::Settings {
-                ref mut audio_buffer,
-                ..
-            }) = state
-            {
-                *audio_buffer = cfg.audio_buffer;
-            }
-            *toast = Some((
-                format!("Audio Buffer {}", cfg.audio_buffer.label()),
-                Instant::now() + Duration::from_millis(1800),
-            ));
-            true
-        }
-        7 => {
-            cfg.video_filter = cfg.video_filter.cycle(delta);
-            config::save(cfg);
-            if let AppState::Menu(MenuScreen::Settings {
-                ref mut video_filter,
-                ..
-            }) = state
-            {
-                *video_filter = cfg.video_filter;
-            }
-            *toast = Some((
-                video_filter_toast_message(cfg.video_filter, renderer),
-                Instant::now() + Duration::from_millis(1800),
-            ));
-            true
-        }
-        9 => {
-            cfg.aspect_mode = cfg.aspect_mode.cycle(delta);
-            config::save(cfg);
-            if let AppState::Menu(MenuScreen::Settings {
-                ref mut aspect_mode,
-                ..
-            }) = state
-            {
-                *aspect_mode = cfg.aspect_mode;
-            }
-            *toast = Some((
-                format!("Aspect {}", cfg.aspect_mode.label()),
-                Instant::now() + Duration::from_millis(1800),
-            ));
-            true
-        }
-        10 => {
-            cfg.scorebar_style = cfg.scorebar_style.cycle(delta);
-            config::save(cfg);
-            if let AppState::Menu(MenuScreen::Settings {
-                ref mut scorebar_style,
-                ..
-            }) = state
-            {
-                *scorebar_style = cfg.scorebar_style;
-            }
-            *toast = Some((
-                format!("Scorebar {}", cfg.scorebar_style.label()),
-                Instant::now() + Duration::from_millis(1800),
-            ));
-            true
-        }
-        11 => {
-            if delta < 0 {
-                cfg.input_delay = cfg.input_delay.saturating_sub(1);
-            } else {
-                cfg.input_delay = (cfg.input_delay + 1).min(8);
-            }
-            config::save(cfg);
-            if let AppState::Menu(MenuScreen::Settings {
-                ref mut input_delay,
-                ..
-            }) = state
-            {
-                *input_delay = cfg.input_delay;
-            }
-            *toast = Some((
-                format!("Input Delay {} frames (next match)", cfg.input_delay),
-                Instant::now() + Duration::from_millis(1800),
-            ));
-            true
-        }
-        15 => {
-            cfg.render_profile = cfg.render_profile.cycle(delta);
-            config::save(cfg);
-            if let AppState::Menu(MenuScreen::Settings {
-                ref mut render_profile,
-                ..
-            }) = state
-            {
-                *render_profile = cfg.render_profile;
-            }
-            *toast = Some((
-                format!("Render Profile {} (restart)", cfg.render_profile.label()),
-                Instant::now() + Duration::from_millis(2200),
-            ));
-            true
-        }
-        _ => false,
-    }
-}
-
 fn send_chat_draft(
     relay_chat: Option<&relay_socket::RelayChatHandle>,
     chat_lines: &mut Vec<String>,
@@ -452,39 +319,26 @@ impl LocalPlayMode {
     }
 }
 
-/// Builds the username-claim screen matching whichever UI is currently
-/// showing it — `AppState::FpUi(FpScreen::ClaimUsername)` if that's where
-/// `state` already is, otherwise legacy's `AppState::Menu(MenuScreen::MatchUsername)`.
+/// Builds the username-claim screen.
 /// Used by every username-check transition (submit / taken / error / retry)
-/// so both UIs share one round trip through `matchmaking::check_username_available`
-/// without duplicating that logic per screen.
+/// so they all share one round trip through
+/// `matchmaking::check_username_available` without duplicating that logic
+/// per transition.
 fn set_username_screen(state: &mut AppState, value: String, status: String, checking: bool) {
-    if matches!(state, AppState::FpUi(fp_ui::FpScreen::ClaimUsername { .. })) {
-        *state = AppState::FpUi(fp_ui::FpScreen::ClaimUsername { value, status, checking });
-    } else {
-        *state = AppState::Menu(MenuScreen::MatchUsername { value, status, checking });
-    }
+    *state = AppState::FpUi(fp_ui::FpScreen::ClaimUsername { value, status, checking });
 }
 
-/// Same "stay in whichever UI we're already in" pattern as `set_username_screen`,
-/// for the matchmaking search screen. Every place that used to hardcode
-/// `AppState::Menu(MenuScreen::Matchmaking { .. })` — including several fp_ui
-/// `FpResult` handlers (`SendChallenge`, `AcceptChallenge`, `ToggleDiscordConnect`)
-/// that forced a drop to the legacy screen mid-fp_ui-session — now goes through
-/// here instead.
+/// The matchmaking search screen for challenges/spar-rooms/lobby match
+/// starts. (Quick Match itself stays inline on the Lobby tab — see
+/// `set_quick_match_searching`.)
 fn set_matchmaking_screen(state: &mut AppState, status: String) {
-    if matches!(state, AppState::FpUi(_)) {
-        *state = AppState::FpUi(fp_ui::FpScreen::Matchmaking { status });
-    } else {
-        *state = AppState::Menu(MenuScreen::Matchmaking { status });
-    }
+    *state = AppState::FpUi(fp_ui::FpScreen::Matchmaking { status });
 }
 
 fn is_matchmaking_screen(state: &AppState) -> bool {
     matches!(
         state,
-        AppState::Menu(MenuScreen::Matchmaking { .. })
-            | AppState::FpUi(fp_ui::FpScreen::Matchmaking { .. })
+        AppState::FpUi(fp_ui::FpScreen::Matchmaking { .. })
             | AppState::FpUi(fp_ui::FpScreen::Lobby { quick_match_status: Some(_), .. })
             | AppState::FpUi(fp_ui::FpScreen::DiscordConnect { .. })
     )
@@ -539,15 +393,12 @@ fn set_quick_match_searching(state: &mut AppState, status: String) {
         AppState::FpUi(fp_ui::FpScreen::Lobby { quick_match_status, .. }) => {
             *quick_match_status = Some(status);
         }
-        AppState::FpUi(_) => {
+        _ => {
             let mut lobby = fp_ui::FpScreen::lobby();
             if let fp_ui::FpScreen::Lobby { quick_match_status, .. } = &mut lobby {
                 *quick_match_status = Some(status);
             }
             *state = AppState::FpUi(lobby);
-        }
-        _ => {
-            *state = AppState::Menu(MenuScreen::Matchmaking { status });
         }
     }
 }
@@ -1174,9 +1025,6 @@ fn replay_select_exit_state(status: impl Into<String>) -> AppState {
 
 fn refresh_replay_select(state: &mut AppState, status: Option<String>) {
     let cursor_entries_status = match state {
-        AppState::Menu(MenuScreen::ReplaySelect { cursor, entries, status: screen_status }) => {
-            Some((cursor, entries, screen_status))
-        }
         AppState::FpUi(fp_ui::FpScreen::ReplaySelect { cursor, entries, status: screen_status }) => {
             Some((cursor, entries, screen_status))
         }
@@ -1217,19 +1065,10 @@ fn set_replay_select_status(state: &mut AppState, status: impl Into<String>) {
     if let AppState::FpUi(fp_ui::FpScreen::ReplaySelect { status: screen_status, .. }) = state {
         *screen_status = Some(status.clone());
     }
-    if let AppState::Menu(MenuScreen::ReplaySelect {
-        status: screen_status,
-        ..
-    }) = state
-    {
-        *screen_status = Some(status.into());
-    }
 }
 
 fn selected_replay_entry(state: &AppState) -> Option<menu::ReplayEntry> {
-    if let AppState::Menu(MenuScreen::ReplaySelect { cursor, entries, .. })
-    | AppState::FpUi(fp_ui::FpScreen::ReplaySelect { cursor, entries, .. }) = state
-    {
+    if let AppState::FpUi(fp_ui::FpScreen::ReplaySelect { cursor, entries, .. }) = state {
         entries.get(*cursor).cloned()
     } else {
         None
@@ -1237,10 +1076,7 @@ fn selected_replay_entry(state: &AppState) -> Option<menu::ReplayEntry> {
 }
 
 fn handle_replay_select_shortcut(event: &Event, state: &mut AppState) -> bool {
-    if !matches!(
-        state,
-        AppState::Menu(MenuScreen::ReplaySelect { .. }) | AppState::FpUi(fp_ui::FpScreen::ReplaySelect { .. })
-    ) {
+    if !matches!(state, AppState::FpUi(fp_ui::FpScreen::ReplaySelect { .. })) {
         return false;
     }
 
@@ -1825,11 +1661,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     install_panic_incident_hook();
     install_native_crash_handler();
     let mut state = menu::main_menu_state();
-    // Debug: `--test-screen online:chat` (or :players/:lobbies/:watch/:play)
-    // jumps straight into a hub section with sample data so layout/fonts can be
-    // checked without the live server. `--test-osk` also shows the chat keyboard.
+    // Debug: `--test-screen fp:lobby` (and the other `fp:*` fixture names in
+    // `menu::test_state`) jumps straight into a screen with sample data so
+    // layout/fonts can be checked without the live server.
     let test_args: Vec<String> = std::env::args().collect();
-    let mut test_force_pad = false;
     for i in 0..test_args.len() {
         let val = if test_args[i] == "--test-screen" {
             test_args.get(i + 1).cloned()
@@ -1843,9 +1678,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 state = s;
                 println!("[test] jumped to screen: {name}");
             }
-        }
-        if test_args[i] == "--test-osk" {
-            test_force_pad = true;
         }
     }
     let mut rom_present = rom::PresenceCache::new();
@@ -2000,7 +1832,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let mut spar_room_id: Option<String> = None;
     let mut peer_name: Option<String> = None;
-    let mut profile_rx: Option<std::sync::mpsc::Receiver<matchmaking::ProfileUpdate>> = None;
     let mut leaderboard_rx: Option<std::sync::mpsc::Receiver<matchmaking::LeaderboardUpdate>> =
         None;
     let mut main_leaderboard = if cfg.stats_url.is_empty() {
@@ -2036,7 +1867,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             None => menu::ProfileScreenState::NotLoggedIn,
         }
     };
-    let mut avatar_rx: Option<std::sync::mpsc::Receiver<Vec<u8>>> = None;
     let mut ghost_list_rx: Option<std::sync::mpsc::Receiver<matchmaking::GhostListUpdate>> = None;
     let mut ghost_download_rx: Option<std::sync::mpsc::Receiver<matchmaking::GhostDownloadUpdate>> =
         None;
@@ -2065,9 +1895,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut lobby_thumb_rx: Option<std::sync::mpsc::Receiver<Vec<u8>>> = None;
     let mut lobby_thumb_next_fetch = Instant::now();
     let mut lobby_thumb_next_push = Instant::now() + Duration::from_secs(8);
-    // Tracks whether the player is driving menus with a controller, so the chat
-    // on-screen keyboard only appears for pad users (keyboard users just type).
-    let mut menu_input_pad = test_force_pad;
     let mut lobby_chat_post_rx: Option<
         std::sync::mpsc::Receiver<matchmaking::LobbyChatPostUpdate>,
     > = None;
@@ -2176,17 +2003,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if chat_open
             || matches!(
                 state,
-                AppState::Menu(menu::MenuScreen::TestIp { editing: true, .. })
-                    | AppState::Menu(menu::MenuScreen::TextEdit { .. })
-                    | AppState::Menu(menu::MenuScreen::OnlineHub {
-                        tab: menu::OnlineTab::Chat,
-                        focus: menu::HubFocus::Content,
-                        ..
-                    })
-                    | AppState::Menu(menu::MenuScreen::MatchUsername {
-                        checking: false,
-                        ..
-                    })
+                AppState::Menu(menu::MenuScreen::TextEdit { .. })
                     | AppState::FpUi(fp_ui::FpScreen::ClaimUsername {
                         checking: false,
                         ..
@@ -2230,14 +2047,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         for event in event_pump.poll_iter() {
-            // Remember the last input device so the chat keyboard shows for pad
-            // users only. A controller button flips to pad mode; any key press
-            // flips back to keyboard mode.
-            match &event {
-                Event::ControllerButtonDown { .. } => menu_input_pad = true,
-                Event::KeyDown { .. } => menu_input_pad = false,
-                _ => {}
-            }
             match event {
                 Event::Quit { .. } => break 'running,
 
@@ -2291,56 +2100,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 Event::KeyDown {
-                    keycode: Some(Keycode::R),
-                    repeat: false,
-                    ..
-                } if matches!(state, AppState::Menu(MenuScreen::Controls { .. })) => {
-                    cfg.bindings = Bindings::default();
-                    config::save(&cfg);
-                    println!("Bindings reset to defaults");
-                    toast = Some((
-                        "Bindings reset to defaults".into(),
-                        Instant::now() + Duration::from_millis(2200),
-                    ));
-                }
-
-                Event::KeyDown {
-                    keycode: Some(Keycode::R),
-                    repeat: false,
-                    ..
-                } if matches!(state, AppState::Menu(MenuScreen::LiveMatches { .. })) => {
-                    let (tx, rx) = std::sync::mpsc::channel();
-                    live_matches_rx = Some(rx);
-                    matchmaking::fetch_live_matches(tx);
-                    live_matches_next_refresh = Instant::now() + Duration::from_secs(7);
-                    if let AppState::Menu(MenuScreen::LiveMatches { ref mut status, .. }) = state {
-                        *status = "Refreshing active matches...".into();
-                    }
-                    toast = Some((
-                        "Refreshing active matches".into(),
-                        Instant::now() + Duration::from_millis(1800),
-                    ));
-                }
-
-                Event::KeyDown {
-                    keycode: Some(Keycode::R),
-                    repeat: false,
-                    ..
-                } if matches!(state, AppState::Menu(MenuScreen::Leaderboard { .. })) => {
-                    let (tx, rx) = std::sync::mpsc::channel();
-                    leaderboard_rx = Some(rx);
-                    matchmaking::fetch_leaderboard(cfg.stats_url.clone(), tx);
-                    main_leaderboard = menu::LeaderboardState::Loading;
-                    if let AppState::Menu(MenuScreen::Leaderboard { ref mut state }) = state {
-                        *state = menu::LeaderboardState::Loading;
-                    }
-                    toast = Some((
-                        "Refreshing leaderboard".into(),
-                        Instant::now() + Duration::from_millis(1800),
-                    ));
-                }
-
-                Event::KeyDown {
                     keycode: Some(Keycode::C),
                     repeat: false,
                     ..
@@ -2368,367 +2127,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                     }
-                }
-
-                Event::ControllerButtonDown {
-                    button: sdl2::controller::Button::DPadLeft | sdl2::controller::Button::DPadRight,
-                    ..
-                } if matches!(state, AppState::Menu(MenuScreen::Settings { .. })) => {
-                    let delta = match event {
-                        Event::ControllerButtonDown {
-                            button: sdl2::controller::Button::DPadLeft,
-                            ..
-                        } => -1,
-                        _ => 1,
-                    };
-                    let cursor = match &state {
-                        AppState::Menu(MenuScreen::Settings { cursor, .. }) => *cursor,
-                        _ => 0,
-                    };
-                    let _ = adjust_settings_value(
-                        &mut cfg,
-                        &mut state,
-                        &mut toast,
-                        cursor,
-                        delta,
-                        renderer_name(&canvas),
-                    );
-                }
-
-                Event::KeyDown {
-                    keycode: Some(Keycode::Left),
-                    repeat: false,
-                    ..
-                } if matches!(
-                    state,
-                    AppState::Menu(MenuScreen::Settings { cursor: 5, .. })
-                ) =>
-                {
-                    cfg.volume_percent = cfg.volume_percent.saturating_sub(10);
-                    config::save(&cfg);
-                    if let AppState::Menu(MenuScreen::Settings {
-                        ref mut volume_percent,
-                        ..
-                    }) = state
-                    {
-                        *volume_percent = cfg.volume_percent;
-                    }
-                    toast = Some((
-                        format!("Volume {}%", cfg.volume_percent),
-                        Instant::now() + Duration::from_millis(1800),
-                    ));
-                }
-
-                Event::KeyDown {
-                    keycode: Some(Keycode::Right),
-                    repeat: false,
-                    ..
-                } if matches!(
-                    state,
-                    AppState::Menu(MenuScreen::Settings { cursor: 5, .. })
-                ) =>
-                {
-                    cfg.volume_percent = cfg.volume_percent.saturating_add(10).min(100);
-                    config::save(&cfg);
-                    if let AppState::Menu(MenuScreen::Settings {
-                        ref mut volume_percent,
-                        ..
-                    }) = state
-                    {
-                        *volume_percent = cfg.volume_percent;
-                    }
-                    toast = Some((
-                        format!("Volume {}%", cfg.volume_percent),
-                        Instant::now() + Duration::from_millis(1800),
-                    ));
-                }
-
-                Event::KeyDown {
-                    keycode: Some(Keycode::Left),
-                    repeat: false,
-                    ..
-                } if matches!(
-                    state,
-                    AppState::Menu(MenuScreen::Settings { cursor: 6, .. })
-                ) =>
-                {
-                    cfg.audio_buffer = cfg.audio_buffer.cycle(-1);
-                    config::save(&cfg);
-                    if let AppState::Menu(MenuScreen::Settings {
-                        ref mut audio_buffer,
-                        ..
-                    }) = state
-                    {
-                        *audio_buffer = cfg.audio_buffer;
-                    }
-                    toast = Some((
-                        format!("Audio Buffer {}", cfg.audio_buffer.label()),
-                        Instant::now() + Duration::from_millis(1800),
-                    ));
-                }
-
-                Event::KeyDown {
-                    keycode: Some(Keycode::Right),
-                    repeat: false,
-                    ..
-                } if matches!(
-                    state,
-                    AppState::Menu(MenuScreen::Settings { cursor: 6, .. })
-                ) =>
-                {
-                    cfg.audio_buffer = cfg.audio_buffer.cycle(1);
-                    config::save(&cfg);
-                    if let AppState::Menu(MenuScreen::Settings {
-                        ref mut audio_buffer,
-                        ..
-                    }) = state
-                    {
-                        *audio_buffer = cfg.audio_buffer;
-                    }
-                    toast = Some((
-                        format!("Audio Buffer {}", cfg.audio_buffer.label()),
-                        Instant::now() + Duration::from_millis(1800),
-                    ));
-                }
-
-                Event::KeyDown {
-                    keycode: Some(Keycode::Left),
-                    repeat: false,
-                    ..
-                } if matches!(
-                    state,
-                    AppState::Menu(MenuScreen::Settings { cursor: 7, .. })
-                ) =>
-                {
-                    cfg.video_filter = cfg.video_filter.cycle(-1);
-                    config::save(&cfg);
-                    if let AppState::Menu(MenuScreen::Settings {
-                        ref mut video_filter,
-                        ..
-                    }) = state
-                    {
-                        *video_filter = cfg.video_filter;
-                    }
-                    toast = Some((
-                        video_filter_toast_message(cfg.video_filter, renderer_name(&canvas)),
-                        Instant::now() + Duration::from_millis(1800),
-                    ));
-                }
-
-                Event::KeyDown {
-                    keycode: Some(Keycode::Right),
-                    repeat: false,
-                    ..
-                } if matches!(
-                    state,
-                    AppState::Menu(MenuScreen::Settings { cursor: 7, .. })
-                ) =>
-                {
-                    cfg.video_filter = cfg.video_filter.cycle(1);
-                    config::save(&cfg);
-                    if let AppState::Menu(MenuScreen::Settings {
-                        ref mut video_filter,
-                        ..
-                    }) = state
-                    {
-                        *video_filter = cfg.video_filter;
-                    }
-                    toast = Some((
-                        video_filter_toast_message(cfg.video_filter, renderer_name(&canvas)),
-                        Instant::now() + Duration::from_millis(1800),
-                    ));
-                }
-
-                Event::KeyDown {
-                    keycode: Some(Keycode::Left),
-                    repeat: false,
-                    ..
-                } if matches!(
-                    state,
-                    AppState::Menu(MenuScreen::Settings { cursor: 9, .. })
-                ) =>
-                {
-                    cfg.aspect_mode = cfg.aspect_mode.cycle(-1);
-                    config::save(&cfg);
-                    if let AppState::Menu(MenuScreen::Settings {
-                        ref mut aspect_mode,
-                        ..
-                    }) = state
-                    {
-                        *aspect_mode = cfg.aspect_mode;
-                    }
-                    toast = Some((
-                        format!("Aspect {}", cfg.aspect_mode.label()),
-                        Instant::now() + Duration::from_millis(1800),
-                    ));
-                }
-
-                Event::KeyDown {
-                    keycode: Some(Keycode::Right),
-                    repeat: false,
-                    ..
-                } if matches!(
-                    state,
-                    AppState::Menu(MenuScreen::Settings { cursor: 9, .. })
-                ) =>
-                {
-                    cfg.aspect_mode = cfg.aspect_mode.cycle(1);
-                    config::save(&cfg);
-                    if let AppState::Menu(MenuScreen::Settings {
-                        ref mut aspect_mode,
-                        ..
-                    }) = state
-                    {
-                        *aspect_mode = cfg.aspect_mode;
-                    }
-                    toast = Some((
-                        format!("Aspect {}", cfg.aspect_mode.label()),
-                        Instant::now() + Duration::from_millis(1800),
-                    ));
-                }
-
-                Event::KeyDown {
-                    keycode: Some(Keycode::Left),
-                    repeat: false,
-                    ..
-                } if matches!(
-                    state,
-                    AppState::Menu(MenuScreen::Settings { cursor: 10, .. })
-                ) =>
-                {
-                    cfg.scorebar_style = cfg.scorebar_style.cycle(-1);
-                    config::save(&cfg);
-                    if let AppState::Menu(MenuScreen::Settings {
-                        ref mut scorebar_style,
-                        ..
-                    }) = state
-                    {
-                        *scorebar_style = cfg.scorebar_style;
-                    }
-                    toast = Some((
-                        format!("Scorebar {}", cfg.scorebar_style.label()),
-                        Instant::now() + Duration::from_millis(1800),
-                    ));
-                }
-
-                Event::KeyDown {
-                    keycode: Some(Keycode::Right),
-                    repeat: false,
-                    ..
-                } if matches!(
-                    state,
-                    AppState::Menu(MenuScreen::Settings { cursor: 10, .. })
-                ) =>
-                {
-                    cfg.scorebar_style = cfg.scorebar_style.cycle(1);
-                    config::save(&cfg);
-                    if let AppState::Menu(MenuScreen::Settings {
-                        ref mut scorebar_style,
-                        ..
-                    }) = state
-                    {
-                        *scorebar_style = cfg.scorebar_style;
-                    }
-                    toast = Some((
-                        format!("Scorebar {}", cfg.scorebar_style.label()),
-                        Instant::now() + Duration::from_millis(1800),
-                    ));
-                }
-
-                Event::KeyDown {
-                    keycode: Some(Keycode::Left),
-                    repeat: false,
-                    ..
-                } if matches!(
-                    state,
-                    AppState::Menu(MenuScreen::Settings { cursor: 11, .. })
-                ) =>
-                {
-                    cfg.input_delay = cfg.input_delay.saturating_sub(1);
-                    config::save(&cfg);
-                    if let AppState::Menu(MenuScreen::Settings {
-                        ref mut input_delay,
-                        ..
-                    }) = state
-                    {
-                        *input_delay = cfg.input_delay;
-                    }
-                    toast = Some((
-                        format!("Input Delay {} frames (next match)", cfg.input_delay),
-                        Instant::now() + Duration::from_millis(1800),
-                    ));
-                }
-
-                Event::KeyDown {
-                    keycode: Some(Keycode::Right),
-                    repeat: false,
-                    ..
-                } if matches!(
-                    state,
-                    AppState::Menu(MenuScreen::Settings { cursor: 11, .. })
-                ) =>
-                {
-                    cfg.input_delay = (cfg.input_delay + 1).min(8);
-                    config::save(&cfg);
-                    if let AppState::Menu(MenuScreen::Settings {
-                        ref mut input_delay,
-                        ..
-                    }) = state
-                    {
-                        *input_delay = cfg.input_delay;
-                    }
-                    toast = Some((
-                        format!("Input Delay {} frames (next match)", cfg.input_delay),
-                        Instant::now() + Duration::from_millis(1800),
-                    ));
-                }
-
-                Event::KeyDown {
-                    keycode: Some(Keycode::Left),
-                    repeat: false,
-                    ..
-                } if matches!(
-                    state,
-                    AppState::Menu(MenuScreen::Settings { cursor: 15, .. })
-                ) =>
-                {
-                    cfg.render_profile = cfg.render_profile.cycle(-1);
-                    config::save(&cfg);
-                    if let AppState::Menu(MenuScreen::Settings {
-                        ref mut render_profile,
-                        ..
-                    }) = state
-                    {
-                        *render_profile = cfg.render_profile;
-                    }
-                    toast = Some((
-                        format!("Render Profile {} (restart)", cfg.render_profile.label()),
-                        Instant::now() + Duration::from_millis(2200),
-                    ));
-                }
-
-                Event::KeyDown {
-                    keycode: Some(Keycode::Right),
-                    repeat: false,
-                    ..
-                } if matches!(
-                    state,
-                    AppState::Menu(MenuScreen::Settings { cursor: 15, .. })
-                ) =>
-                {
-                    cfg.render_profile = cfg.render_profile.cycle(1);
-                    config::save(&cfg);
-                    if let AppState::Menu(MenuScreen::Settings {
-                        ref mut render_profile,
-                        ..
-                    }) = state
-                    {
-                        *render_profile = cfg.render_profile;
-                    }
-                    toast = Some((
-                        format!("Render Profile {} (restart)", cfg.render_profile.label()),
-                        Instant::now() + Duration::from_millis(2200),
-                    ));
                 }
 
                 Event::KeyDown {
@@ -2851,17 +2249,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Event::TextInput { text, .. }
                     if matches!(
                         state,
-                        AppState::Menu(menu::MenuScreen::TestIp { editing: true, .. })
-                            | AppState::Menu(menu::MenuScreen::OnlineHub {
-                                tab: menu::OnlineTab::Chat,
-                                focus: menu::HubFocus::Content,
-                                ..
-                            })
-                            | AppState::Menu(menu::MenuScreen::TextEdit { .. })
-                            | AppState::Menu(menu::MenuScreen::MatchUsername {
-                                checking: false,
-                                ..
-                            })
+                        AppState::Menu(menu::MenuScreen::TextEdit { .. })
                             | AppState::FpUi(fp_ui::FpScreen::ClaimUsername {
                                 checking: false,
                                 ..
@@ -2875,17 +2263,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ..
                 } if matches!(
                     state,
-                    AppState::Menu(menu::MenuScreen::TestIp { editing: true, .. })
-                        | AppState::Menu(menu::MenuScreen::OnlineHub {
-                            tab: menu::OnlineTab::Chat,
-                            focus: menu::HubFocus::Content,
-                            ..
-                        })
-                        | AppState::Menu(menu::MenuScreen::TextEdit { .. })
-                        | AppState::Menu(menu::MenuScreen::MatchUsername {
-                            checking: false,
-                            ..
-                        })
+                    AppState::Menu(menu::MenuScreen::TextEdit { .. })
                         | AppState::FpUi(fp_ui::FpScreen::ClaimUsername {
                             checking: false,
                             ..
@@ -2893,51 +2271,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ) || is_fp_test_conn_editing(&state) =>
                 {
                     state.text_backspace();
-                }
-
-                // Physical Enter sends a lobby chat message. Handled here, ahead
-                // of the generic menu-nav dispatch, because in the Chat section
-                // the gamepad A button drives the on-screen keyboard instead of
-                // sending — so keyboard users still send with Enter.
-                Event::KeyDown {
-                    keycode: Some(Keycode::Return | Keycode::KpEnter),
-                    ..
-                } if matches!(
-                    state,
-                    AppState::Menu(menu::MenuScreen::OnlineHub {
-                        tab: menu::OnlineTab::Chat,
-                        focus: menu::HubFocus::Content,
-                        ..
-                    })
-                ) =>
-                {
-                    let message = if let AppState::Menu(menu::MenuScreen::OnlineHub {
-                        ref mut chat_draft,
-                        ref mut status,
-                        ..
-                    }) = state
-                    {
-                        let m = chat_draft.trim().to_string();
-                        if m.is_empty() {
-                            None
-                        } else {
-                            chat_draft.clear();
-                            *status = "Sending chat...".into();
-                            Some(m)
-                        }
-                    } else {
-                        None
-                    };
-                    if let Some(message) = message {
-                        matchmaking::set_guest_profile(
-                            cfg.player_username.clone(),
-                            cfg.stats_email.clone(),
-                            cfg.guest_device_id.clone(),
-                        );
-                        let (tx, rx) = std::sync::mpsc::channel();
-                        lobby_chat_post_rx = Some(rx);
-                        matchmaking::send_lobby_chat(message, tx);
-                    }
                 }
 
                 Event::KeyDown {
@@ -3017,155 +2350,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 Instant::now() + Duration::from_millis(3000),
                             ));
                         }
-                    }
-                }
-
-                _ if matches!(state, AppState::Menu(MenuScreen::About))
-                    && matches!(event_to_menu_nav(&event), Some(MenuNav::Accept)) =>
-                {
-                    let _ = open::that("https://github.com/junkwax/freeplay-gametalk");
-                }
-
-                Event::KeyDown {
-                    keycode: Some(Keycode::R),
-                    repeat: false,
-                    ..
-                }
-                | Event::ControllerButtonDown {
-                    button: sdl2::controller::Button::Y,
-                    ..
-                } if matches!(
-                    state,
-                    AppState::Menu(MenuScreen::SessionEnded {
-                        replay_path: Some(_),
-                        ..
-                    })
-                ) =>
-                {
-                    let path = if let AppState::Menu(MenuScreen::SessionEnded {
-                        replay_path: Some(path),
-                        ..
-                    }) = &state
-                    {
-                        path.clone()
-                    } else {
-                        String::new()
-                    };
-                    ensure_core_loaded(&mut core, &mut audio_queue, &audio_subsystem)?;
-                    if let Some(c) = &core {
-                        match prepare_replay_review(c, &path) {
-                            Ok(pb) => enter_replay_review(
-                                pb,
-                                &mut match_replay_playback,
-                                &mut replay_review_paused,
-                                &mut replay_review_speed,
-                                &mut replay_review_tick,
-                                &mut replay_event_filter,
-                                &mut replay_clip_in,
-                                &mut replay_clip_out,
-                                &mut ghost_playback,
-                                &mut ghost_recording,
-                                &mut drone_runner,
-                                &mut input_history,
-                                &mut clip_recorder,
-                                &mut toast,
-                                &mut state,
-                            ),
-                            Err(e) => {
-                                println!("[replay] Session replay load failed: {e}");
-                                toast = Some((
-                                    format!("Replay unavailable: {e}"),
-                                    Instant::now() + Duration::from_millis(3200),
-                                ));
-                            }
-                        }
-                    }
-                }
-
-                // Mouse challenges in the Online hub: right-click a player name
-                // to open the format chooser, left-click a format to send.
-                Event::MouseButtonDown {
-                    mouse_btn, x, y, ..
-                } if matches!(state, AppState::Menu(menu::MenuScreen::OnlineHub { .. })) => {
-                    match mouse_btn {
-                        sdl2::mouse::MouseButton::Right => {
-                            if let Some(idx) = menu::presence_hit_at(x, y) {
-                                if let AppState::Menu(menu::MenuScreen::OnlineHub {
-                                    tab,
-                                    focus,
-                                    cursor,
-                                    challenge_pick,
-                                    challenge_format,
-                                    presence,
-                                    ..
-                                }) = &mut state
-                                {
-                                    if idx < presence.len() {
-                                        *tab = menu::OnlineTab::Players;
-                                        *focus = menu::HubFocus::Content;
-                                        *cursor = idx;
-                                        *challenge_pick = Some(challenge_format.index());
-                                    }
-                                }
-                            }
-                        }
-                        sdl2::mouse::MouseButton::Left => {
-                            if let Some(pi) = menu::phrase_hit_at(x, y) {
-                                if let AppState::Menu(menu::MenuScreen::OnlineHub {
-                                    chat_draft,
-                                    ..
-                                }) = &mut state
-                                {
-                                    let ph = menu::quick_phrase(pi);
-                                    if chat_draft.chars().count() + ph.chars().count() + 1 <= 180 {
-                                        if !chat_draft.is_empty() && !chat_draft.ends_with(' ') {
-                                            chat_draft.push(' ');
-                                        }
-                                        chat_draft.push_str(ph);
-                                        chat_draft.push(' ');
-                                    }
-                                }
-                            } else if let Some(fmt_idx) = menu::format_hit_at(x, y) {
-                                let target = if let AppState::Menu(
-                                    menu::MenuScreen::OnlineHub {
-                                        challenge_pick: Some(_),
-                                        cursor,
-                                        presence,
-                                        ..
-                                    },
-                                ) = &state
-                                {
-                                    presence.get(*cursor).map(|u| u.player_id.clone())
-                                } else {
-                                    None
-                                };
-                                if let Some(target_id) = target {
-                                    if let AppState::Menu(menu::MenuScreen::OnlineHub {
-                                        challenge_pick,
-                                        ..
-                                    }) = &mut state
-                                    {
-                                        *challenge_pick = None;
-                                    }
-                                    let fmt = menu::ChallengeFormat::at_index(fmt_idx);
-                                    matchmaking::set_guest_profile(
-                                        cfg.player_username.clone(),
-                                        cfg.stats_email.clone(),
-                                        cfg.guest_device_id.clone(),
-                                    );
-                                    shutdown_for_online_start!("Send challenge");
-                                    let (tx, rx) = std::sync::mpsc::channel();
-                                    mm_rx = Some(rx);
-                                    matchmaking::start_send_challenge(
-                                        tx,
-                                        target_id,
-                                        fmt.wire().to_string(),
-                                    );
-                                    set_matchmaking_screen(&mut state, "Challenging player...".into());
-                                }
-                            }
-                        }
-                        _ => {}
                     }
                 }
 
@@ -3937,246 +3121,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         }
                                     }
                                 }
-                                NavResult::OpenUsernameEntry => {
-                                    let value = config::sanitize_username(&cfg.player_username)
-                                        .unwrap_or_else(config::default_username);
-                                    cfg.player_username = value.clone();
-                                    if cfg.player_username_confirmed {
-                                        // Already confirmed once — the name is the same
-                                        // identity used in lobby chat, so going online
-                                        // never re-prompts. Players rename via Settings.
-                                        config::save(&cfg);
-                                        shutdown_for_online_start!("find-match queue");
-                                        start_find_match_queue(
-                                            &cfg,
-                                            &mut mm_rx,
-                                            &mut state,
-                                            value,
-                                            &mut discord_user,
-                                            &mut discord_id,
-                                        );
-                                    } else {
-                                        // First time online: show their auto-generated
-                                        // name and let them keep or change it, then
-                                        // verify it isn't already taken before queueing.
-                                        config::save(&cfg);
-                                        state = AppState::Menu(MenuScreen::MatchUsername {
-                                            value,
-                                            status: "This is your name — edit it or press Enter to claim it".into(),
-                                            checking: false,
-                                        });
-                                    }
-                                }
-                                NavResult::SubmitUsername(value) => {
-                                    match config::sanitize_username(&value) {
-                                        Some(username) => {
-                                            let (tx, rx) = std::sync::mpsc::channel();
-                                            username_check_rx = Some(rx);
-                                            username_check_silent = false;
-                                            username_check_started_at = Some(Instant::now());
-                                            // Reserve under the player's stable
-                                            // identity: their Discord id if
-                                            // signed in, otherwise the per-
-                                            // install guest_device_id.
-                                            let owner_id = discord_id
-                                                .clone()
-                                                .unwrap_or_else(|| cfg.guest_device_id.clone());
-                                            matchmaking::check_username_available(
-                                                cfg.stats_url.clone(),
-                                                username.clone(),
-                                                owner_id,
-                                                tx,
-                                            );
-                                            state = AppState::Menu(MenuScreen::MatchUsername {
-                                                value: username,
-                                                status: "Checking username".into(),
-                                                checking: true,
-                                            });
-                                        }
-                                        None => {
-                                            state = AppState::Menu(MenuScreen::MatchUsername {
-                                                value,
-                                                status: format!(
-                                                    "Invalid name: use 2-{} letters, numbers, _ or -",
-                                                    config::MAX_USERNAME_LEN
-                                                ),
-                                                checking: false,
-                                            });
-                                        }
-                                    }
-                                }
-                                NavResult::StartMatchmaking => {
-                                    cfg.player_username =
-                                        config::sanitize_username(&cfg.player_username)
-                                            .unwrap_or_else(config::default_username);
-                                    config::save(&cfg);
-                                    shutdown_for_online_start!("find-match queue");
-                                    start_find_match_queue(
-                                        &cfg,
-                                        &mut mm_rx,
-                                        &mut state,
-                                        cfg.player_username.clone(),
-                                        &mut discord_user,
-                                        &mut discord_id,
-                                    );
-                                }
-                                NavResult::OpenGhostSelect => {
-                                    let (tx, rx) = std::sync::mpsc::channel();
-                                    ghost_list_rx = Some(rx);
-                                    if let AppState::Menu(menu::MenuScreen::GhostSelect {
-                                        ref mut download_status,
-                                        ..
-                                    }) = state
-                                    {
-                                        if cfg.stats_url.trim().is_empty() {
-                                            *download_status = None;
-                                        } else {
-                                            *download_status =
-                                                Some("Loading shared drones...".into());
-                                        }
-                                    }
-                                    let rh = rom_fingerprint().1;
-                                    let rom_hash = format!("{:016x}", rh);
-                                    matchmaking::fetch_ghost_list(
-                                        cfg.stats_url.clone(),
-                                        rom_hash,
-                                        tx,
-                                    );
-                                }
-                                NavResult::OpenReplaySelect => {
-                                    refresh_replay_select(
-                                        &mut state,
-                                        Some("Loading public replays...".into()),
-                                    );
-                                    let (tx, rx) = std::sync::mpsc::channel();
-                                    public_replay_rx = Some(rx);
-                                    matchmaking::fetch_public_replays(cfg.stats_url.clone(), tx);
-                                }
-                                NavResult::DownloadGhost(ghost_id) => {
-                                    let local_path = format!("ghosts/remote_{ghost_id}.ncgh");
-                                    let (tx, rx) = std::sync::mpsc::channel();
-                                    ghost_download_rx = Some(rx);
-                                    if let AppState::Menu(menu::MenuScreen::GhostSelect {
-                                        ref mut download_status,
-                                        ..
-                                    }) = state
-                                    {
-                                        *download_status =
-                                            Some(format!("Downloading {ghost_id}..."));
-                                    }
-                                    matchmaking::download_ghost(
-                                        cfg.stats_url.clone(),
-                                        ghost_id,
-                                        local_path,
-                                        tx,
-                                    );
-                                }
-                                NavResult::OpenProfile => {
-                                    let profile_id = discord_id
-                                        .clone()
-                                        .or_else(matchmaking::discord_id_from_cached_token)
-                                        .or_else(|| {
-                                            matchmaking::guest_player_id(
-                                                &cfg.player_username,
-                                                &cfg.stats_email,
-                                                &cfg.guest_device_id,
-                                            )
-                                        });
-                                    if let Some(did) = profile_id {
-                                        let display_name = discord_user
-                                            .clone()
-                                            .unwrap_or_else(|| cfg.player_username.clone());
-                                        let (tx, rx) = std::sync::mpsc::channel();
-                                        profile_rx = Some(rx);
-                                        matchmaking::fetch_profile(
-                                            cfg.stats_url.clone(),
-                                            did,
-                                            display_name,
-                                            tx,
-                                        );
-                                    } else {
-                                        state = AppState::Menu(MenuScreen::Profile {
-                                            state: menu::ProfileScreenState::NotLoggedIn,
-                                        });
-                                    }
-                                }
-                                NavResult::OpenLiveMatches => {
-                                    if let AppState::Menu(menu::MenuScreen::OnlineHub {
-                                        ref mut tab,
-                                        ref mut status,
-                                        ..
-                                    }) = state
-                                    {
-                                        *tab = menu::OnlineTab::Watch;
-                                        *status = "Loading live matches...".into();
-                                    }
-                                    let (tx, rx) = std::sync::mpsc::channel();
-                                    live_matches_rx = Some(rx);
-                                    matchmaking::fetch_live_matches(tx);
-                                    live_matches_next_refresh =
-                                        Instant::now() + Duration::from_secs(7);
-                                }
-                                NavResult::OpenLeaderboard => {
-                                    let (tx, rx) = std::sync::mpsc::channel();
-                                    leaderboard_rx = Some(rx);
-                                    matchmaking::fetch_leaderboard(cfg.stats_url.clone(), tx);
-                                }
                                 NavResult::OpenSettings => {
                                     state = AppState::FpUi(fp_ui::FpScreen::settings_from_cfg(&cfg));
-                                }
-                                NavResult::OpenTraining => {
-                                    state = AppState::Menu(MenuScreen::Training {
-                                        cursor: 0,
-                                        hitboxes: trainer.is_enabled("hitboxes"),
-                                        infinite_health: trainer.is_enabled("p1_health"),
-                                        freeze_timer: trainer.is_enabled("freeze_timer"),
-                                    });
-                                }
-                                NavResult::WatchSession(session_id) => {
-                                    let (tx, rx) = std::sync::mpsc::channel();
-                                    spectate_rx = Some(rx);
-                                    spectate_last_update = Some(Instant::now());
-                                    matchmaking::watch_spectate_state(session_id, tx);
-                                }
-                                NavResult::SignOut => {
-                                    matchmaking::clear_cached_token();
-                                    discord_user = None;
-                                    discord_id = None;
-                                    println!("[auth] Signed out");
-                                }
-                                NavResult::EditText(field, title) => {
-                                    let value = match &field {
-                                        menu::EditField::Username => cfg.player_username.clone(),
-                                        menu::EditField::StatsEmail => cfg.stats_email.clone(),
-                                        menu::EditField::ReplayNote { .. }
-                                        | menu::EditField::JoinCode
-                                        | menu::EditField::ChatMessage => String::new(),
-                                    };
-                                    let label = match &field {
-                                        menu::EditField::Username => {
-                                            "Choose the name other players see"
-                                        }
-                                        menu::EditField::StatsEmail => {
-                                            "Optional email for portable stats"
-                                        }
-                                        menu::EditField::ReplayNote { .. } => "Replay note",
-                                        menu::EditField::JoinCode => "Enter invite code",
-                                        menu::EditField::ChatMessage => {
-                                            "Send a message to everyone online"
-                                        }
-                                    };
-                                    // `state` is already `AppState::Menu(MenuScreen::Settings
-                                    // { .. })` here (this only fires from that screen's own
-                                    // `accept()` arm) — clone it directly instead of
-                                    // rebuilding the same struct field-by-field.
-                                    let came_from = state.clone();
-                                    state = AppState::Menu(MenuScreen::TextEdit {
-                                        title,
-                                        label: label.into(),
-                                        value,
-                                        field,
-                                        came_from: Box::new(came_from),
-                                    });
                                 }
                                 NavResult::CommitText(field, value, came_from) => match field {
                                     menu::EditField::JoinCode => {
@@ -4275,729 +3221,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         }
                                         config::save(&cfg);
                                         matchmaking::clear_cached_token();
-                                        // Return to whichever Settings screen (native or
-                                        // legacy) editing began from. fp_ui's own Settings
-                                        // reads `player_username`/`stats_email` live from
-                                        // `cfg` every frame (passed as separate `draw()`
-                                        // params, not baked into `FpScreen::Settings`), so
-                                        // it needs no refresh here — only legacy's own
-                                        // `MenuScreen::Settings`, which snapshots them, does.
+                                        // Return to the Settings screen editing began
+                                        // from. fp_ui's Settings reads
+                                        // `player_username`/`stats_email` live from `cfg`
+                                        // every frame (passed as separate `draw()` params,
+                                        // not baked into `FpScreen::Settings`), so it
+                                        // needs no refresh here.
                                         state = *came_from;
-                                        if let AppState::Menu(MenuScreen::Settings {
-                                            player_username,
-                                            stats_email,
-                                            discord_connected,
-                                            ..
-                                        }) = &mut state
-                                        {
-                                            *player_username = cfg.player_username.clone();
-                                            *stats_email = cfg.stats_email.clone();
-                                            *discord_connected =
-                                                matchmaking::connected_discord_user_from_cached_token()
-                                                    .is_some();
-                                        }
                                     }
                                 },
-                                NavResult::ConnectDiscord => {
-                                    if matchmaking::connected_discord_user_from_cached_token()
-                                        .is_some()
-                                    {
-                                        matchmaking::clear_cached_token();
-                                        discord_user = None;
-                                        discord_id = None;
-                                        toast = Some((
-                                            "Discord disconnected".into(),
-                                            Instant::now() + Duration::from_millis(2200),
-                                        ));
-                                        state = AppState::Menu(MenuScreen::Settings {
-                                            cursor: 2,
-                                            player_username: cfg.player_username.clone(),
-                                            stats_email: cfg.stats_email.clone(),
-                                            discord_connected: false,
-                                            discord_rpc_enabled: cfg.discord_rpc_enabled,
-                                            fullscreen: cfg.fullscreen,
-                                            volume_percent: cfg.volume_percent,
-                                            audio_buffer: cfg.audio_buffer,
-                                            video_filter: cfg.video_filter,
-                                            crt_corner_bend: cfg.crt_corner_bend,
-                                            aspect_mode: cfg.aspect_mode,
-                                            scorebar_style: cfg.scorebar_style,
-                                            input_delay: cfg.input_delay,
-                                            render_profile: cfg.render_profile,
-                                            runahead: cfg.runahead,
-                                            runahead_online: cfg.runahead_online,
-                                        });
-                                    } else {
-                                        let (tx, rx) = std::sync::mpsc::channel();
-                                        mm_rx = Some(rx);
-                                        matchmaking::start_discord_connect(tx);
-                                        set_matchmaking_screen(&mut state, "Opening Discord login...".into());
-                                    }
-                                }
-                                NavResult::ToggleDiscordRpc => {
-                                    cfg.discord_rpc_enabled = !cfg.discord_rpc_enabled;
-                                    config::save(&cfg);
-                                    if cfg.discord_rpc_enabled {
-                                        crate::rpc::set_discord_client_id(
-                                            cfg.discord_client_id.clone(),
-                                        );
-                                        rpc_client = rpc::RpcClient::init();
-                                    } else {
-                                        rpc_client = None;
-                                    }
-                                    if let AppState::Menu(MenuScreen::Settings {
-                                        ref mut discord_rpc_enabled,
-                                        ..
-                                    }) = state
-                                    {
-                                        *discord_rpc_enabled = cfg.discord_rpc_enabled;
-                                    }
-                                    toast = Some((
-                                        format!(
-                                            "Discord Rich Presence {}",
-                                            if cfg.discord_rpc_enabled {
-                                                "enabled"
-                                            } else {
-                                                "disabled"
-                                            }
-                                        ),
-                                        Instant::now() + Duration::from_millis(2200),
-                                    ));
-                                }
-                                NavResult::SendLobbyChat(message) => {
-                                    matchmaking::set_guest_profile(
-                                        cfg.player_username.clone(),
-                                        cfg.stats_email.clone(),
-                                        cfg.guest_device_id.clone(),
-                                    );
-                                    let (tx, rx) = std::sync::mpsc::channel();
-                                    lobby_chat_post_rx = Some(rx);
-                                    matchmaking::send_lobby_chat(message, tx);
-                                    if let AppState::Menu(menu::MenuScreen::OnlineHub {
-                                        ref mut status,
-                                        ..
-                                    }) = state
-                                    {
-                                        *status = "Sending chat...".into();
-                                    }
-                                }
-                                NavResult::JoinLobby(lobby_id) => {
-                                    // Join a king-of-the-hill lobby and open its
-                                    // room screen.
-                                    matchmaking::set_guest_profile(
-                                        cfg.player_username.clone(),
-                                        cfg.stats_email.clone(),
-                                        cfg.guest_device_id.clone(),
-                                    );
-                                    let (tx, rx) = std::sync::mpsc::channel();
-                                    lobby_view_rx = Some(rx);
-                                    matchmaking::join_lobby(tx, lobby_id.clone(), false);
-                                    state = AppState::Menu(MenuScreen::Lobby {
-                                        id: lobby_id,
-                                        view: None,
-                                        status: "Joining lobby...".into(),
-                                        thumb: None,
-                                    });
-                                }
-                                NavResult::CreateLobby(format, private) => {
-                                    // Create a king-of-the-hill lobby named after
-                                    // the player; navigate to it once it exists.
-                                    matchmaking::set_guest_profile(
-                                        cfg.player_username.clone(),
-                                        cfg.stats_email.clone(),
-                                        cfg.guest_device_id.clone(),
-                                    );
-                                    let host_name = if cfg.player_username.trim().is_empty() {
-                                        "Player".to_string()
-                                    } else {
-                                        format!("{}'s lobby", cfg.player_username)
-                                    };
-                                    let (tx, rx) = std::sync::mpsc::channel();
-                                    lobby_view_rx = Some(rx);
-                                    matchmaking::create_lobby(
-                                        tx,
-                                        host_name,
-                                        format.ranked(),
-                                        private,
-                                        format.wire().to_string(),
-                                    );
-                                    state = AppState::Menu(MenuScreen::Lobby {
-                                        id: String::new(),
-                                        view: None,
-                                        status: if private {
-                                            "Creating private lobby...".into()
-                                        } else {
-                                            "Creating lobby...".into()
-                                        },
-                                        thumb: None,
-                                    });
-                                }
-                                NavResult::OpenJoinCode => {
-                                    // Was hardcoded to legacy Main regardless of where this
-                                    // was triggered from — now returns to the actual
-                                    // OnlineHub screen on cancel.
-                                    let came_from = state.clone();
-                                    state = AppState::Menu(MenuScreen::TextEdit {
-                                        title: "JOIN LOBBY".into(),
-                                        label: "Enter the 6-character invite code".into(),
-                                        value: String::new(),
-                                        field: menu::EditField::JoinCode,
-                                        came_from: Box::new(came_from),
-                                    });
-                                }
-                                NavResult::SetLobbyQueue(lobby_id, spectate) => {
-                                    let (tx, rx) = std::sync::mpsc::channel();
-                                    lobby_view_rx = Some(rx);
-                                    matchmaking::join_lobby(tx, lobby_id, spectate);
-                                }
-                                NavResult::ReadyLobby(lobby_id) => {
-                                    let (tx, rx) = std::sync::mpsc::channel();
-                                    lobby_view_rx = Some(rx);
-                                    matchmaking::ready_lobby(tx, lobby_id);
-                                }
-                                NavResult::SendChallenge(target_id, format) => {
-                                    matchmaking::set_guest_profile(
-                                        cfg.player_username.clone(),
-                                        cfg.stats_email.clone(),
-                                        cfg.guest_device_id.clone(),
-                                    );
-                                    shutdown_for_online_start!("Send challenge");
-                                    let (tx, rx) = std::sync::mpsc::channel();
-                                    mm_rx = Some(rx);
-                                    matchmaking::start_send_challenge(
-                                        tx,
-                                        target_id,
-                                        format.wire().to_string(),
-                                    );
-                                    set_matchmaking_screen(&mut state, "Challenging player...".into());
-                                }
-                                NavResult::AcceptChallenge(challenge_id) => {
-                                    matchmaking::set_guest_profile(
-                                        cfg.player_username.clone(),
-                                        cfg.stats_email.clone(),
-                                        cfg.guest_device_id.clone(),
-                                    );
-                                    shutdown_for_online_start!("Accept challenge");
-                                    let (tx, rx) = std::sync::mpsc::channel();
-                                    mm_rx = Some(rx);
-                                    matchmaking::start_accept_challenge(tx, challenge_id);
-                                    set_matchmaking_screen(&mut state, "Accepting challenge...".into());
-                                }
-                                NavResult::ToggleFullscreen => {
-                                    cfg.fullscreen = !cfg.fullscreen;
-                                    config::save(&cfg);
-                                    let result = if cfg.fullscreen {
-                                        canvas.window_mut().set_fullscreen(FullscreenType::Desktop)
-                                    } else {
-                                        canvas.window_mut().set_fullscreen(FullscreenType::Off)
-                                    };
-                                    if let AppState::Menu(MenuScreen::Settings {
-                                        ref mut fullscreen,
-                                        ..
-                                    }) = state
-                                    {
-                                        *fullscreen = cfg.fullscreen;
-                                    }
-                                    toast = Some((
-                                        match result {
-                                            Ok(()) => format!(
-                                                "Fullscreen {}",
-                                                if cfg.fullscreen {
-                                                    "enabled"
-                                                } else {
-                                                    "disabled"
-                                                }
-                                            ),
-                                            Err(e) => format!("Fullscreen failed: {e}"),
-                                        },
-                                        Instant::now() + Duration::from_millis(2200),
-                                    ));
-                                }
-                                NavResult::AdjustVolume(delta) => {
-                                    if delta < 0 {
-                                        cfg.volume_percent =
-                                            cfg.volume_percent.saturating_sub(delta.unsigned_abs());
-                                    } else {
-                                        cfg.volume_percent =
-                                            cfg.volume_percent.saturating_add(delta as u8).min(100);
-                                    }
-                                    config::save(&cfg);
-                                    if let AppState::Menu(MenuScreen::Settings {
-                                        ref mut volume_percent,
-                                        ..
-                                    }) = state
-                                    {
-                                        *volume_percent = cfg.volume_percent;
-                                    }
-                                    toast = Some((
-                                        format!("Volume {}%", cfg.volume_percent),
-                                        Instant::now() + Duration::from_millis(1800),
-                                    ));
-                                }
-                                NavResult::CycleAudioBuffer(delta) => {
-                                    cfg.audio_buffer = cfg.audio_buffer.cycle(delta);
-                                    config::save(&cfg);
-                                    if let AppState::Menu(MenuScreen::Settings {
-                                        ref mut audio_buffer,
-                                        ..
-                                    }) = state
-                                    {
-                                        *audio_buffer = cfg.audio_buffer;
-                                    }
-                                    toast = Some((
-                                        format!("Audio Buffer {}", cfg.audio_buffer.label()),
-                                        Instant::now() + Duration::from_millis(1800),
-                                    ));
-                                }
-                                NavResult::CycleVideoFilter(delta) => {
-                                    cfg.video_filter = cfg.video_filter.cycle(delta);
-                                    config::save(&cfg);
-                                    if let AppState::Menu(MenuScreen::Settings {
-                                        ref mut video_filter,
-                                        ..
-                                    }) = state
-                                    {
-                                        *video_filter = cfg.video_filter;
-                                    }
-                                    toast = Some((
-                                        video_filter_toast_message(
-                                            cfg.video_filter,
-                                            renderer_name(&canvas),
-                                        ),
-                                        Instant::now() + Duration::from_millis(1800),
-                                    ));
-                                }
-                                NavResult::ToggleCrtGlass => {
-                                    cfg.crt_corner_bend = !cfg.crt_corner_bend;
-                                    config::save(&cfg);
-                                    if let AppState::Menu(MenuScreen::Settings {
-                                        ref mut crt_corner_bend,
-                                        ..
-                                    }) = state
-                                    {
-                                        *crt_corner_bend = cfg.crt_corner_bend;
-                                    }
-                                    toast = Some((
-                                        format!(
-                                            "CRT Glass {}",
-                                            if cfg.crt_corner_bend { "ON" } else { "OFF" }
-                                        ),
-                                        Instant::now() + Duration::from_millis(1800),
-                                    ));
-                                }
-                                NavResult::CycleAspectMode(delta) => {
-                                    cfg.aspect_mode = cfg.aspect_mode.cycle(delta);
-                                    config::save(&cfg);
-                                    if let AppState::Menu(MenuScreen::Settings {
-                                        ref mut aspect_mode,
-                                        ..
-                                    }) = state
-                                    {
-                                        *aspect_mode = cfg.aspect_mode;
-                                    }
-                                    toast = Some((
-                                        format!("Aspect {}", cfg.aspect_mode.label()),
-                                        Instant::now() + Duration::from_millis(1800),
-                                    ));
-                                }
-                                NavResult::CycleScorebarStyle(delta) => {
-                                    cfg.scorebar_style = cfg.scorebar_style.cycle(delta);
-                                    config::save(&cfg);
-                                    if let AppState::Menu(MenuScreen::Settings {
-                                        ref mut scorebar_style,
-                                        ..
-                                    }) = state
-                                    {
-                                        *scorebar_style = cfg.scorebar_style;
-                                    }
-                                    toast = Some((
-                                        format!("Scorebar {}", cfg.scorebar_style.label()),
-                                        Instant::now() + Duration::from_millis(1800),
-                                    ));
-                                }
-                                NavResult::AdjustInputDelay(delta) => {
-                                    // ENTER steps through 0..=8 and wraps; LEFT/RIGHT
-                                    // key handlers clamp at the ends instead.
-                                    cfg.input_delay = if delta < 0 {
-                                        cfg.input_delay.saturating_sub(delta.unsigned_abs() as u32)
-                                    } else if cfg.input_delay >= 8 {
-                                        0
-                                    } else {
-                                        (cfg.input_delay + delta as u32).min(8)
-                                    };
-                                    config::save(&cfg);
-                                    if let AppState::Menu(MenuScreen::Settings {
-                                        ref mut input_delay,
-                                        ..
-                                    }) = state
-                                    {
-                                        *input_delay = cfg.input_delay;
-                                    }
-                                    toast = Some((
-                                        format!(
-                                            "Input Delay {} frames (next match)",
-                                            cfg.input_delay
-                                        ),
-                                        Instant::now() + Duration::from_millis(1800),
-                                    ));
-                                }
-                                NavResult::CycleRenderProfile(delta) => {
-                                    cfg.render_profile = cfg.render_profile.cycle(delta);
-                                    config::save(&cfg);
-                                    if let AppState::Menu(MenuScreen::Settings {
-                                        ref mut render_profile,
-                                        ..
-                                    }) = state
-                                    {
-                                        *render_profile = cfg.render_profile;
-                                    }
-                                    toast = Some((
-                                        format!(
-                                            "Render Profile {} (restart)",
-                                            cfg.render_profile.label()
-                                        ),
-                                        Instant::now() + Duration::from_millis(2200),
-                                    ));
-                                }
-                                NavResult::ToggleRunahead => {
-                                    cfg.runahead = !cfg.runahead;
-                                    config::save(&cfg);
-                                    if let AppState::Menu(MenuScreen::Settings {
-                                        ref mut runahead,
-                                        ..
-                                    }) = state
-                                    {
-                                        *runahead = cfg.runahead;
-                                    }
-                                    toast = Some((
-                                        format!(
-                                            "Runahead (offline) {}",
-                                            if cfg.runahead { "ON" } else { "OFF" }
-                                        ),
-                                        Instant::now() + Duration::from_millis(1800),
-                                    ));
-                                }
-                                NavResult::ToggleRunaheadOnline => {
-                                    cfg.runahead_online = !cfg.runahead_online;
-                                    config::save(&cfg);
-                                    if let AppState::Menu(MenuScreen::Settings {
-                                        ref mut runahead_online,
-                                        ..
-                                    }) = state
-                                    {
-                                        *runahead_online = cfg.runahead_online;
-                                    }
-                                    toast = Some((
-                                        format!(
-                                            "Runahead (online, experimental) {}",
-                                            if cfg.runahead_online { "ON" } else { "OFF" }
-                                        ),
-                                        Instant::now() + Duration::from_millis(1800),
-                                    ));
-                                }
-                                NavResult::ToggleTraining(kind) => {
-                                    match kind {
-                                        "hitboxes" => {
-                                            let on = !trainer.is_enabled("hitboxes");
-                                            trainer.set_enabled("hitboxes", on);
-                                        }
-                                        "health" => {
-                                            let on = !trainer.is_enabled("p1_health");
-                                            trainer.set_enabled("p1_health", on);
-                                            trainer.set_enabled("p2_health", on);
-                                        }
-                                        "timer" => {
-                                            let on = !trainer.is_enabled("freeze_timer");
-                                            trainer.set_enabled("freeze_timer", on);
-                                        }
-                                        _ => {}
-                                    }
-                                    if let AppState::Menu(MenuScreen::Training {
-                                        ref mut hitboxes,
-                                        ref mut infinite_health,
-                                        ref mut freeze_timer,
-                                        ..
-                                    }) = state
-                                    {
-                                        *hitboxes = trainer.is_enabled("hitboxes");
-                                        *infinite_health = trainer.is_enabled("p1_health");
-                                        *freeze_timer = trainer.is_enabled("freeze_timer");
-                                    }
-                                    let label = match kind {
-                                        "hitboxes" => "Hitbox view",
-                                        "health" => "Infinite health",
-                                        "timer" => "Freeze timer",
-                                        _ => "Training helper",
-                                    };
-                                    let on = match kind {
-                                        "hitboxes" => trainer.is_enabled("hitboxes"),
-                                        "health" => trainer.is_enabled("p1_health"),
-                                        "timer" => trainer.is_enabled("freeze_timer"),
-                                        _ => false,
-                                    };
-                                    toast = Some((
-                                        format!("{label} {}", if on { "ON" } else { "OFF" }),
-                                        Instant::now() + Duration::from_millis(1800),
-                                    ));
-                                }
-                                NavResult::LaunchDoctor => match launch_debugger() {
-                                    Ok(()) => {
-                                        toast = Some((
-                                            "Doctor launched".into(),
-                                            Instant::now() + Duration::from_millis(2200),
-                                        ));
-                                    }
-                                    Err(e) => {
-                                        toast = Some((
-                                            format!("Doctor failed: {e}"),
-                                            Instant::now() + Duration::from_millis(2600),
-                                        ));
-                                    }
-                                },
-                                NavResult::OpenClipsFolder => {
-                                    let target = std::env::current_dir()
-                                        .unwrap_or_else(|_| std::path::PathBuf::from("."))
-                                        .join("clips");
-                                    let _ = std::fs::create_dir_all(&target);
-                                    match open::that(&target) {
-                                        Ok(()) => {
-                                            toast = Some((
-                                                "Clips folder opened".into(),
-                                                Instant::now() + Duration::from_millis(2200),
-                                            ));
-                                        }
-                                        Err(e) => {
-                                            toast = Some((
-                                                format!("Open failed: {e}"),
-                                                Instant::now() + Duration::from_millis(2600),
-                                            ));
-                                        }
-                                    }
-                                }
-                                NavResult::OpenLogsFolder => {
-                                    let target = std::env::current_dir()
-                                        .unwrap_or_else(|_| std::path::PathBuf::from("."));
-                                    match open::that(&target) {
-                                        Ok(()) => {
-                                            toast = Some((
-                                                "Logs folder opened".into(),
-                                                Instant::now() + Duration::from_millis(2200),
-                                            ));
-                                        }
-                                        Err(e) => {
-                                            toast = Some((
-                                                format!("Open failed: {e}"),
-                                                Instant::now() + Duration::from_millis(2600),
-                                            ));
-                                        }
-                                    }
-                                }
-                                NavResult::RunProbe { peer } => {
-                                    let (_rom_size, rom_hash_u64) = rom_fingerprint();
-                                    let report = netplay::probe_connection(
-                                        peer,
-                                        5,
-                                        version::VERSION,
-                                        rom_hash_u64,
-                                    );
-                                    let lines = format_probe_result(peer, rom_hash_u64, &report);
-                                    for l in &lines {
-                                        println!("[probe] {}", l);
-                                    }
-                                    state = AppState::Menu(MenuScreen::TestResult { lines });
-                                }
-                                NavResult::Quit => break 'running,
-                                NavResult::BeginRebind => {}
-                                NavResult::ClearAllBindings(player) => {
-                                    cfg.bindings.get_mut(player).clear_all();
-                                    config::save(&cfg);
-                                    println!("Cleared all bindings for {}", player.label());
-                                    toast = Some((
-                                        format!("Cleared bindings for {}", player.label()),
-                                        Instant::now() + Duration::from_millis(2200),
-                                    ));
-                                }
-                                NavResult::Stay => {
-                                    // "Online" (Main Menu item 0) landed in legacy's
-                                    // OnlineHub/Play tab via ActivateMainItem's
-                                    // delegation — hand off to fp_ui's own Lobby
-                                    // screen, same pattern as OpenSettings above.
-                                    if let AppState::Menu(MenuScreen::OnlineHub {
-                                        tab: menu::OnlineTab::Play,
-                                        ..
-                                    }) = &state
-                                    {
-                                        state = AppState::FpUi(fp_ui::FpScreen::lobby());
-                                    }
-                                }
-                                NavResult::LoadGhost(path) => {
-                                    ensure_core_loaded(
-                                        &mut core,
-                                        &mut audio_queue,
-                                        &audio_subsystem,
-                                    )?;
-                                    if let Some(c) = &core {
-                                        match ghost::Playback::load(&path) {
-                                            Ok(pb) => {
-                                                if pb.prime(c) {
-                                                    println!(
-                                                        "[ghost] Loaded drone opponent: {} frames",
-                                                        pb.frame_count()
-                                                    );
-                                                    start_logic_ghost_opponent(
-                                                        pb,
-                                                        &mut ghost_port_mask,
-                                                        &mut ghost_playback,
-                                                        &mut drone_runner,
-                                                    );
-                                                    match_replay_playback = None;
-                                                    local_play_mode = LocalPlayMode::Lab;
-                                                    input::clear_all_inputs();
-                                                    auto_start_done = false;
-                                                    auto_start_frame = 0;
-                                                    state = AppState::Playing;
-                                                } else {
-                                                    println!(
-                                                        "[ghost] Anchor state rejected by core."
-                                                    );
-                                                    state = AppState::Menu(MenuScreen::LabMenu {
-                                                        cursor: 1,
-                                                    });
-                                                }
-                                            }
-                                            Err(e) => {
-                                                println!("[ghost] Load failed: {e}");
-                                                state = AppState::Menu(MenuScreen::LabMenu {
-                                                    cursor: 1,
-                                                });
-                                            }
-                                        }
-                                    } else {
-                                        state = AppState::Menu(MenuScreen::LabMenu { cursor: 1 });
-                                    }
-                                }
-                                NavResult::LoadReplay(path) => {
-                                    ensure_core_loaded(
-                                        &mut core,
-                                        &mut audio_queue,
-                                        &audio_subsystem,
-                                    )?;
-                                    if let Some(c) = &core {
-                                        match prepare_replay_review(c, &path) {
-                                            Ok(pb) => enter_replay_review(
-                                                pb,
-                                                &mut match_replay_playback,
-                                                &mut replay_review_paused,
-                                                &mut replay_review_speed,
-                                                &mut replay_review_tick,
-                                                &mut replay_event_filter,
-                                                &mut replay_clip_in,
-                                                &mut replay_clip_out,
-                                                &mut ghost_playback,
-                                                &mut ghost_recording,
-                                                &mut drone_runner,
-                                                &mut input_history,
-                                                &mut clip_recorder,
-                                                &mut toast,
-                                                &mut state,
-                                            ),
-                                            Err(e) => {
-                                                println!("[replay] Load failed: {e}");
-                                                refresh_replay_select(
-                                                    &mut state,
-                                                    Some(format!("Error: {e}")),
-                                                );
-                                            }
-                                        }
-                                    }
-                                }
-                                NavResult::LoadRemoteReplay(url) => {
-                                    set_replay_select_status(
-                                        &mut state,
-                                        "Downloading public replay...",
-                                    );
-                                    match download_remote_replay(&url) {
-                                        Ok(path) => {
-                                            ensure_core_loaded(
-                                                &mut core,
-                                                &mut audio_queue,
-                                                &audio_subsystem,
-                                            )?;
-                                            if let Some(c) = &core {
-                                                match prepare_replay_review(c, &path) {
-                                                    Ok(pb) => enter_replay_review(
-                                                        pb,
-                                                        &mut match_replay_playback,
-                                                        &mut replay_review_paused,
-                                                        &mut replay_review_speed,
-                                                        &mut replay_review_tick,
-                                                        &mut replay_event_filter,
-                                                        &mut replay_clip_in,
-                                                        &mut replay_clip_out,
-                                                        &mut ghost_playback,
-                                                        &mut ghost_recording,
-                                                        &mut drone_runner,
-                                                        &mut input_history,
-                                                        &mut clip_recorder,
-                                                        &mut toast,
-                                                        &mut state,
-                                                    ),
-                                                    Err(e) => {
-                                                        println!("[replay] Load failed: {e}");
-                                                        set_replay_select_status(
-                                                            &mut state,
-                                                            format!("Error: {e}"),
-                                                        );
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        Err(e) => {
-                                            println!("[replay] Remote load failed: {e}");
-                                            set_replay_select_status(
-                                                &mut state,
-                                                format!("Error: {e}"),
-                                            );
-                                        }
-                                    }
-                                }
+                                NavResult::Stay => {}
                             },
                             MenuNav::Left => state.nav_left(),
                             MenuNav::Right => state.nav_right(),
-                            MenuNav::Back => {
-                                // Back on the incoming-challenge modal declines it.
-                                let declined = if let AppState::Menu(
-                                    menu::MenuScreen::OnlineHub { incoming, .. },
-                                ) = &mut state
-                                {
-                                    incoming.take().map(|c| c.challenge_id)
-                                } else {
-                                    None
-                                };
-                                // Leaving a lobby tells the server (auto-destroys
-                                // when empty) and returns to the hub.
-                                let left_lobby = if let AppState::Menu(
-                                    menu::MenuScreen::Lobby { id, .. },
-                                ) = &state
-                                {
-                                    Some(id.clone())
-                                } else {
-                                    None
-                                };
-                                if let Some(id) = declined {
-                                    matchmaking::decline_challenge(id);
-                                } else if let Some(id) = left_lobby {
-                                    if !id.is_empty() {
-                                        matchmaking::leave_lobby(id);
-                                    }
-                                    lobby_view_rx = None;
-                                    state = menu::main_menu_state();
-                                } else {
-                                    state.nav_back();
-                                }
-                            }
+                            MenuNav::Back => state.nav_back(),
                             MenuNav::ToggleMenu => {}
-                            MenuNav::SwitchPlayer => state.nav_switch_player(),
+                            MenuNav::SwitchPlayer => {}
                         }
                     }
                 }
@@ -7177,8 +5416,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 canvas.present();
             }
-            AppState::Menu(MenuScreen::Matchmaking { .. })
-            | AppState::FpUi(fp_ui::FpScreen::Matchmaking { .. })
+            AppState::FpUi(fp_ui::FpScreen::Matchmaking { .. })
             | AppState::FpUi(fp_ui::FpScreen::Lobby { quick_match_status: Some(_), .. })
             | AppState::FpUi(fp_ui::FpScreen::DiscordConnect { .. }) => {
                 if let Some(rx) = &mm_rx {
@@ -7186,7 +5424,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         match rx.try_recv() {
                             Ok(matchmaking::Update::Status(s)) => {
                                 match &mut state {
-                                    AppState::Menu(MenuScreen::Matchmaking { status }) => *status = s,
                                     AppState::FpUi(fp_ui::FpScreen::Matchmaking { status }) => *status = s,
                                     AppState::FpUi(fp_ui::FpScreen::DiscordConnect { status }) => *status = s,
                                     AppState::FpUi(fp_ui::FpScreen::Lobby { quick_match_status, .. }) => {
@@ -7532,16 +5769,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     menu::draw(
                         &state,
-                        &cfg.bindings,
                         &mut canvas,
                         &mut font,
                         win_w as i32,
                         win_h as i32,
-                        rom_present.check(),
-                        discord_user.as_deref(),
-                        &main_leaderboard,
                         toast_payload(&toast),
-                        menu_input_pad,
                     )
                     .map_err(|e| format!("menu draw: {e}"))?;
                 }
@@ -7565,17 +5797,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             AppState::Menu(_) | AppState::Rebinding { .. } | AppState::FpUi(_) => {
                 if matches!(
                     state,
-                    AppState::Menu(menu::MenuScreen::TestIp { editing: true, .. })
-                        | AppState::Menu(menu::MenuScreen::TextEdit { .. })
-                        | AppState::Menu(menu::MenuScreen::OnlineHub {
-                            tab: menu::OnlineTab::Chat,
-                            focus: menu::HubFocus::Content,
-                            ..
-                        })
-                        | AppState::Menu(menu::MenuScreen::MatchUsername {
-                            checking: false,
-                            ..
-                        })
+                    AppState::Menu(menu::MenuScreen::TextEdit { .. })
                         | AppState::FpUi(fp_ui::FpScreen::ClaimUsername {
                             checking: false,
                             ..
@@ -7589,8 +5811,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(rx) = &username_check_rx {
                     let waiting_for_username = matches!(
                         state,
-                        AppState::Menu(menu::MenuScreen::MatchUsername { .. })
-                            | AppState::FpUi(fp_ui::FpScreen::ClaimUsername { .. })
+                        AppState::FpUi(fp_ui::FpScreen::ClaimUsername { .. })
                     ) || (username_check_silent && is_matchmaking_screen(&state));
                     if waiting_for_username {
                         let timed_out = username_check_started_at
@@ -7598,7 +5819,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             .unwrap_or(false);
                         if timed_out {
                             let value = match &state {
-                                AppState::Menu(MenuScreen::MatchUsername { value, .. }) => value.clone(),
                                 AppState::FpUi(fp_ui::FpScreen::ClaimUsername { value, .. }) => value.clone(),
                                 _ => cfg.player_username.clone(),
                             };
@@ -7644,7 +5864,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                                 Ok(matchmaking::UsernameCheckUpdate::Error(message)) => {
                                     let value = match &state {
-                                        AppState::Menu(MenuScreen::MatchUsername { value, .. }) => value.clone(),
                                         AppState::FpUi(fp_ui::FpScreen::ClaimUsername { value, .. }) => value.clone(),
                                         _ => cfg.player_username.clone(),
                                     };
@@ -7674,18 +5893,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
 
-                if (matches!(state, AppState::Menu(menu::MenuScreen::LiveMatches { .. }))
-                    || matches!(
-                        state,
-                        AppState::Menu(menu::MenuScreen::OnlineHub {
-                            tab: menu::OnlineTab::Watch,
-                            ..
-                        })
-                    )
-                    || matches!(
-                        state,
-                        AppState::FpUi(fp_ui::FpScreen::Lobby { tab: 4, .. })
-                    ))
+                if matches!(
+                    state,
+                    AppState::FpUi(fp_ui::FpScreen::Lobby { tab: 4, .. })
+                )
                     && live_matches_rx.is_none()
                     && Instant::now() >= live_matches_next_refresh
                 {
@@ -7699,16 +5910,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // need the online roster; this also registers our presence so
                 // others can challenge us). fp_ui's Chat tab (tab: 3) mirrors
                 // the same fetch rather than a second pipeline.
-                if (matches!(
-                    state,
-                    AppState::Menu(menu::MenuScreen::OnlineHub {
-                        tab: menu::OnlineTab::Chat | menu::OnlineTab::Players,
-                        ..
-                    })
-                ) || matches!(
+                if matches!(
                     state,
                     AppState::FpUi(fp_ui::FpScreen::Lobby { tab: 3, .. })
-                )) && lobby_rx.is_none()
+                ) && lobby_rx.is_none()
                     && Instant::now() >= lobby_next_refresh
                 {
                     let (tx, rx) = std::sync::mpsc::channel();
@@ -7722,12 +5927,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // chat/presence/status fields exactly, so the same fetch
                     // populates either shape.
                     let target = match &mut state {
-                        AppState::Menu(menu::MenuScreen::OnlineHub {
-                            status,
-                            chat,
-                            presence,
-                            ..
-                        }) => Some((status, chat, presence)),
                         AppState::FpUi(fp_ui::FpScreen::Lobby {
                             status,
                             chat,
@@ -7760,9 +5959,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 if let Some(rx) = &lobby_chat_post_rx {
                     let target = match &mut state {
-                        AppState::Menu(menu::MenuScreen::OnlineHub { status, .. }) => {
-                            Some(status)
-                        }
                         AppState::FpUi(fp_ui::FpScreen::Lobby { status, .. }) => Some(status),
                         _ => None,
                     };
@@ -7787,16 +5983,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
 
-                if (matches!(
-                    state,
-                    AppState::Menu(menu::MenuScreen::OnlineHub {
-                        tab: menu::OnlineTab::Lobbies,
-                        ..
-                    })
-                ) || matches!(
+                if matches!(
                     state,
                     AppState::FpUi(fp_ui::FpScreen::Lobby { tab: 2, .. })
-                )) && lobby_list_rx.is_none()
+                ) && lobby_list_rx.is_none()
                     && Instant::now() >= lobby_list_next_refresh
                 {
                     let (tx, rx) = std::sync::mpsc::channel();
@@ -7811,12 +6001,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // fields exactly (status/lobbies/cursor) rather than a
                     // second fetch pipeline.
                     let target = match &mut state {
-                        AppState::Menu(menu::MenuScreen::OnlineHub {
-                            status,
-                            lobbies,
-                            cursor,
-                            ..
-                        }) => Some((status, lobbies, cursor)),
                         AppState::FpUi(fp_ui::FpScreen::Lobby {
                             status,
                             lobbies,
@@ -7856,11 +6040,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Poll incoming challenges anywhere in the Online hub (legacy or
                 // native) and raise a modal prompt when one arrives — a
                 // challenge can land while any tab is showing, not just Players.
-                if matches!(
-                    state,
-                    AppState::Menu(menu::MenuScreen::OnlineHub { .. })
-                        | AppState::FpUi(fp_ui::FpScreen::Lobby { .. })
-                ) && challenge_rx.is_none()
+                if matches!(state, AppState::FpUi(fp_ui::FpScreen::Lobby { .. }))
+                    && challenge_rx.is_none()
                     && Instant::now() >= challenge_next_refresh
                 {
                     let (tx, rx) = std::sync::mpsc::channel();
@@ -7872,11 +6053,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(rx) = &challenge_rx {
                     match rx.try_recv() {
                         Ok(matchmaking::ChallengeListUpdate::Loaded(list)) => {
-                            if let AppState::Menu(menu::MenuScreen::OnlineHub {
-                                ref mut incoming,
-                                ..
-                            })
-                            | AppState::FpUi(fp_ui::FpScreen::Lobby {
+                            if let AppState::FpUi(fp_ui::FpScreen::Lobby {
                                 ref mut incoming, ..
                             }) = state
                             {
@@ -7898,12 +6075,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
 
-                // King-of-the-hill lobby: poll state while the lobby room screen
-                // is up — legacy or native, both carry the exact same fields
-                // (`FpScreen::LobbyRoom` mirrors `MenuScreen::Lobby`'s shape), so
-                // the same or-pattern binds either one.
-                if let AppState::Menu(menu::MenuScreen::Lobby { id, .. })
-                | AppState::FpUi(fp_ui::FpScreen::LobbyRoom { id, .. }) = &state
+                // King-of-the-hill lobby: poll state while the lobby room
+                // screen is up.
+                if let AppState::FpUi(fp_ui::FpScreen::LobbyRoom { id, .. }) = &state
                 {
                     if !id.is_empty()
                         && lobby_view_rx.is_none()
@@ -7918,8 +6092,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(rx) = &lobby_view_rx {
                     match rx.try_recv() {
                         Ok(matchmaking::LobbyViewUpdate::Created(new_id)) => {
-                            if let AppState::Menu(menu::MenuScreen::Lobby { id, status, .. })
-                            | AppState::FpUi(fp_ui::FpScreen::LobbyRoom { id, status, .. }) =
+                            if let AppState::FpUi(fp_ui::FpScreen::LobbyRoom { id, status, .. }) =
                                 &mut state
                             {
                                 *id = new_id;
@@ -7945,14 +6118,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 // round intro), then every ~25s.
                                 lobby_thumb_next_push = Instant::now() + Duration::from_secs(8);
                                 set_matchmaking_screen(&mut state, "Match starting — connecting...".into());
-                            } else if let AppState::Menu(menu::MenuScreen::Lobby {
-                                id,
-                                view,
-                                status,
-                                thumb,
-                                ..
-                            })
-                            | AppState::FpUi(fp_ui::FpScreen::LobbyRoom {
+                            } else if let AppState::FpUi(fp_ui::FpScreen::LobbyRoom {
                                 id,
                                 view,
                                 status,
@@ -7970,8 +6136,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             lobby_view_rx = None;
                         }
                         Ok(matchmaking::LobbyViewUpdate::Error(e)) => {
-                            if let AppState::Menu(menu::MenuScreen::Lobby { status, .. })
-                            | AppState::FpUi(fp_ui::FpScreen::LobbyRoom { status, .. }) =
+                            if let AppState::FpUi(fp_ui::FpScreen::LobbyRoom { status, .. }) =
                                 &mut state
                             {
                                 *status = format!("Lobby unavailable: {e}");
@@ -7987,8 +6152,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 // King-of-the-hill: fetch the live match thumbnail while a match
                 // is in progress in the lobby we're viewing.
-                if let AppState::Menu(menu::MenuScreen::Lobby { id, view, .. })
-                | AppState::FpUi(fp_ui::FpScreen::LobbyRoom { id, view, .. }) = &state
+                if let AppState::FpUi(fp_ui::FpScreen::LobbyRoom { id, view, .. }) = &state
                 {
                     let has_match = view.as_ref().map_or(false, |v| v.current.is_some());
                     if has_match
@@ -8008,8 +6172,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let expected =
                                 (render::LOBBY_THUMB_W * render::LOBBY_THUMB_H * 4) as usize;
                             if rgba.len() == expected {
-                                if let AppState::Menu(menu::MenuScreen::Lobby { thumb, .. })
-                                | AppState::FpUi(fp_ui::FpScreen::LobbyRoom { thumb, .. }) =
+                                if let AppState::FpUi(fp_ui::FpScreen::LobbyRoom { thumb, .. }) =
                                     &mut state
                                 {
                                     *thumb = Some((
@@ -8028,17 +6191,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
 
-                // Populate the Drone loader when entering the screen (both the
-                // legacy screen and the native fp_ui one — see
+                // Populate the Drone loader when entering the screen (see
                 // `scan_local_ghost_entries`).
-                if let AppState::Menu(menu::MenuScreen::GhostSelect {
-                    ref mut entries, ..
-                }) = state
-                {
-                    if entries.is_empty() {
-                        *entries = scan_local_ghost_entries();
-                    }
-                }
                 if let AppState::FpUi(fp_ui::FpScreen::GhostSelect {
                     ref mut entries, ..
                 }) = state
@@ -8048,75 +6202,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
 
-                // Drain the profile fetcher channel and update the screen.
-                // Runs every menu frame; if the user navigated away mid-fetch
-                // we drop the result on Disconnected.
-                if let Some(rx) = &profile_rx {
-                    if let AppState::Menu(menu::MenuScreen::Profile { ref mut state }) = state {
-                        match rx.try_recv() {
-                            Ok(matchmaking::ProfileUpdate::Loaded { profile, history }) => {
-                                // Spawn avatar download if the profile has an avatar URL
-                                if let Some(ref url) = profile.avatar_url {
-                                    let url_clone = url.clone();
-                                    let (atx, arx) = std::sync::mpsc::channel();
-                                    avatar_rx = Some(arx);
-                                    std::thread::spawn(move || {
-                                        match matchmaking::http_get_bytes(&url_clone) {
-                                            Ok(bytes) => {
-                                                let _ = atx.send(bytes);
-                                            }
-                                            Err(e) => {
-                                                println!("[avatar] download failed: {e}");
-                                            }
-                                        }
-                                    });
-                                }
-                                *state = menu::ProfileScreenState::Loaded {
-                                    profile,
-                                    history,
-                                    avatar_rgba: None,
-                                };
-                                profile_rx = None;
-                            }
-                            Ok(matchmaking::ProfileUpdate::Empty { username }) => {
-                                *state = menu::ProfileScreenState::Empty { username };
-                                profile_rx = None;
-                            }
-                            Ok(matchmaking::ProfileUpdate::Error(msg)) => {
-                                *state = menu::ProfileScreenState::Error(msg);
-                                profile_rx = None;
-                            }
-                            Err(std::sync::mpsc::TryRecvError::Empty) => {}
-                            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                                profile_rx = None;
-                            }
-                        }
-                    } else {
-                        // User left the Profile screen — drop the channel; the
-                        // background thread will finish and push to a closed rx.
-                        profile_rx = None;
-                    }
-                }
 
                 // Drain the leaderboard fetcher channel.
                 if let Some(rx) = &leaderboard_rx {
                     match rx.try_recv() {
                         Ok(matchmaking::LeaderboardUpdate::Loaded(rows)) => {
-                            main_leaderboard = menu::LeaderboardState::Loaded(rows.clone());
-                            if let AppState::Menu(menu::MenuScreen::Leaderboard { ref mut state }) =
-                                state
-                            {
-                                *state = menu::LeaderboardState::Loaded(rows);
-                            }
+                            main_leaderboard = menu::LeaderboardState::Loaded(rows);
                             leaderboard_rx = None;
                         }
                         Ok(matchmaking::LeaderboardUpdate::Error(message)) => {
-                            main_leaderboard = menu::LeaderboardState::Error(message.clone());
-                            if let AppState::Menu(menu::MenuScreen::Leaderboard { ref mut state }) =
-                                state
-                            {
-                                *state = menu::LeaderboardState::Error(message);
-                            }
+                            main_leaderboard = menu::LeaderboardState::Error(message);
                             leaderboard_rx = None;
                         }
                         Err(std::sync::mpsc::TryRecvError::Empty) => {}
@@ -8231,33 +6326,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ));
                 }
 
-                // Drain the avatar download channel — decode and cache.
-                if let Some(rx) = &avatar_rx {
-                    if let AppState::Menu(menu::MenuScreen::Profile {
-                        state:
-                            menu::ProfileScreenState::Loaded {
-                                ref mut avatar_rgba,
-                                ..
-                            },
-                        ..
-                    }) = state
-                    {
-                        match rx.try_recv() {
-                            Ok(bytes) => {
-                                if let Some((rgba, w, h)) = png::decode_png(&bytes) {
-                                    *avatar_rgba = Some((rgba, w, h));
-                                }
-                                avatar_rx = None;
-                            }
-                            Err(std::sync::mpsc::TryRecvError::Empty) => {}
-                            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                                avatar_rx = None;
-                            }
-                        }
-                    } else {
-                        avatar_rx = None;
-                    }
-                }
 
                 // Drain the spectator relay poller.
                 if let Some(rx) = &spectate_rx {
@@ -8301,18 +6369,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Drain the live-match browser fetcher.
                 if let Some(rx) = &live_matches_rx {
                     match &mut state {
-                        AppState::Menu(menu::MenuScreen::LiveMatches {
-                            cursor,
-                            matches,
-                            status,
-                        })
-                        | AppState::Menu(menu::MenuScreen::OnlineHub {
-                            cursor,
-                            live_matches: matches,
-                            status,
-                            ..
-                        })
-                        | AppState::FpUi(fp_ui::FpScreen::Lobby {
+                        AppState::FpUi(fp_ui::FpScreen::Lobby {
                             cursor,
                             live_matches: matches,
                             status,
@@ -8348,9 +6405,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Drain the public replay index fetcher channel.
                 if let Some(rx) = &public_replay_rx {
                     let entries_status = match &mut state {
-                        AppState::Menu(menu::MenuScreen::ReplaySelect { entries, status, .. }) => {
-                            Some((entries, status))
-                        }
                         AppState::FpUi(fp_ui::FpScreen::ReplaySelect { entries, status, .. }) => {
                             Some((entries, status))
                         }
@@ -8420,9 +6474,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Drain the ghost-list fetcher channel.
                 if let Some(rx) = &ghost_list_rx {
                     let entries_status = match &mut state {
-                        AppState::Menu(menu::MenuScreen::GhostSelect { entries, download_status, .. }) => {
-                            Some((entries, download_status))
-                        }
                         AppState::FpUi(fp_ui::FpScreen::GhostSelect { entries, status, .. }) => {
                             Some((entries, status))
                         }
@@ -8469,9 +6520,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Drain the ghost download channel.
                 if let Some(rx) = &ghost_download_rx {
                     let cursor_entries_status = match &mut state {
-                        AppState::Menu(menu::MenuScreen::GhostSelect { cursor, entries, download_status, .. }) => {
-                            Some((cursor, entries, download_status))
-                        }
                         AppState::FpUi(fp_ui::FpScreen::GhostSelect { cursor, entries, status, .. }) => {
                             Some((cursor, entries, status))
                         }
@@ -8690,16 +6738,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     menu::draw(
                         &state,
-                        &cfg.bindings,
                         &mut canvas,
                         &mut font,
                         win_w as i32,
                         win_h as i32,
-                        rom_present.check(),
-                        discord_user.as_deref(),
-                        &main_leaderboard,
                         toast_payload(&toast),
-                        menu_input_pad,
                     )
                     .map_err(|e| format!("menu draw: {e}"))?;
                 }
@@ -8723,8 +6766,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             } else if is_matchmaking_screen(&state) {
                 rpc::RpcState::Matchmaking
-            } else if matches!(state, AppState::Menu(menu::MenuScreen::TestIp { .. })) {
-                rpc::RpcState::Joining
             } else if state == AppState::Playing && is_training {
                 if spar_room_id.is_none() {
                     spar_room_id = Some(rpc::make_spar_key());

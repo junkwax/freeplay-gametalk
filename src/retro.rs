@@ -149,11 +149,6 @@ pub fn set_live_input(port: usize, id: usize, pressed: bool) {
     }
 }
 
-/// Read one live (user-held) input slot.
-pub fn live_input(port: usize, id: usize) -> bool {
-    port < 2 && id < 16 && PADS.lock().expect("pads lock poisoned").live[port][id]
-}
-
 /// Snapshot one port's live row.
 pub fn live_input_port(port: usize) -> [bool; 16] {
     if port < 2 {

@@ -445,12 +445,6 @@ pub fn set_action_source(player: Player, action: Action, source: InputSource, pr
     set_action(player, action, pressed);
 }
 
-/// Whether the user is currently holding this action (live pad state).
-/// Used by the menu's live-press indicator and by snapshot_player().
-pub fn is_action_active(player: Player, action: Action) -> bool {
-    crate::retro::live_input(player.port(), action.retro_id())
-}
-
 /// Serialize one player's live pad state into a compact 16-bit packet for
 /// network transmission. Bit index = position in Action::ALL.
 pub fn snapshot_player(player: Player) -> u16 {

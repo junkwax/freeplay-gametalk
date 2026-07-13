@@ -111,6 +111,7 @@ pub enum RpcState {
     Matchmaking,
     #[allow(dead_code)]
     Hosting,
+    #[allow(dead_code)]
     Joining,
     Netplay,
     NetplayVs(String),
