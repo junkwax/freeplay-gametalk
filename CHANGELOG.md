@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.8.4 - 2026-07-13
+
+### Changed
+
+- **ROM compatibility**: the RAM address table was regenerated for the
+  current mk2-main ROM build (linked 2026-07-13) — the previous table
+  dated back to v0.7.7, which is why every Lab tool (hitboxes, infinite
+  health, freeze timer, punish trainer) had gone dead and the training
+  dummy mashed punch through character select. This build requires the
+  matching mk2.zip. Drones (`.ncgh`) and replays (`.ncrp`) recorded on
+  older ROM builds no longer load: their anchor savestates only prime
+  against the build that captured them, and the shared drone/replay
+  catalogues are filtered by ROM hash, so the remote lists start empty
+  until matches are played on the new build.
+- Lab now hands you the dummy's character select: the dummy auto-joins
+  during select but presses nothing that picks, and the moment you lock
+  in P1 your controls steer P2's cursor (any attack button confirms). A
+  release guard keeps the button that confirmed P1 from insta-picking.
+  A second controller on P2 keeps working throughout.
+- The Claim Username screen re-rolls a fresh generated callsign on
+  Triangle (Tab on keyboard); nothing is claimed until Enter.
+- Replays shorter than one minute (join failures, abandoned sessions)
+  no longer appear in any replay list. The files are kept on disk.
+- The Lab menu's shortcut panel and the About screen's in-lab key list
+  now match the real F2–F12 bindings (both claimed F7 was the punish
+  trainer — it's F10 — and misdescribed F4/F5/F6/F8/F9).
+
+### Fixed
+
+- Watching a public replay no longer leaves a second, score-less "—"
+  row for the same match: the downloaded copy now gets the same score
+  summary sidecar netplay recordings write, and the public index merge
+  recognizes already-downloaded replays instead of listing them twice.
+- Loading an incompatible drone now reports "recorded on a different
+  ROM/core build" on the drone screen instead of silently bouncing back
+  to the Lab menu with a console-only message.
+
 ## 0.8.3 - 2026-07-13
 
 ### Changed
