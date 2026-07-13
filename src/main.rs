@@ -1742,6 +1742,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut lab_assist_visible = true;
     let mut local_play_mode = LocalPlayMode::Arcade;
     let mut lab_dummy = lab::DummyController::default();
+    let mut lab_select_hint_shown = false;
     let mut lab_position_preset = lab::PositionPreset::default();
     let mut punish_trainer = lab::PunishTrainer::default();
     let mut damage_tracker = lab::DamageTracker::default();
@@ -4838,18 +4839,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else {
                         input::commit_live_to_state();
                         input_history.step(input::snapshot_player(Player::P1));
-                        if local_play_mode.is_lab() && !auto_start_done {
-                            let gstate = memory::peek_u16(c, GSTATE_ADDR, memory::Endian::Little)
-                                .unwrap_or(0);
-                            if gstate == GS_AMODE {
-                                let pulse = (auto_start_frame % 24) < 4;
-                                retro::set_input(0, RETRO_DEVICE_ID_JOYPAD_START as usize, pulse);
-                                auto_start_frame = auto_start_frame.wrapping_add(1);
-                            } else if gstate != 0 {
-                                retro::set_input(0, RETRO_DEVICE_ID_JOYPAD_START as usize, false);
-                                auto_start_done = true;
-                            }
-                        }
                         if local_play_mode.is_lab() && ghost_playback.is_none() {
                             let gstate = memory::peek_u16(c, GSTATE_ADDR, memory::Endian::Little)
                                 .unwrap_or(0);
@@ -4880,11 +4869,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             {
                                 input::apply_snapshot(Player::P2, bits);
                             }
+                            // One-shot hint the moment select hands P2's
+                            // cursor to the player — the handoff is invisible
+                            // otherwise.
+                            let mirroring = matches!(
+                                phase,
+                                lab::LabPhase::Select {
+                                    p1_picked: true,
+                                    p2_picked: false
+                                }
+                            );
+                            if mirroring && !lab_select_hint_shown {
+                                lab_select_hint_shown = true;
+                                toast = Some((
+                                    "Your controls now move P2 - pick the dummy's fighter".into(),
+                                    Instant::now() + Duration::from_millis(2600),
+                                ));
+                            } else if !mirroring && lab_select_hint_shown && phase != lab::LabPhase::Fight
+                            {
+                                lab_select_hint_shown = false;
+                            }
                             if let Some(frames) = lab_dummy.take_auto_finished_loop() {
                                 toast = Some((
                                     format!("Dummy loop saved {}", lab::format_frames(frames)),
                                     Instant::now() + Duration::from_millis(2200),
                                 ));
+                            }
+                        }
+                        // Runs after the dummy has written P2's port: both
+                        // Start bits pulse in the same frames, so the game
+                        // starts with P1 and P2 joined together instead of
+                        // P2 trickling in during select.
+                        if local_play_mode.is_lab() && !auto_start_done {
+                            let gstate = memory::peek_u16(c, GSTATE_ADDR, memory::Endian::Little)
+                                .unwrap_or(0);
+                            if gstate == GS_AMODE {
+                                let pulse = (auto_start_frame % 24) < 4;
+                                retro::set_input(0, RETRO_DEVICE_ID_JOYPAD_START as usize, pulse);
+                                retro::set_input(1, RETRO_DEVICE_ID_JOYPAD_START as usize, pulse);
+                                auto_start_frame = auto_start_frame.wrapping_add(1);
+                            } else if gstate != 0 {
+                                retro::set_input(0, RETRO_DEVICE_ID_JOYPAD_START as usize, false);
+                                retro::set_input(1, RETRO_DEVICE_ID_JOYPAD_START as usize, false);
+                                auto_start_done = true;
                             }
                         }
                         if let Some(pb) = ghost_playback.as_mut() {

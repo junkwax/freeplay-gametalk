@@ -144,7 +144,9 @@ struct CacheKey {
     g: u8,
     b: u8,
     a: u8,
-    scale: u32,
+    /// Point size, not a scale multiplier — the fractional overlay path
+    /// renders at arbitrary point sizes, so the cache keys on the real size.
+    pt: u32,
 }
 
 struct TtfBackend<'ttf, 'tc> {
@@ -157,16 +159,25 @@ struct TtfBackend<'ttf, 'tc> {
 }
 
 impl<'ttf, 'tc> TtfBackend<'ttf, 'tc> {
-    fn ensure_font(&mut self, scale: u32) -> Result<(), String> {
-        if self.fonts.contains_key(&scale) {
+    fn pt_for_scale(&self, scale: u32) -> u32 {
+        self.base_pt * scale.max(1)
+    }
+
+    /// Point size for a fractional multiple of the base size — the overlay
+    /// scale path, where ×1.4 at 1080p must not round up to a full ×2.
+    fn pt_for_factor(&self, factor: f32) -> u32 {
+        ((self.base_pt as f32) * factor).round().max(1.0) as u32
+    }
+
+    fn ensure_font(&mut self, pt: u32) -> Result<(), String> {
+        if self.fonts.contains_key(&pt) {
             return Ok(());
         }
-        let pt = (self.base_pt * scale) as u16;
         let font = self
             .ctx
-            .load_font(&self.font_path, pt)
+            .load_font(&self.font_path, pt as u16)
             .map_err(|e| e.to_string())?;
-        self.fonts.insert(scale, font);
+        self.fonts.insert(pt, font);
         Ok(())
     }
 
@@ -179,20 +190,32 @@ impl<'ttf, 'tc> TtfBackend<'ttf, 'tc> {
         scale: u32,
         color: Color,
     ) -> Result<(), String> {
+        self.render_pt(canvas, text, x, y, self.pt_for_scale(scale), color)
+    }
+
+    fn render_pt(
+        &mut self,
+        canvas: &mut Canvas<Window>,
+        text: &str,
+        x: i32,
+        y: i32,
+        pt: u32,
+        color: Color,
+    ) -> Result<(), String> {
         if text.is_empty() {
             return Ok(());
         }
-        self.ensure_font(scale)?;
+        self.ensure_font(pt)?;
         let key = CacheKey {
             text: text.to_string(),
             r: color.r,
             g: color.g,
             b: color.b,
             a: color.a,
-            scale,
+            pt,
         };
         if !self.cache.contains_key(&key) {
-            let font = &self.fonts[&scale];
+            let font = &self.fonts[&pt];
             let surf = font
                 .render(text)
                 .blended(color)
@@ -210,7 +233,7 @@ impl<'ttf, 'tc> TtfBackend<'ttf, 'tc> {
                     g: color.g,
                     b: color.b,
                     a: color.a,
-                    scale,
+                    pt,
                 },
                 (tex, w, h),
             );
@@ -221,16 +244,28 @@ impl<'ttf, 'tc> TtfBackend<'ttf, 'tc> {
     }
 
     fn text_width(&mut self, text: &str, scale: u32) -> i32 {
+        let pt = self.pt_for_scale(scale);
+        let w = self.text_width_pt(text, pt);
+        if w == i32::MIN {
+            fallback_text_width(text, scale)
+        } else {
+            w
+        }
+    }
+
+    /// Width at an exact point size. Returns `i32::MIN` when the font can't
+    /// be loaded/measured so callers can pick their own fallback metric.
+    fn text_width_pt(&mut self, text: &str, pt: u32) -> i32 {
         if text.is_empty() {
             return 0;
         }
-        if self.ensure_font(scale).is_err() {
-            return fallback_text_width(text, scale);
+        if self.ensure_font(pt).is_err() {
+            return i32::MIN;
         }
-        let font = &self.fonts[&scale];
+        let font = &self.fonts[&pt];
         match font.size_of(text) {
             Ok((w, _h)) => w as i32,
-            Err(_) => fallback_text_width(text, scale),
+            Err(_) => i32::MIN,
         }
     }
 }
@@ -350,6 +385,54 @@ impl<'ttf, 'tc> Font<'ttf, 'tc> {
             fallback_text_width(text, scale)
         }
     }
+
+    /// Draw overlay text at a fractional multiple of the overlay font's base
+    /// size — smooth window-proportional scaling instead of whole doubling
+    /// steps. The bitmap fallback can only scale in whole steps and rounds.
+    pub fn draw_overlay_scaled(
+        &mut self,
+        canvas: &mut Canvas<Window>,
+        text: &str,
+        x: i32,
+        y: i32,
+        factor: f32,
+        color: Color,
+    ) -> Result<(), String> {
+        if let Some(ttf) = self.overlay_ttf.as_mut() {
+            let pt = ttf.pt_for_factor(factor);
+            ttf.render_pt(canvas, text, x, y, pt, color)
+        } else if let Some(ttf) = self.ttf.as_mut() {
+            let pt = ttf.pt_for_factor(factor);
+            ttf.render_pt(canvas, text, x, y, pt, color)
+        } else {
+            let scale = (factor.round() as u32).max(1);
+            self.bitmap.draw(canvas, text, x, y, scale, color)
+        }
+    }
+
+    /// Width companion to `draw_overlay_scaled`.
+    pub fn text_width_overlay_scaled(&mut self, text: &str, factor: f32) -> i32 {
+        let fallback_scale = (factor.round() as u32).max(1);
+        if let Some(ttf) = self.overlay_ttf.as_mut() {
+            let pt = ttf.pt_for_factor(factor);
+            let w = ttf.text_width_pt(text, pt);
+            if w == i32::MIN {
+                fallback_text_width(text, fallback_scale)
+            } else {
+                w
+            }
+        } else if let Some(ttf) = self.ttf.as_mut() {
+            let pt = ttf.pt_for_factor(factor);
+            let w = ttf.text_width_pt(text, pt);
+            if w == i32::MIN {
+                fallback_text_width(text, fallback_scale)
+            } else {
+                w
+            }
+        } else {
+            fallback_text_width(text, fallback_scale)
+        }
+    }
 }
 
 fn load_ttf_backend<'ttf, 'tc>(
@@ -364,7 +447,7 @@ fn load_ttf_backend<'ttf, 'tc>(
     match ctx.load_font(&path, base_pt as u16) {
         Ok(font) => {
             let mut fonts = HashMap::new();
-            fonts.insert(1, font);
+            fonts.insert(base_pt, font);
             println!("Loaded {name}: {path} ({}pt base)", base_pt);
             Some(TtfBackend {
                 ctx,
