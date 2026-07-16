@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.8.6 - 2026-07-15
+
+### Changed
+
+- The overhead scoreboard now scales smoothly with window size instead of
+  staying at a fixed pixel size (tiny in fullscreen) or jumping in whole
+  doubling steps: the overlay font renders at exact fractional point sizes,
+  and the plate art, gaps, and spacing follow the same factor. The default
+  window renders exactly as before; 1080p fullscreen lands at ~1.4×.
+- Lab now starts with both players joined from the first frame — P1 and P2
+  Start pulse together during attract — instead of the dummy trickling in
+  partway through the select screen.
+- A one-shot toast announces the Lab select handoff ("Your controls now
+  move P2 — pick the dummy's fighter") the moment P1 locks in.
+- The punish trainer teaches its workflow: turning it on without a recorded
+  dummy loop explains the Ctrl+F5 record step (the trainer only arms when a
+  loop wraps), and saving a loop while it's on confirms the window is armed.
+
+### Fixed
+
+- Three Lab dummy modes were mis-wired against MK2's mechanics: REV MASH
+  and THROW TECH pressed Low Punch while holding Block, which MK2 ignores —
+  the dummy just blocked forever. Both now release block for clean press
+  frames and guard in between. JUMP IN hardcoded "up-left" and jumped away
+  from you after a side switch; it now reads both fighters' positions and
+  always jumps toward P1.
+
 ## 0.8.5 - 2026-07-13
 
 ### Fixed
