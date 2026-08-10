@@ -21,6 +21,7 @@ mod incident;
 mod input;
 mod input_history;
 mod lab;
+mod lab_trace;
 mod log;
 mod match_replay;
 mod matchmaking;
@@ -1775,6 +1776,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut punish_trainer = lab::PunishTrainer::default();
     let mut damage_tracker = lab::DamageTracker::default();
     let mut ghost_recording: Option<ghost::Recording> = None;
+    // Readable companion to the ghost recording: same start/stop, but a
+    // per-frame CSV of inputs AND the resulting game state, for frame-data work.
+    let mut lab_trace: Option<lab_trace::Trace> = None;
     let mut ghost_playback: Option<ghost::Playback> = None;
     let mut match_replay_recording: Option<match_replay::Recording> = None;
     let mut match_replay_playback: Option<match_replay::Playback> = None;
@@ -4281,6 +4285,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         } else if net_session.is_some() {
                             println!("[ghost] Drone recording disabled in netplay mode.");
                         } else if let Some(rec) = ghost_recording.take() {
+                            if let Some(tr) = lab_trace.take() {
+                                tr.finish();
+                            }
                             match rec.save(&ghost_path) {
                                 Ok(_) => {
                                     println!(
@@ -4312,7 +4319,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             println!("[ghost] Can't record during drone playback.");
                         } else if let Some(c) = &core {
                             match ghost::Recording::start(c) {
-                                Some(rec) => ghost_recording = Some(rec),
+                                Some(rec) => {
+                                    ghost_recording = Some(rec);
+                                    match lab_trace::Trace::start(c) {
+                                        Ok(tr) => lab_trace = Some(tr),
+                                        Err(e) => println!("[lab] trace start failed: {e}"),
+                                    }
+                                }
                                 None => println!("[ghost] Couldn't capture drone anchor state."),
                             }
                         }
@@ -5010,6 +5023,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         if let Some(rec) = ghost_recording.as_mut() {
                             rec.record_frame();
+                        }
+                        if let Some(tr) = lab_trace.as_mut() {
+                            // 0.8.6 exposes inputs through a safe snapshot rather
+                            // than the raw static ghost.rs used to read.
+                            let bits = ghost::pack(&crate::retro::input_state_snapshot());
+                            tr.record(c, bits[0], bits[1]);
                         }
                         // Shared score tracking for local/drone play
                         if net_session.is_none() {

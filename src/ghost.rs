@@ -135,7 +135,7 @@ const MAGIC: &[u8; 4] = b"NCGH";
 const VERSION: u16 = 1;
 
 /// Pack `[[bool; 16]; 2]` into two u16 bitmasks.
-fn pack(state: &[[bool; 16]; 2]) -> [u16; 2] {
+pub(crate) fn pack(state: &[[bool; 16]; 2]) -> [u16; 2] {
     let mut out = [0u16; 2];
     for port in 0..2 {
         let mut m = 0u16;

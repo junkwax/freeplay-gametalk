@@ -3,43 +3,52 @@
 // Copy into Freeplay only after rebuilding the ROM and validating netplay.
 #![allow(dead_code)]
 
-pub const ACTIVE_PROCESS_LIST_ADDR: usize = 0x1B8DA; // active
-pub const BACKGROUND_LIST_1_ADDR: usize = 0x24EAA; // baklst1
-pub const BACKGROUND_LIST_2_ADDR: usize = 0x24EA6; // baklst2
-pub const BACKGROUND_LIST_3_ADDR: usize = 0x24EA2; // baklst3
-pub const BACKGROUND_LIST_4_ADDR: usize = 0x24E9E; // baklst4
-pub const BACKGROUND_LIST_5_ADDR: usize = 0x24E9A; // baklst5
-pub const BACKGROUND_LIST_6_ADDR: usize = 0x24E96; // baklst6
-pub const BACKGROUND_LIST_7_ADDR: usize = 0x24E92; // baklst7
-pub const BACKGROUND_LIST_8_ADDR: usize = 0x24E8E; // baklst8
-pub const FREEZE_TIMER_ADDR: usize = 0x25196; // f_freeze_timer
-pub const FREE_OBJECT_LIST_ADDR: usize = 0x254E6; // ofree
-pub const FREE_PROCESS_LIST_ADDR: usize = 0x1B8DE; // free
-pub const GROUND_SKEW_FLAG_ADDR: usize = 0x2519A; // f_skew
-pub const GSTATE_ADDR: usize = 0x254FA; // gstate
-pub const HITBOX_FLAG_ADDR: usize = 0x258BC; // f_colbox
-pub const MPROC_TIMER_ADDR: usize = 0x1B8E2; // timer
-pub const NETPLAY_SYNC_ADDR: usize = 0x24AAA; // netplay_sync
-pub const NO_BLOOD_FLAG_ADDR: usize = 0x2580E; // f_no_blood
-pub const NO_VIOLENCE_FLAG_ADDR: usize = 0x2580C; // f_no_violence
-pub const OBJECT_LIST_1_ADDR: usize = 0x24EAE; // objlst
-pub const OBJECT_LIST_2_ADDR: usize = 0x24EB2; // objlst2
-pub const OBJECT_LIST_3_ADDR: usize = 0x24EB6; // objlst3
-pub const OBJECT_LIST_END_ADDR: usize = 0x24EBA; // last_objlst
-pub const OBJECT_STORE_ADDR: usize = 0x14EE2; // objstr
-pub const OVERLOAD_ADDR: usize = 0x1B8E6; // overload
-pub const P1_CHAR_ADDR: usize = 0x25510; // p1_char
-pub const P1_HP_ADDR: usize = 0x2551E; // p1_bar
-pub const P1_MATCHW: usize = 0x25522; // p1_matchw
-pub const P1_X_ADDR: usize = 0x25530; // p1_x, p1_bcq + 0x08
-pub const P1_Y_ADDR: usize = 0x25532; // p1_y, p1_bcq + 0x0A
-pub const P2_CHAR_ADDR: usize = 0x2568A; // p2_char
-pub const P2_HP_ADDR: usize = 0x25698; // p2_bar
-pub const P2_MATCHW: usize = 0x2569C; // p2_matchw
-pub const P2_X_ADDR: usize = 0x256AA; // p2_x, p2_bcq + 0x08
-pub const P2_Y_ADDR: usize = 0x256AC; // p2_y, p2_bcq + 0x0A
-pub const ROUND_NUM: usize = 0x25820; // round_num
-pub const SHADOWS_FLAG_ADDR: usize = 0x25198; // f_shadows
-pub const WINNER_STATUS: usize = 0x25822; // winner_status
+/// FBNeo maps MK2's system RAM at this offset, so every address here is
+/// (TMS34010 bit address / 8) - this base. Anything that follows a POINTER
+/// stored in game RAM (process blocks, object blocks) has to apply the same
+/// conversion by hand -- the stored value is a raw bit address.
+pub const FBNEO_SYSTEM_RAM_BASE: usize = 0x200000;
+
+pub const ACTIVE_PROCESS_LIST_ADDR: usize = 0x13ED8; // active
+pub const BACKGROUND_LIST_1_ADDR: usize = 0x1D4B4; // baklst1
+pub const BACKGROUND_LIST_2_ADDR: usize = 0x1D4B0; // baklst2
+pub const BACKGROUND_LIST_3_ADDR: usize = 0x1D4AC; // baklst3
+pub const BACKGROUND_LIST_4_ADDR: usize = 0x1D4A8; // baklst4
+pub const BACKGROUND_LIST_5_ADDR: usize = 0x1D4A4; // baklst5
+pub const BACKGROUND_LIST_6_ADDR: usize = 0x1D4A0; // baklst6
+pub const BACKGROUND_LIST_7_ADDR: usize = 0x1D49C; // baklst7
+pub const BACKGROUND_LIST_8_ADDR: usize = 0x1D498; // baklst8
+pub const FREEZE_TIMER_ADDR: usize = 0x1D7A0; // f_freeze_timer
+pub const FREE_OBJECT_LIST_ADDR: usize = 0x1DAF0; // ofree
+pub const FREE_PROCESS_LIST_ADDR: usize = 0x13EDC; // free
+pub const GROUND_SKEW_FLAG_ADDR: usize = 0x1D7A4; // f_skew
+pub const GSTATE_ADDR: usize = 0x1DB04; // gstate
+pub const HITBOX_FLAG_ADDR: usize = 0x1E04C; // f_colbox
+pub const MPROC_TIMER_ADDR: usize = 0x13EE0; // timer
+pub const NETPLAY_ACTIVE_ADDR: usize = 0x1E04E; // f_netplay
+pub const NETPLAY_SYNC_ADDR: usize = 0x1D0B4; // netplay_sync
+pub const NO_BLOOD_FLAG_ADDR: usize = 0x1DE18; // f_no_blood
+pub const NO_VIOLENCE_FLAG_ADDR: usize = 0x1DE16; // f_no_violence
+pub const OBJECT_LIST_1_ADDR: usize = 0x1D4B8; // objlst
+pub const OBJECT_LIST_2_ADDR: usize = 0x1D4BC; // objlst2
+pub const OBJECT_LIST_3_ADDR: usize = 0x1D4C0; // objlst3
+pub const OBJECT_LIST_END_ADDR: usize = 0x1D4C4; // last_objlst
+pub const OBJECT_STORE_ADDR: usize = 0x0D4E0; // objstr
+pub const OVERLOAD_ADDR: usize = 0x13EE4; // overload
+pub const P1_CHAR_ADDR: usize = 0x1DB1A; // p1_char
+pub const P1_HP_ADDR: usize = 0x1DB28; // p1_bar
+pub const P1_MATCHW: usize = 0x1DB2C; // p1_matchw
+pub const P1_PROC_ADDR: usize = 0x1DB16; // p1_proc
+pub const P1_X_ADDR: usize = 0x1DB3A; // p1_x, p1_bcq + 0x08
+pub const P1_Y_ADDR: usize = 0x1DB3C; // p1_y, p1_bcq + 0x0A
+pub const P2_CHAR_ADDR: usize = 0x1DC94; // p2_char
+pub const P2_HP_ADDR: usize = 0x1DCA2; // p2_bar
+pub const P2_MATCHW: usize = 0x1DCA6; // p2_matchw
+pub const P2_PROC_ADDR: usize = 0x1DC90; // p2_proc
+pub const P2_X_ADDR: usize = 0x1DCB4; // p2_x, p2_bcq + 0x08
+pub const P2_Y_ADDR: usize = 0x1DCB6; // p2_y, p2_bcq + 0x0A
+pub const ROUND_NUM: usize = 0x1DE2A; // round_num
+pub const SHADOWS_FLAG_ADDR: usize = 0x1D7A2; // f_shadows
+pub const WINNER_STATUS: usize = 0x1DE2C; // winner_status
 
 pub const ZERO_TARGETS: &[usize] = &[FREEZE_TIMER_ADDR, HITBOX_FLAG_ADDR, NETPLAY_SYNC_ADDR];
