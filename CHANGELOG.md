@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Lab frame trace: a per-frame CSV written alongside the ghost recording on
+  the same hotkey, with decoded inputs next to each fighter's action id,
+  health, position, and the gap between them. A move's real frame data reads
+  straight off it — action id on startup, opponent health drop on the active
+  frame, id cleared on recovery — which is data MK2 has never had published,
+  since it is normally eyeballed off video. Requires the regenerated
+  `mk2_addrs` table it ships with, so **a release carrying this wants the
+  matching `mk2.zip`** — the address table and the ROM build are a pair, and
+  drift shows up as Lab RAM features silently reading nothing.
+
+### Changed
+
+- The generated starting name draws from a much larger pool: the canonical
+  45 adjectives and 40 nouns, plus a block mined from Wu-Tang affiliate and
+  Killa Beez stage names split into their modifier and agent halves. 79 x 90
+  = 7,110 names, up from 1,760. Collisions are a birthday problem, so this
+  moves the more-likely-than-not point from ~49 players to ~99 rather than
+  eliminating it; the server's username check remains what settles
+  uniqueness.
+- `Tha` and `Mad` are two adjectives again, matching the upstream list they
+  were taken from. Merged as `Tha_Mad` they were the only two-word adjective
+  and so the only source of three-part names.
+
 ## 0.8.7 - 2026-08-10
 
 ### Fixed

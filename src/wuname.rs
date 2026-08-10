@@ -1,6 +1,16 @@
 //! Wu-style player name generator.
 //!
-//! The word lists mirror the older WuNameAAS generator. Its *seed* shape did
+//! The word lists start from the canonical WuNameAAS set — 45 adjectives and
+//! 40 nouns, the same list the various online generators all copy — and add
+//! a second block mined from Wu-Tang affiliate and Killa Beez stage names,
+//! splitting each into its modifier and its agent half so the Adjective_Noun
+//! shape holds. That takes the space from 1,760 names to 7,110.
+//!
+//! Worth knowing what that does and doesn't buy: it is a 4x space, but
+//! collisions are a birthday problem, so the point where two players are
+//! more likely than not to share a name only moves from ~49 to ~99. The
+//! generated name is a starting suggestion; `check_username_available` on
+//! the matchmaking side is what actually settles uniqueness. Its *seed* shape did
 //! too — sum each lowercased character's codepoint times its one-based
 //! position — but that was designed to hash a name the player typed, so the
 //! same input would always produce the same Wu name. Nothing types a name in
@@ -16,7 +26,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const ADJECTIVES: &[&str] = &[
     "Bittah",
-    "Tha_Mad",
+    // Upstream carries these as two separate adjectives; they were merged
+    // into one entry here at some point, which made this the only two-word
+    // adjective and so the only source of three-part names.
+    "Tha",
+    "Mad",
     "Master",
     "Dynamic",
     "E-ratic",
@@ -59,6 +73,46 @@ const ADJECTIVES: &[&str] = &[
     "Wicked",
     "Lazy-assed",
     "Amazing",
+    // Drawn from Wu-Tang affiliate and Killa Beez stage names (Killarmy,
+    // Sunz of Man, Gravediggaz, GP Wu, Black Knights, Wu-Syndicate, the
+    // Wisemen, Theodore Unit, Tha Beggas, Brooklyn Zu, Deadly Venoms,
+    // American Cream Team, Yellow Jacketz, GoldMinerz, Black Rose Kartel
+    // and the rest). Only the modifier half of each name lands here -- the
+    // agent half goes in NOUNS -- so the two-part shape holds.
+    "Almighty",   // Almighty God-Rule
+    "Arabian",    // Arabian Knight
+    "Babyface",   // Babyface Fensta
+    "Bigg",       // Bigg Cy
+    "Black",      // Black Jesus
+    "Blue",       // Blue Raspberry
+    "Born",       // Born U Majesty
+    "Bronze",     // Bronze Nazareth
+    "Brown",      // Pop Da Brown Hornet
+    "Cheesy",     // Cheesy Rat
+    "Dirty",      // Young Dirty Bastard
+    "Dreddy",     // Dreddy Kruger
+    "Eternal",    // Eternal
+    "Free",       // Free Murda
+    "Illah",      // Illah Dayz
+    "Killa",      // Killa Sin
+    "Kinetic",    // Kinetic 9
+    "Long",       // Long Axe
+    "Majik",      // Majik Sword
+    "Mega",       // Mega Soul
+    "Poetic",     // Poetic
+    "Polite",     // Polite
+    "Prodigal",   // Prodigal Sunn
+    "Rugged",     // Rugged Monk
+    "Shorty",     // Shorty Shitstain
+    "Stone",      // Stone Mecca
+    "Street",     // Street Life
+    "Suga",       // Suga Bang Bang
+    "Superb",     // Lord Superb
+    "Supreme",    // Supreme I-Self
+    "Trife",      // Trife Da God
+    "True",       // True Master
+    "Wise",       // Allah Wise
+    "Young",      // Young Dirty Bastard
 ];
 
 const NOUNS: &[&str] = &[
@@ -102,6 +156,57 @@ const NOUNS: &[&str] = &[
     "Pupil",
     "Prophet",
     "Criminal",
+    // Agent half of the same affiliate names (see ADJECTIVES above).
+    "Aristotle",    // Aristotle
+    "Axe",          // Long Axe
+    "Baptist",      // John the Baptist
+    "Bearer",       // Christ Bearer
+    "Beretta",      // Beretta 9
+    "Chief",        // Popa Chief
+    "Cognac",       // Cognac
+    "Darkman",      // LA the Darkman
+    "Disciple",     // 4th Disciple / Shabazz the Disciple
+    "Doom",         // Doc Doom
+    "Dragon",       // Drunken Dragon
+    "Dragonfly",    // Dragonfly
+    "Finesse",      // Finesse
+    "Fool",         // Master Fool
+    "General",      // General Jihad
+    "God",          // Sun God / Trife Da God
+    "Hornet",       // Pop Da Brown Hornet
+    "Iceman",       // Iceman
+    "Keeper",       // Zu Keeper
+    "Kid",          // Salute the Kid
+    "King",         // Timbo King / King Just
+    "Kruger",       // Dreddy Kruger
+    "Life",         // Street Life / Kryme Life
+    "Lord",         // Father Lord
+    "Majesty",      // Born U Majesty
+    "Masta",        // Dungeon Masta
+    "Mathematics",  // Mathematics
+    "Mecca",        // Stone Mecca
+    "Megalodon",    // June Megalodon
+    "Monk",         // Buddha Monk / Rugged Monk
+    "Murda",        // Free Murda
+    "Napoleon",     // Napoleon
+    "Nazareth",     // Bronze Nazareth
+    "Omen",         // Decrep Da Omen
+    "Pharaoh",      // Meko the Pharaoh
+    "Priest",       // Killah Priest
+    "Prince",       // 9th Prince / Prince Paul
+    "Protagonist",  // Anthai the Protagonist
+    "Razah",        // Hell Razah
+    "Recka",        // Down Low Recka / Rhyme Recka
+    "Remedy",       // Remedy
+    "Reverend",     // Reverend William Burke
+    "Rook",         // Rook Da Rukus
+    "Sharpshooter", // Crisis the Sharpshooter
+    "Shogun",       // Shogun Assasson
+    "Soul",         // Mega Soul
+    "Sunn",         // Prodigal Sunn
+    "Sword",        // Majik Sword
+    "Trigger",      // Sol Trigger
+    "Warcloud",     // Holocaust / Warcloud
 ];
 
 /// The name a fresh install starts with. Drawn independently per install —
@@ -200,12 +305,15 @@ mod tests {
     /// timestamp-derived one reached every name too, but over-represented
     /// its most common one by 3.1x.
     ///
-    /// Statistical, but not flaky: across 1760 buckets with 100k draws the
-    /// mean is 56.8 and sigma is 7.5, so a uniform generator peaks near
-    /// 1.5x. The 2.0x bound sits over seven sigma out.
+    /// Statistical, but not flaky, and it stays that way if the word lists
+    /// grow again: the bound is expressed in standard deviations rather than
+    /// as a fixed ratio. Bucket counts are Poisson, so sigma is sqrt(mean),
+    /// and the largest of ~7k uniform buckets lands near +4 sigma. Eight
+    /// sigma leaves room for that while still being nowhere near the old
+    /// timestamp-derived seed, whose peak sat about 25 sigma out.
     #[test]
     fn generated_names_are_drawn_uniformly() {
-        let n = 100_000;
+        let n = 1_000_000;
         let mut counts: HashMap<String, u64> = HashMap::new();
         for _ in 0..n {
             *counts.entry(random_username()).or_insert(0) += 1;
@@ -217,12 +325,26 @@ mod tests {
             counts.len()
         );
         let expected = n as f64 / possible as f64;
+        let sigma = expected.sqrt();
         let max = counts.values().copied().max().unwrap_or(0) as f64;
         assert!(
-            max / expected < 2.0,
-            "most common name is {:.2}x expected — seed is not uniform",
-            max / expected
+            max <= expected + 8.0 * sigma,
+            "most common name is {:.2}x expected ({:.1} sigma) — seed is not uniform",
+            max / expected,
+            (max - expected) / sigma
         );
+    }
+
+    /// Both halves of a name come from separate lists, so a duplicate inside
+    /// either one silently biases that word without shrinking the space in
+    /// any visible way.
+    #[test]
+    fn word_lists_have_no_duplicates() {
+        for (label, list) in [("adjective", ADJECTIVES), ("noun", NOUNS)] {
+            let unique: std::collections::HashSet<String> =
+                list.iter().map(|w| w.to_ascii_lowercase()).collect();
+            assert_eq!(unique.len(), list.len(), "duplicate {label} in the word list");
+        }
     }
 
     /// A player mashing re-roll must never see the same name twice running,
