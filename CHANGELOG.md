@@ -29,7 +29,9 @@
   `guest_device_id`, which is supposed to be unique per install and anchors
   a player's guest stats profile server-side. `package.ps1` now strips those
   keys, and existing installs carrying the shipped values clear them on next
-  launch and generate a real identity.
+  launch and generate a real identity. That recognition is done by SHA-256
+  digest rather than by storing the values, so the binary itself carries
+  nobody's email address or device id.
 - The generated starting name is now drawn from OS entropy. It was derived by
   running a formatted timestamp through a mixer built for hashing a name the
   player typed, which reached every name but over-represented the most common
