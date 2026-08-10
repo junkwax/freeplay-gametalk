@@ -51,7 +51,9 @@ mod wuname;
 
 use crate::audio_recovery::prepare_game_audio;
 use crate::cli::{parse_args, NetMode};
-use crate::controllers::{assign_pad, open_initial_controllers, pad_owner, Pads};
+use crate::controllers::{
+    assign_pad, ensure_mapping, open_initial_controllers, pad_owner, MappingOutcome, Pads,
+};
 use crate::font::Font;
 use crate::input::{set_action_source, InputSource, Player};
 use crate::menu::{AppState, MenuScreen, NavResult, LOGICAL_H, LOGICAL_W};
@@ -1515,6 +1517,22 @@ fn run_render_probe() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// `--pad-probe`: dump every attached joystick and how SDL sees it, without
+/// booting the emulator. Answers the one question that decides how a
+/// misbehaving pad gets fixed — did SDL surface it as a game controller at
+/// all, and if so under which mapping.
+fn run_pad_probe() -> Result<(), Box<dyn std::error::Error>> {
+    controllers::set_joystick_hints();
+    let sdl_context = sdl2::init()?;
+    let controller_subsystem = sdl_context.game_controller()?;
+    let joystick_subsystem = sdl_context.joystick()?;
+    controllers::load_mapping_db(&controller_subsystem);
+    for line in controllers::describe_devices(&controller_subsystem, &joystick_subsystem) {
+        println!("{line}");
+    }
+    Ok(())
+}
+
 fn run_core_probe() -> Result<(), Box<dyn std::error::Error>> {
     log::init("core_probe");
     dlog!("boot", "core_probe");
@@ -1554,6 +1572,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if cli::core_probe_requested() {
         return run_core_probe();
+    }
+
+    if cli::pad_probe_requested() {
+        return run_pad_probe();
     }
 
     if let Some(report_path) = cli::doctor_report_path() {
@@ -1602,11 +1624,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // Must precede sdl2::init() — SDL latches the joystick hints when that
+    // subsystem starts, not per device.
+    controllers::set_joystick_hints();
+
     let sdl_context = sdl2::init()?;
     let video_subsystem = sdl_context.video()?;
     let audio_subsystem = sdl_context.audio()?;
     let controller_subsystem = sdl_context.game_controller()?;
-    let mut pads: Pads = open_initial_controllers(&controller_subsystem);
+    let joystick_subsystem = sdl_context.joystick()?;
+    controllers::load_mapping_db(&controller_subsystem);
+    let mut pads: Pads = open_initial_controllers(&controller_subsystem, &joystick_subsystem);
     let mut cfg = config::load();
 
     let main_window_title = app_window_title();
@@ -2107,13 +2135,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     match controller_subsystem.open(which) {
                         Ok(c) => {
                             let name = c.name();
-                            assign_pad(&mut pads, c);
-                            toast = Some((
-                                format!("Controller connected: {name}"),
-                                Instant::now() + Duration::from_millis(2200),
-                            ));
+                            if assign_pad(&mut pads, c) {
+                                toast = Some((
+                                    format!("Controller connected: {name}"),
+                                    Instant::now() + Duration::from_millis(2200),
+                                ));
+                            }
                         }
                         Err(e) => println!("Failed to open controller {which}: {e}"),
+                    }
+                }
+
+                // A pad SDL has no mapping for never produces
+                // ControllerDeviceAdded — this is the only event it raises.
+                // Since SDL won't re-announce a device as a controller once a
+                // mapping appears, opening it here is on us; `Synthesized`
+                // is precisely the case where nothing else will.
+                Event::JoyDeviceAdded { which, .. } => {
+                    if ensure_mapping(&controller_subsystem, &joystick_subsystem, which)
+                        == MappingOutcome::Synthesized
+                    {
+                        match controller_subsystem.open(which) {
+                            Ok(c) => {
+                                let name = c.name();
+                                if assign_pad(&mut pads, c) {
+                                    toast = Some((
+                                        format!("Controller connected: {name}"),
+                                        Instant::now() + Duration::from_millis(2200),
+                                    ));
+                                }
+                            }
+                            Err(e) => {
+                                println!("Failed to open synthesized controller {which}: {e}")
+                            }
+                        }
                     }
                 }
                 Event::ControllerDeviceRemoved { which, .. } => {
