@@ -408,6 +408,29 @@ pub fn test_state(name: &str) -> Option<AppState> {
                 came_from: Box::new(AppState::FpUi(crate::fp_ui::FpScreen::lobby())),
             }))
         }
+        // The keyboard's layout is per-field, so each shape needs its own
+        // fixture to be checkable — the alpha grid above is not what these
+        // two draw.
+        "fp:osk:address" => {
+            return Some(AppState::Menu(MenuScreen::TextEdit {
+                title: "PEER ADDRESS".into(),
+                label: "IP:PORT of the peer to probe".into(),
+                value: "192.168.1.5:70".into(),
+                field: EditField::TestConnAddress,
+                came_from: Box::new(AppState::FpUi(crate::fp_ui::FpScreen::settings_from_cfg(
+                    &crate::config::load(),
+                ))),
+            }))
+        }
+        "fp:osk:chat" => {
+            return Some(AppState::Menu(MenuScreen::TextEdit {
+                title: "LOBBY CHAT".into(),
+                label: "Say something to the room".into(),
+                value: "gg, that was close!".into(),
+                field: EditField::ChatMessage,
+                came_from: Box::new(AppState::FpUi(crate::fp_ui::FpScreen::lobby())),
+            }))
+        }
         "fp:rebind" => {
             return Some(AppState::Rebinding {
                 action: Action::HighPunch,

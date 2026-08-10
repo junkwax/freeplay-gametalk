@@ -35,67 +35,152 @@ use sdl2::pixels::Color;
 use sdl2::render::Canvas;
 use sdl2::video::Window;
 
-/// The mockup's `oskKeyDefs`: four rows of ten characters.
-pub const KEY_ROWS: [[char; 10]; 4] = [
-    ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'],
-    ['K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T'],
-    ['U', 'V', 'W', 'X', 'Y', 'Z', '0', '1', '2', '3'],
-    ['4', '5', '6', '7', '8', '9', '_', '-', '.', '@'],
+/// The mockup's `oskKeyDefs`: four rows of ten characters. Used for names,
+/// join codes and email — anything alphanumeric.
+const ALPHA_ROWS: &[&[char]] = &[
+    &['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'],
+    &['K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T'],
+    &['U', 'V', 'W', 'X', 'Y', 'Z', '0', '1', '2', '3'],
+    &['4', '5', '6', '7', '8', '9', '_', '-', '.', '@'],
 ];
 
-/// The character a grid cell types for a given field.
-///
-/// Every cell is the literal from `KEY_ROWS` except one: an address field
-/// needs a colon to reach `IP:PORT`, and the grid has no colon anywhere. It
-/// does have `@`, which no address can contain — a cell already dimmed as
-/// unusable there. Spending that dead cell on the one character the field
-/// cannot do without beats growing the grid a row for a single key.
-///
-/// Both the renderer and `apply` go through this, so what a cell shows and
-/// what it types cannot drift apart.
-pub fn key_at(field: &EditField, row: usize, col: usize) -> char {
-    let c = KEY_ROWS[row][col.min(9)];
-    if c == '@' && matches!(field, EditField::TestConnAddress) {
-        ':'
-    } else {
-        c
-    }
+/// Chat is the one field that accepts arbitrary text, so it gets the
+/// punctuation a sentence needs. Without this row a player could only send
+/// words — no question marks, no apostrophes.
+const CHAT_ROWS: &[&[char]] = &[
+    &['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'],
+    &['K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T'],
+    &['U', 'V', 'W', 'X', 'Y', 'Z', '0', '1', '2', '3'],
+    &['4', '5', '6', '7', '8', '9', '.', ',', '!', '?'],
+    &['\'', '"', ':', ';', '-', '_', '(', ')', '@', '/'],
+];
+
+/// An address is digits, a dot and a colon — 26 dead letters is a worse way
+/// to type one than a pad you can cross in two presses.
+const NUMPAD_ROWS: &[&[char]] = &[
+    &['1', '2', '3'],
+    &['4', '5', '6'],
+    &['7', '8', '9'],
+    &['.', '0', ':'],
+];
+
+/// A control-row cell. The character rows vary per field, and so does what
+/// belongs under them: a number pad has nothing to shift and no space to
+/// insert.
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub enum Ctl {
+    Shift,
+    Space,
+    Backspace,
 }
 
-/// Grid rows: 0..=3 are `KEY_ROWS`; row 4 is [SPACE, BACKSPACE]; row 5 is
-/// [CANCEL, CONFIRM].
-const SPACE_ROW: usize = 4;
-const BUTTON_ROW: usize = 5;
-const ROW_COUNT: usize = 6;
-
-fn cols_in_row(row: usize) -> usize {
-    if row < KEY_ROWS.len() {
-        10
-    } else {
-        2
-    }
-}
-
-/// Map a column between rows with different cell counts so vertical
-/// movement lands on the visually-nearest cell (left half of the char grid
-/// -> SPACE/CANCEL, right half -> BACKSPACE/CONFIRM, and back out to the
-/// middle of that half).
-fn remap_col(col: usize, from_row: usize, to_row: usize) -> usize {
-    let from = cols_in_row(from_row);
-    let to = cols_in_row(to_row);
-    if from == to {
-        return col;
-    }
-    if to == 2 {
-        usize::from(col >= 6)
-    } else {
-        // 2 -> 10: land mid-left or mid-right.
-        if col == 0 {
-            2
-        } else {
-            7
+impl Ctl {
+    fn label(self, shift: bool) -> &'static str {
+        match self {
+            // The key states what it will do next, not what it is — "abc"
+            // while shifted reads as "press for lowercase".
+            Ctl::Shift if shift => "abc",
+            Ctl::Shift => "ABC",
+            Ctl::Space => "SPACE",
+            // "BACKSPACE" as text — the mockup's Unicode glyph isn't in any
+            // bundled font.
+            Ctl::Backspace => "BACKSPACE",
         }
     }
+
+    /// Share of the control row's width, so SPACE stays the wide one.
+    fn weight(self) -> f32 {
+        match self {
+            Ctl::Space => 3.0,
+            _ => 1.0,
+        }
+    }
+}
+
+pub struct Layout {
+    rows: &'static [&'static [char]],
+    /// What sits under the character grid. A number pad has nothing to
+    /// shift and no space to insert, so it carries neither key.
+    controls: &'static [Ctl],
+}
+
+const ALPHA: Layout = Layout {
+    rows: ALPHA_ROWS,
+    controls: &[Ctl::Shift, Ctl::Space, Ctl::Backspace],
+};
+const CHAT: Layout = Layout {
+    rows: CHAT_ROWS,
+    controls: &[Ctl::Shift, Ctl::Space, Ctl::Backspace],
+};
+const NUMPAD: Layout = Layout {
+    rows: NUMPAD_ROWS,
+    controls: &[Ctl::Backspace],
+};
+
+pub fn layout_for(field: &EditField) -> &'static Layout {
+    match field {
+        EditField::TestConnAddress => &NUMPAD,
+        EditField::ChatMessage => &CHAT,
+        _ => &ALPHA,
+    }
+}
+
+impl Layout {
+    pub fn char_rows(&self) -> usize {
+        self.rows.len()
+    }
+    /// Derived from `controls` rather than stored, so a layout cannot claim
+    /// to shift while offering no key to do it with.
+    pub fn shifts(&self) -> bool {
+        self.controls.contains(&Ctl::Shift)
+    }
+    fn control_row(&self) -> usize {
+        self.rows.len()
+    }
+    fn button_row(&self) -> usize {
+        self.rows.len() + 1
+    }
+    fn row_count(&self) -> usize {
+        self.rows.len() + 2
+    }
+    /// The widest character row, which sets the key size for all of them.
+    pub fn max_cols(&self) -> usize {
+        self.rows.iter().map(|r| r.len()).max().unwrap_or(1)
+    }
+    pub fn cols_in_row(&self, row: usize) -> usize {
+        if row < self.char_rows() {
+            self.rows[row].len()
+        } else if row == self.control_row() {
+            self.controls.len()
+        } else {
+            2
+        }
+    }
+    /// The character a cell types. Shift applies only to letters, so digits
+    /// and punctuation are unaffected by the toggle.
+    pub fn char_at(&self, row: usize, col: usize, shift: bool) -> char {
+        let r = self.rows[row];
+        let c = r[col.min(r.len() - 1)];
+        if shift {
+            c
+        } else {
+            c.to_ascii_lowercase()
+        }
+    }
+}
+
+/// Map a column between rows with different cell counts so vertical movement
+/// lands on the visually-nearest cell. Done proportionally rather than with
+/// hardcoded halves, since row widths now vary per layout.
+fn remap_col(layout: &Layout, col: usize, from_row: usize, to_row: usize) -> usize {
+    let from = layout.cols_in_row(from_row).max(1);
+    let to = layout.cols_in_row(to_row).max(1);
+    if from == to {
+        return col.min(to - 1);
+    }
+    // Centre of the source cell, rescaled into the destination row.
+    let fraction = (col as f32 + 0.5) / from as f32;
+    ((fraction * to as f32) as usize).min(to - 1)
 }
 
 /// What a grid press asks main.rs to do. `Moved` covers the D-pad;
@@ -109,18 +194,19 @@ pub enum OskAction {
     Cancel,
 }
 
-fn is_confirm_cell(cursor: (usize, usize)) -> bool {
-    cursor.0 == BUTTON_ROW && cursor.1 == 1
+fn is_confirm_cell(layout: &Layout, cursor: (usize, usize)) -> bool {
+    cursor.0 == layout.button_row() && cursor.1 == 1
 }
 
 /// Should this controller event be handled by the OSK grid rather than the
 /// normal menu-nav translation? Keyboard events are never claimed.
-pub fn wants_event(event: &Event, cursor: (usize, usize)) -> bool {
+pub fn wants_event(event: &Event, cursor: (usize, usize), field: &EditField) -> bool {
     use sdl2::controller::Button;
+    let layout = layout_for(field);
     match event {
         Event::ControllerButtonDown { button, .. } => match button {
             Button::DPadUp | Button::DPadDown | Button::DPadLeft | Button::DPadRight => true,
-            Button::A => !is_confirm_cell(cursor),
+            Button::A => !is_confirm_cell(layout, cursor),
             _ => false,
         },
         _ => false,
@@ -131,22 +217,33 @@ pub fn wants_event(event: &Event, cursor: (usize, usize)) -> bool {
 /// returning the resulting action for main.rs to perform on the TextEdit
 /// state (via the same `text_input`/`text_backspace`/`nav_back` methods the
 /// hardware keyboard path uses).
-pub fn apply(event: &Event, cursor: &mut (usize, usize), field: &EditField) -> OskAction {
+pub fn apply(
+    event: &Event,
+    cursor: &mut (usize, usize),
+    shift: &mut bool,
+    field: &EditField,
+) -> OskAction {
     use sdl2::controller::Button;
+    let layout = layout_for(field);
+    // A cursor carried over from a different layout could sit outside this
+    // one; clamp before it indexes anything.
+    cursor.0 = cursor.0.min(layout.row_count() - 1);
+    cursor.1 = cursor.1.min(layout.cols_in_row(cursor.0).saturating_sub(1));
+
     let Event::ControllerButtonDown { button, .. } = event else {
         return OskAction::Moved;
     };
     match button {
         Button::DPadUp => {
             if cursor.0 > 0 {
-                cursor.1 = remap_col(cursor.1, cursor.0, cursor.0 - 1);
+                cursor.1 = remap_col(layout, cursor.1, cursor.0, cursor.0 - 1);
                 cursor.0 -= 1;
             }
             OskAction::Moved
         }
         Button::DPadDown => {
-            if cursor.0 + 1 < ROW_COUNT {
-                cursor.1 = remap_col(cursor.1, cursor.0, cursor.0 + 1);
+            if cursor.0 + 1 < layout.row_count() {
+                cursor.1 = remap_col(layout, cursor.1, cursor.0, cursor.0 + 1);
                 cursor.0 += 1;
             }
             OskAction::Moved
@@ -156,20 +253,28 @@ pub fn apply(event: &Event, cursor: &mut (usize, usize), field: &EditField) -> O
             OskAction::Moved
         }
         Button::DPadRight => {
-            cursor.1 = (cursor.1 + 1).min(cols_in_row(cursor.0) - 1);
+            cursor.1 = (cursor.1 + 1).min(layout.cols_in_row(cursor.0) - 1);
             OskAction::Moved
         }
-        Button::A => match cursor.0 {
-            r if r < KEY_ROWS.len() => OskAction::Char(key_at(field, r, cursor.1)),
-            r if r == SPACE_ROW => {
-                if cursor.1 == 0 {
-                    OskAction::Space
-                } else {
-                    OskAction::Backspace
+        Button::A => {
+            if cursor.0 < layout.char_rows() {
+                OskAction::Char(layout.char_at(cursor.0, cursor.1, *shift))
+            } else if cursor.0 == layout.control_row() {
+                match layout.controls.get(cursor.1) {
+                    Some(Ctl::Shift) => {
+                        *shift = !*shift;
+                        OskAction::Moved
+                    }
+                    Some(Ctl::Space) => OskAction::Space,
+                    Some(Ctl::Backspace) => OskAction::Backspace,
+                    None => OskAction::Moved,
                 }
+            } else {
+                // Button row col 0; col 1 is CONFIRM and never reaches here
+                // (`wants_event` leaves it to the normal Accept path).
+                OskAction::Cancel
             }
-            _ => OskAction::Cancel, // BUTTON_ROW col 0; col 1 never reaches here.
-        },
+        }
         _ => OskAction::Moved,
     }
 }
@@ -210,12 +315,14 @@ pub fn draw_modal(
     value: &str,
     field: &EditField,
     cursor: (usize, usize),
+    shift: bool,
 ) -> Result<(), String> {
     let is_cells = matches!(field, EditField::JoinCode);
+    let layout = layout_for(field);
 
     let grid_w = CARD_W - PAD_X * 2.0;
     let input_h = if is_cells { CELL_H } else { 58.0 };
-    let grid_h = KEY_ROWS.len() as f32 * (KEY_H + KEY_GAP) + KEY_H; // 4 char rows + space row
+    let grid_h = layout.char_rows() as f32 * (KEY_H + KEY_GAP) + KEY_H;
     let card_h = 30.0 + 22.0 + 24.0 + input_h + 20.0 + grid_h + 18.0 + BTN_H + 16.0 + 16.0 + 30.0;
     let card_x = (theme::VW - CARD_W) / 2.0;
     let card_y = (theme::VH - card_h) / 2.0;
@@ -312,14 +419,21 @@ pub fn draw_modal(
     }
     y += input_h + 20.0;
 
-    // Character grid.
-    let key_w = (grid_w - 9.0 * KEY_GAP) / 10.0;
-    for (r, row) in KEY_ROWS.iter().enumerate() {
+    // Character grid. Key width comes from the layout's widest row and is
+    // capped, so a 3-wide number pad stays pad-sized instead of stretching
+    // three keys across the whole card. Narrower rows centre under it.
+    let cols = layout.max_cols() as f32;
+    let key_w = ((grid_w - (cols - 1.0) * KEY_GAP) / cols).min(96.0);
+    let grid_span = cols * key_w + (cols - 1.0) * KEY_GAP;
+    let grid_x = content_x + (grid_w - grid_span) / 2.0;
+    for (r, row) in layout.rows.iter().enumerate() {
+        let row_span = row.len() as f32 * key_w + (row.len() as f32 - 1.0) * KEY_GAP;
+        let row_x = grid_x + (grid_span - row_span) / 2.0;
         for c in 0..row.len() {
-            // Via key_at, not the raw row, so a cell always shows the
-            // character it actually types for this field.
-            let ch = key_at(field, r, c);
-            let kx = content_x + c as f32 * (key_w + KEY_GAP);
+            // Via the layout, not the raw row, so a cell always shows the
+            // character it actually types — including its case.
+            let ch = layout.char_at(r, c, shift);
+            let kx = row_x + c as f32 * (key_w + KEY_GAP);
             let selected = cursor == (r, c);
             let allowed = char_allowed(field, ch);
             draw_key(
@@ -339,10 +453,9 @@ pub fn draw_modal(
         }
         y += KEY_H + KEY_GAP;
     }
-    // SPACE / backspace row: 4:2 split of six key-widths each... per the
-    // mockup, SPACE takes 2/3 of the width, backspace the remaining 1/3.
-    let space_w = (grid_w - KEY_GAP) * 2.0 / 3.0;
-    let back_w = grid_w - KEY_GAP - space_w;
+    // Control row, laid out by weight so SPACE stays the wide one whatever
+    // else sits beside it. Spans the character grid, so a number pad's lone
+    // BACKSPACE sits under the pad rather than across the card.
     let space_allowed = !matches!(
         field,
         EditField::JoinCode
@@ -350,28 +463,38 @@ pub fn draw_modal(
             | EditField::ClaimName
             | EditField::TestConnAddress
     );
-    draw_key(canvas, fonts, scale, content_x, y, space_w, KEY_H, "SPACE", FpFont::ChakraPetchSemiBold, 12.0, cursor == (SPACE_ROW, 0), space_allowed)?;
-    // "BACKSPACE" as text — the mockup's ⌫ glyph isn't in any bundled font.
-    draw_key(
-        canvas,
-        fonts,
-        scale,
-        content_x + space_w + KEY_GAP,
-        y,
-        back_w,
-        KEY_H,
-        "BACKSPACE",
-        FpFont::ChakraPetchSemiBold,
-        12.0,
-        cursor == (SPACE_ROW, 1),
-        true,
-    )?;
+    let total_weight: f32 = layout.controls.iter().map(|c| c.weight()).sum();
+    let gaps = (layout.controls.len() as f32 - 1.0) * KEY_GAP;
+    let usable = grid_span - gaps;
+    let mut cx = grid_x;
+    for (i, ctl) in layout.controls.iter().enumerate() {
+        let w = usable * (ctl.weight() / total_weight);
+        let allowed = match ctl {
+            Ctl::Space => space_allowed,
+            _ => true,
+        };
+        draw_key(
+            canvas,
+            fonts,
+            scale,
+            cx,
+            y,
+            w,
+            KEY_H,
+            ctl.label(shift),
+            FpFont::ChakraPetchSemiBold,
+            12.0,
+            cursor == (layout.control_row(), i),
+            allowed,
+        )?;
+        cx += w + KEY_GAP;
+    }
     y += KEY_H + 18.0;
 
     // CANCEL / CONFIRM.
     let btn_w = (grid_w - 14.0) / 2.0;
-    let cancel_sel = cursor == (BUTTON_ROW, 0);
-    let confirm_sel = cursor == (BUTTON_ROW, 1);
+    let cancel_sel = cursor == (layout.button_row(), 0);
+    let confirm_sel = cursor == (layout.button_row(), 1);
     canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
     canvas.set_draw_color(if cancel_sel { Color::RGBA(255, 255, 255, 20) } else { Color::RGBA(0, 0, 0, 0) });
     if cancel_sel {
@@ -406,7 +529,13 @@ pub fn draw_modal(
     )?;
     y += BTN_H + 16.0;
 
-    let hint = "CIRCLE TO CANCEL \u{b7} A HARDWARE KEYBOARD ALSO WORKS";
+    // "ABC"/"abc" on a key is not self-evidently a case toggle, so say so
+    // where one exists.
+    let hint = if layout.shifts() {
+        "CIRCLE TO CANCEL \u{b7} ABC SWITCHES CASE \u{b7} A HARDWARE KEYBOARD ALSO WORKS"
+    } else {
+        "CIRCLE TO CANCEL \u{b7} A HARDWARE KEYBOARD ALSO WORKS"
+    };
     let hint_px = scale.font_px(11.0);
     let (hw, _) = fonts.text_size(FpFont::ChakraPetchMedium, hint_px, hint);
     let (hx, hy) = scale.point(card_x + CARD_W / 2.0 - (hw as f32 / scale.s) / 2.0, y);

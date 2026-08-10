@@ -1277,9 +1277,10 @@ pub fn draw_text_entry_modal(
     value: &str,
     field: &crate::menu::EditField,
     cursor: (usize, usize),
+    shift: bool,
 ) -> Result<(), String> {
     let scale = Scale::compute(win_w, win_h);
-    text_entry::draw_modal(canvas, fonts, &scale, title, label, value, field, cursor)
+    text_entry::draw_modal(canvas, fonts, &scale, title, label, value, field, cursor, shift)
 }
 
 pub fn draw_rebind_capture_modal(
@@ -1458,27 +1459,54 @@ mod tests {
         ));
     }
 
-    /// An address needs a colon and the grid has none, so the unusable `@`
-    /// cell doubles as one. If that ever stops holding, the field becomes
-    /// impossible to fill in with a pad.
+    /// An address is digits, a dot and a colon; the alphabet is noise. If
+    /// this regresses to the alpha grid the field becomes 26 dead keys.
     #[test]
-    fn the_address_field_can_reach_a_colon() {
+    fn the_address_field_gets_a_number_pad() {
         use crate::menu::EditField;
-        let at_cell = text_entry::KEY_ROWS
-            .iter()
-            .enumerate()
-            .find_map(|(r, row)| row.iter().position(|c| *c == '@').map(|c| (r, c)))
-            .expect("grid should have an @ cell to repurpose");
+        let pad = text_entry::layout_for(&EditField::TestConnAddress);
+        let alpha = text_entry::layout_for(&EditField::Username);
+        assert!(pad.max_cols() < alpha.max_cols(), "pad should be narrower");
 
-        assert_eq!(
-            text_entry::key_at(&EditField::TestConnAddress, at_cell.0, at_cell.1),
-            ':'
+        let keys: Vec<char> = (0..pad.char_rows())
+            .flat_map(|r| (0..pad.cols_in_row(r)).map(move |c| (r, c)))
+            .map(|(r, c)| pad.char_at(r, c, true))
+            .collect();
+        for needed in ['0', '9', '.', ':'] {
+            assert!(keys.contains(&needed), "pad is missing {needed}: {keys:?}");
+        }
+        assert!(
+            !keys.iter().any(|c| c.is_ascii_alphabetic()),
+            "pad should carry no letters: {keys:?}"
         );
-        // Every other field keeps the literal grid.
-        assert_eq!(
-            text_entry::key_at(&EditField::StatsEmail, at_cell.0, at_cell.1),
-            '@'
-        );
+        // Nothing to shift, so no Shift key is offered.
+        assert!(!pad.shifts());
+    }
+
+    /// A pad-only player could previously type names in capitals alone,
+    /// while a keyboard player got mixed case.
+    #[test]
+    fn shift_reaches_lower_case_on_the_alpha_grid() {
+        use crate::menu::EditField;
+        let alpha = text_entry::layout_for(&EditField::Username);
+        assert_eq!(alpha.char_at(0, 0, true), 'A');
+        assert_eq!(alpha.char_at(0, 0, false), 'a');
+        assert!(alpha.shifts());
+    }
+
+    /// Chat is the only free-text field, so it is the only one that needs
+    /// sentence punctuation.
+    #[test]
+    fn chat_can_reach_punctuation() {
+        use crate::menu::EditField;
+        let chat = text_entry::layout_for(&EditField::ChatMessage);
+        let keys: Vec<char> = (0..chat.char_rows())
+            .flat_map(|r| (0..chat.cols_in_row(r)).map(move |c| (r, c)))
+            .map(|(r, c)| chat.char_at(r, c, true))
+            .collect();
+        for needed in ['?', '!', ',', '.', '\''] {
+            assert!(keys.contains(&needed), "chat is missing {needed}");
+        }
     }
 
     /// Adding an action to a screen that previously had none must not have

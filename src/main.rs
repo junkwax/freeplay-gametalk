@@ -364,6 +364,16 @@ fn connection_failed_state(mut lines: Vec<String>) -> AppState {
 /// eligible for controller-driven key-grid input. The state machine itself
 /// (value filtering, commit, `came_from` round trip) is identical either
 /// way.
+/// Which field the on-screen keyboard is currently editing. Only meaningful
+/// alongside `is_fp_text_edit`; the fallback is never reached because that
+/// guard has already matched a TextEdit.
+fn fp_osk_field(state: &AppState) -> menu::EditField {
+    match state {
+        AppState::Menu(MenuScreen::TextEdit { field, .. }) => field.clone(),
+        _ => menu::EditField::Username,
+    }
+}
+
 fn is_fp_text_edit(state: &AppState) -> bool {
     matches!(
         state,
@@ -1877,6 +1887,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // edit can be active at a time; persists across edits, which is
     // harmless (the cursor just stays where the player left it).
     let mut fp_osk: (usize, usize) = (0, 0);
+    // Starts shifted so the first letter of a name comes out capitalised,
+    // which is how the generator's own names read. Sticky rather than
+    // auto-releasing: predictable beats clever on a D-pad.
+    let mut fp_osk_shift = true;
     let mut audio_tail_sample: Option<(i16, i16)> = None;
     let mut render_debug_visible = false;
     let mut net_spectate_next: u32 = 165; // ~3s
@@ -2474,16 +2488,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // through the same `NavResult::CommitText` path Enter does.
                 // Keyboard events are never claimed — typing/Enter/Esc keep
                 // working exactly as before.
-                _ if is_fp_text_edit(&state) && fp_ui::text_entry::wants_event(&event, fp_osk) => {
-                    // The grid types field-dependent characters (an address
-                    // field turns the unusable `@` cell into `:`), so the
-                    // field has to reach `apply`, not just the renderer.
-                    let field = match &state {
-                        AppState::Menu(MenuScreen::TextEdit { field, .. }) => field.clone(),
-                        // Unreachable: is_fp_text_edit already matched TextEdit.
-                        _ => menu::EditField::Username,
-                    };
-                    match fp_ui::text_entry::apply(&event, &mut fp_osk, &field) {
+                _ if is_fp_text_edit(&state)
+                    && fp_ui::text_entry::wants_event(&event, fp_osk, &fp_osk_field(&state)) =>
+                {
+                    // The grid is field-dependent — an address gets a number
+                    // pad, chat gets punctuation — so the field decides both
+                    // what a cell types and which cells exist.
+                    let field = fp_osk_field(&state);
+                    match fp_ui::text_entry::apply(&event, &mut fp_osk, &mut fp_osk_shift, &field) {
                         fp_ui::text_entry::OskAction::Moved => {}
                         fp_ui::text_entry::OskAction::Char(c) => state.text_input(&c.to_string()),
                         fp_ui::text_entry::OskAction::Space => state.text_input(" "),
@@ -2881,6 +2893,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         came_from: Box::new(came_from),
                                     });
                                     fp_osk = (0, 0);
+                                    fp_osk_shift = true;
                                 }
                                 fp_ui::FpResult::EditClaimName(value) => {
                                     // Same TextEdit-over-came_from handoff the
@@ -2897,6 +2910,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         came_from: Box::new(came_from),
                                     });
                                     fp_osk = (0, 0);
+                                    fp_osk_shift = true;
                                 }
                                 fp_ui::FpResult::BeginAccountEdit(field) => {
                                     // Mirrors legacy's NavResult::EditText for just the
@@ -7067,6 +7081,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 value,
                                 field,
                                 fp_osk,
+                                fp_osk_shift,
                             )
                             .map_err(|e| format!("fp_ui text entry: {e}"))?;
                         }

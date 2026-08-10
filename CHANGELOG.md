@@ -23,6 +23,12 @@
 
 ### Added
 
+- The on-screen keyboard has a shift key, so a controller can type mixed case.
+  It was uppercase-only, which meant a pad player's name could never match the
+  form a keyboard player (or the name generator) produces.
+- The keyboard's layout now follows the field. An address gets a number pad
+  instead of 26 dead letters; chat gets a punctuation row, so a message can
+  carry a question mark or an apostrophe.
 - Settings reopens on the category you last had open instead of resetting to
   Controls each time.
 - Change your name from the Profile screen with Cross. Renaming previously
