@@ -584,3 +584,170 @@ fn draw_key(
     fonts.draw(canvas, font, fpx, label, tx, ty, color)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sdl2::controller::Button;
+
+    fn press(button: Button) -> Event {
+        Event::ControllerButtonDown {
+            timestamp: 0,
+            which: 0,
+            button,
+        }
+    }
+
+    /// Drive the grid the way a player would and report what got typed.
+    fn type_with(field: &EditField, presses: &[Button], start_shift: bool) -> (String, (usize, usize), bool) {
+        let mut cursor = (0, 0);
+        let mut shift = start_shift;
+        let mut out = String::new();
+        for b in presses {
+            match apply(&press(*b), &mut cursor, &mut shift, field) {
+                OskAction::Char(c) => out.push(c),
+                OskAction::Space => out.push(' '),
+                OskAction::Backspace => {
+                    out.pop();
+                }
+                _ => {}
+            }
+        }
+        (out, cursor, shift)
+    }
+
+    #[test]
+    fn the_cursor_stops_at_row_and_column_edges() {
+        let field = EditField::Username;
+        let layout = layout_for(&field);
+        // Left/Up from the origin must not underflow.
+        let (_, cursor, _) = type_with(&field, &[Button::DPadLeft, Button::DPadUp], true);
+        assert_eq!(cursor, (0, 0));
+
+        // Right past the end of a row clamps to its last cell.
+        let presses = vec![Button::DPadRight; 40];
+        let (_, cursor, _) = type_with(&field, &presses, true);
+        assert_eq!(cursor.1, layout.cols_in_row(0) - 1);
+
+        // Down past the last row clamps too.
+        let presses = vec![Button::DPadDown; 20];
+        let (_, cursor, _) = type_with(&field, &presses, true);
+        assert_eq!(cursor.0, layout.row_count() - 1);
+    }
+
+    #[test]
+    fn shift_changes_the_case_of_what_is_typed() {
+        let field = EditField::Username;
+        // Cell (0,0) is 'A'.
+        let (upper, _, _) = type_with(&field, &[Button::A], true);
+        assert_eq!(upper, "A");
+        let (lower, _, _) = type_with(&field, &[Button::A], false);
+        assert_eq!(lower, "a");
+    }
+
+    /// The shift key is the first control cell on the alpha layout, so
+    /// dropping to it and pressing Cross must flip case without typing.
+    #[test]
+    fn the_shift_key_toggles_rather_than_typing() {
+        let field = EditField::Username;
+        let layout = layout_for(&field);
+        let mut cursor = (layout.control_row(), 0);
+        let mut shift = true;
+        let action = apply(&press(Button::A), &mut cursor, &mut shift, &field);
+        assert!(matches!(action, OskAction::Moved), "shift must not type");
+        assert!(!shift, "shift should have toggled off");
+
+        let action = apply(&press(Button::A), &mut cursor, &mut shift, &field);
+        assert!(matches!(action, OskAction::Moved));
+        assert!(shift, "and back on");
+    }
+
+    /// A pad-only player must be able to produce a mixed-case name, which
+    /// was the whole reason for the shift key.
+    #[test]
+    fn a_mixed_case_name_is_typeable() {
+        let field = EditField::Username;
+        let layout = layout_for(&field);
+        // 'A' at (0,0), then shift off, then 'B' at (0,1).
+        let mut cursor = (0, 0);
+        let mut shift = true;
+        let mut out = String::new();
+        if let OskAction::Char(c) = apply(&press(Button::A), &mut cursor, &mut shift, &field) {
+            out.push(c);
+        }
+        cursor = (layout.control_row(), 0);
+        apply(&press(Button::A), &mut cursor, &mut shift, &field);
+        cursor = (0, 1);
+        if let OskAction::Char(c) = apply(&press(Button::A), &mut cursor, &mut shift, &field) {
+            out.push(c);
+        }
+        assert_eq!(out, "Ab");
+    }
+
+    /// The number pad has one control cell where the alpha grid has three,
+    /// so a cursor carried in from the wider layout points past its end.
+    /// It must clamp rather than index out of bounds.
+    #[test]
+    fn a_cursor_from_a_wider_layout_is_clamped() {
+        let alpha = layout_for(&EditField::Username);
+        // Last control cell of the alpha grid (BACKSPACE).
+        let mut cursor = (alpha.control_row(), alpha.cols_in_row(alpha.control_row()) - 1);
+        let mut shift = true;
+        // Same cursor, now interpreted against the number pad.
+        let action = apply(&press(Button::A), &mut cursor, &mut shift, &EditField::TestConnAddress);
+        let pad = layout_for(&EditField::TestConnAddress);
+        assert!(cursor.1 < pad.cols_in_row(cursor.0), "cursor left out of range");
+        // The pad's only control cell is BACKSPACE.
+        assert!(matches!(action, OskAction::Backspace));
+    }
+
+    /// An address is the one thing this field exists to enter.
+    #[test]
+    fn an_ip_and_port_can_be_typed_on_the_pad() {
+        let field = EditField::TestConnAddress;
+        let pad = layout_for(&field);
+        let mut typed = String::new();
+        for (r, c) in (0..pad.char_rows()).flat_map(|r| (0..pad.cols_in_row(r)).map(move |c| (r, c))) {
+            typed.push(pad.char_at(r, c, true));
+        }
+        for needed in "0123456789.:".chars() {
+            assert!(typed.contains(needed), "pad cannot type {needed}");
+        }
+    }
+
+    /// CONFIRM is deliberately left to the normal Accept path so commit
+    /// behaviour cannot drift between the grid and the Enter key.
+    #[test]
+    fn the_confirm_cell_is_not_claimed_by_the_grid() {
+        let field = EditField::Username;
+        let layout = layout_for(&field);
+        let confirm = (layout.button_row(), 1);
+        let cancel = (layout.button_row(), 0);
+        assert!(!wants_event(&press(Button::A), confirm, &field));
+        assert!(wants_event(&press(Button::A), cancel, &field));
+        // D-pad is always the grid's, wherever the cursor sits.
+        assert!(wants_event(&press(Button::DPadUp), confirm, &field));
+    }
+
+    /// Every layout must keep a way out and a way to commit.
+    #[test]
+    fn every_layout_ends_with_cancel_and_confirm() {
+        for field in [
+            EditField::Username,
+            EditField::ClaimName,
+            EditField::JoinCode,
+            EditField::StatsEmail,
+            EditField::ChatMessage,
+            EditField::TestConnAddress,
+        ] {
+            let layout = layout_for(&field);
+            assert_eq!(layout.cols_in_row(layout.button_row()), 2);
+            let mut cursor = (layout.button_row(), 0);
+            let mut shift = true;
+            assert!(matches!(
+                apply(&press(Button::A), &mut cursor, &mut shift, &field),
+                OskAction::Cancel
+            ));
+        }
+    }
+}

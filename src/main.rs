@@ -1891,6 +1891,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // which is how the generator's own names read. Sticky rather than
     // auto-releasing: predictable beats clever on a D-pad.
     let mut fp_osk_shift = true;
+    // Whether the keyboard was open last tick, so it can be reset on the
+    // transition into it. See the reset in the menu-state block below.
+    let mut fp_osk_was_open = false;
     let mut audio_tail_sample: Option<(i16, i16)> = None;
     let mut render_debug_visible = false;
     let mut net_spectate_next: u32 = 165; // ~3s
@@ -2892,8 +2895,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         field: menu::EditField::TestConnAddress,
                                         came_from: Box::new(came_from),
                                     });
-                                    fp_osk = (0, 0);
-                                    fp_osk_shift = true;
                                 }
                                 fp_ui::FpResult::EditClaimName(value) => {
                                     // Same TextEdit-over-came_from handoff the
@@ -2909,8 +2910,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         field: menu::EditField::ClaimName,
                                         came_from: Box::new(came_from),
                                     });
-                                    fp_osk = (0, 0);
-                                    fp_osk_shift = true;
                                 }
                                 fp_ui::FpResult::BeginAccountEdit(field) => {
                                     // Mirrors legacy's NavResult::EditText for just the
@@ -6147,6 +6146,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             AppState::Menu(_) | AppState::Rebinding { .. } | AppState::FpUi(_) => {
+                // Reset the keyboard when it *newly* opens rather than at each
+                // site that opens one: six places construct a TextEdit and only
+                // the two most recent remembered to, so a cursor could arrive
+                // pointing at a cell the incoming layout has no equivalent of.
+                // Keying on the transition covers every path, including ones
+                // added later.
+                let osk_open = is_fp_text_edit(&state);
+                if osk_open && !fp_osk_was_open {
+                    fp_osk = (0, 0);
+                    fp_osk_shift = true;
+                }
+                fp_osk_was_open = osk_open;
+
                 if matches!(
                     state,
                     AppState::Menu(menu::MenuScreen::TextEdit { .. })
