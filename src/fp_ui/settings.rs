@@ -612,6 +612,12 @@ fn draw_bind_row(
     let (lx, ly) = scale.point(x + 14.0, y + row_h / 2.0 - 11.0);
     fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(20.0), action_label, lx, ly, Color::RGB(0xed, 0xed, 0xe8))?;
 
+    // The rebind prompt sits at the right edge and the current binding to its
+    // left, rather than the prompt replacing the binding. Swapping them hid
+    // what a control was bound to on the one row the player was about to
+    // change it on — to answer "what is Up right now?" you had to move off
+    // the row and back.
+    let mut value_right = x + 620.0;
     if selected && focused {
         let hint = select_hint;
         let (hw, hh) = fonts.text_size(FpFont::ChakraPetchSemiBold, scale.font_px(11.0), hint);
@@ -626,11 +632,11 @@ fn draw_bind_row(
         canvas.draw_rect(scale.rect(hint_x, hint_y, hint_w, hint_h))?;
         let (htx, hty) = scale.point(hint_x + pad_x, hint_y + pad_y);
         fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(11.0), hint, htx, hty, theme::ACCENT)?;
-    } else {
-        let (bw, _) = fonts.text_size(FpFont::ChakraPetchSemiBold, scale.font_px(14.0), binding_text);
-        let (bx, by) = scale.point(x + 620.0 - (bw as f32 / scale.s), y + row_h / 2.0 - 9.0);
-        fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(14.0), binding_text, bx, by, Color::RGB(0xcf, 0xcf, 0xc9))?;
+        value_right = hint_x - 14.0;
     }
+    let (bw, _) = fonts.text_size(FpFont::ChakraPetchSemiBold, scale.font_px(14.0), binding_text);
+    let (bx, by) = scale.point(value_right - (bw as f32 / scale.s), y + row_h / 2.0 - 9.0);
+    fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(14.0), binding_text, bx, by, Color::RGB(0xcf, 0xcf, 0xc9))?;
     Ok(())
 }
 

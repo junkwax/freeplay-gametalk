@@ -13,6 +13,9 @@
   now takes Select too. The keyboard grid has no colon, so an `IP:PORT` was
   impossible to finish; on that field the `@` key — unusable in an address and
   already dimmed — types `:` instead.
+- The selected Controls row hid its own binding: the "CROSS TO REBIND" prompt
+  replaced the value instead of sitting beside it, so the one row you were
+  about to change was the one row whose current binding you could not see.
 - Pressing "New Name" could hand back the name already on screen, which reads
   as a dead button. The re-roll drew a fresh seed each time but never checked
   the resulting *name*, and the name space is small enough for two seeds to
@@ -20,6 +23,8 @@
 
 ### Added
 
+- Settings reopens on the category you last had open instead of resetting to
+  Controls each time.
 - Change your name from the Profile screen with Cross. Renaming previously
   lived four levels deep in Settings → Account, and Profile — the screen
   players actually look at for their identity — had no action of its own.

@@ -280,6 +280,22 @@ pub enum FpScreen {
     DiscordConnect { status: String },
 }
 
+/// The Settings category the player last had open, so reopening Settings
+/// lands where they were working instead of resetting to CONTROLS every
+/// time. Deliberately session-scoped rather than a config field: it is a
+/// cursor position, not a preference, and it should not outlive the run.
+static LAST_SETTINGS_CAT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+fn last_settings_cat() -> usize {
+    LAST_SETTINGS_CAT
+        .load(std::sync::atomic::Ordering::Relaxed)
+        .min(settings::CATS.len() - 1)
+}
+
+fn remember_settings_cat(cat: usize) {
+    LAST_SETTINGS_CAT.store(cat, std::sync::atomic::Ordering::Relaxed);
+}
+
 impl FpScreen {
     pub fn main() -> Self {
         FpScreen::Main { cursor: MAIN_PLAY_INDEX }
@@ -287,7 +303,7 @@ impl FpScreen {
 
     pub fn settings_from_cfg(cfg: &crate::config::Config) -> Self {
         FpScreen::Settings {
-            cat: 0,
+            cat: last_settings_cat(),
             row: 0,
             fields: SettingsFields::from_cfg(cfg),
             sidebar_focus: false,
@@ -313,6 +329,9 @@ impl FpScreen {
         else {
             unreachable!()
         };
+        // A deliberate landing target, so it also becomes the remembered
+        // category — backing out and returning goes where you just were.
+        remember_settings_cat(settings::ACCOUNT_CAT_INDEX);
         FpScreen::Settings {
             cat: settings::ACCOUNT_CAT_INDEX,
             row: 0,
@@ -515,6 +534,17 @@ pub enum FpResult {
 }
 
 pub fn nav(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult {
+    let result = nav_inner(screen, input, rom_present);
+    // Recorded here rather than in each arm that moves `cat` — the sidebar,
+    // the shoulder buttons, and the Account landing all change it, and one
+    // missed site would make the memory silently wrong.
+    if let FpScreen::Settings { cat, .. } = screen {
+        remember_settings_cat(*cat);
+    }
+    result
+}
+
+fn nav_inner(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult {
     match screen {
         FpScreen::Main { cursor } => match input {
             FpNav::Up => {
@@ -1373,6 +1403,39 @@ mod tests {
             *test_conn_address = address.into();
         }
         screen
+    }
+
+    /// Reopening Settings should land where the player was working. The
+    /// memory is written in `nav`'s wrapper rather than per-arm, so this
+    /// also guards against a future arm moving `cat` without recording it.
+    #[test]
+    fn settings_reopens_on_the_last_category_used() {
+        let cfg = crate::config::Config::default();
+        let mut screen = FpScreen::settings_from_cfg(&cfg);
+
+        // Walk the sidebar off the default category.
+        nav(&mut screen, FpNav::NextTab, true);
+        nav(&mut screen, FpNav::NextTab, true);
+        let landed = match screen {
+            FpScreen::Settings { cat, .. } => cat,
+            _ => panic!("should still be on Settings"),
+        };
+        assert_ne!(landed, 0, "NextTab should have moved off CONTROLS");
+
+        // Leaving and coming back returns to it, not to CONTROLS.
+        match FpScreen::settings_from_cfg(&cfg) {
+            FpScreen::Settings { cat, .. } => assert_eq!(cat, landed),
+            _ => panic!("expected Settings"),
+        }
+    }
+
+    /// A remembered index outliving a shorter category list would panic the
+    /// draw path on `CATS[cat]`.
+    #[test]
+    fn a_remembered_category_is_clamped_to_the_list() {
+        remember_settings_cat(usize::MAX);
+        assert!(last_settings_cat() < settings::CATS.len());
+        remember_settings_cat(0);
     }
 
     /// The last text field a pad could not reach.
