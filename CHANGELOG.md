@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.8.7 - 2026-08-10
+
+### Fixed
+
+- A controller already plugged in when the app launched claimed **both**
+  player slots: SDL announces a device present at startup through both the
+  initial enumeration and a queued `ControllerDeviceAdded` event, and each
+  was assigned its own slot. A second pad connected afterwards was then
+  turned away with "Both pad slots full", so local two-player only worked if
+  neither pad was connected before launch.
+- Pads SDL has no mapping for — most notably the DualShock 3 on Windows,
+  whose various third-party drivers present GUIDs the built-in database
+  doesn't cover — were skipped entirely at startup rather than mapped. Since
+  the whole app (bindings, rebind capture, menu navigation) speaks only in
+  SDL `GameController` events, such a pad was invisible even to Settings ->
+  Controls, so it could not be rebound into working. Unrecognized devices
+  now get a mapping synthesized from their own reported capabilities, using
+  the DualShock 3 HID button order when the device reports itself as one and
+  a positional layout otherwise. A `gamecontrollerdb.txt` dropped next to
+  the binary (or in `assets/`) overrides both.
+- SDL's HIDAPI PS3 driver is now enabled explicitly; it is compiled in but
+  defaults to off on Windows.
+- Windows release packages shipped the packager's own `config.toml` with
+  only the webhook URL scrubbed, so every download arrived carrying one
+  person's identity: the same display name — flagged as confirmed, so the
+  app never offered to choose another — the same stats email, and the same
+  `guest_device_id`, which is supposed to be unique per install and anchors
+  a player's guest stats profile server-side. `package.ps1` now strips those
+  keys, and existing installs carrying the shipped values clear them on next
+  launch and generate a real identity.
+- The generated starting name is now drawn from OS entropy. It was derived by
+  running a formatted timestamp through a mixer built for hashing a name the
+  player typed, which reached every name but over-represented the most common
+  one by 3.1x where a uniform draw peaks at ~1.5x. Now measured at 1.44x.
+
+### Added
+
+- `--pad-probe` lists every attached joystick with its GUID, control counts,
+  and SDL mapping (or the mapping that would be synthesized for it) — enough
+  to tell "SDL never saw the pad" apart from "SDL saw it and put the buttons
+  somewhere unexpected".
+
 ## 0.8.6 - 2026-07-15
 
 ### Changed
