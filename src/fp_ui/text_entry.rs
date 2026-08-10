@@ -160,7 +160,9 @@ pub fn apply(event: &Event, cursor: &mut (usize, usize)) -> OskAction {
 /// keys that would be no-ops (e.g. `@` while entering a join code).
 fn char_allowed(field: &EditField, c: char) -> bool {
     match field {
-        EditField::Username => c.is_ascii_alphanumeric() || c == '_' || c == '-',
+        EditField::Username | EditField::ClaimName => {
+            c.is_ascii_alphanumeric() || c == '_' || c == '-'
+        }
         EditField::JoinCode => c.is_ascii_alphanumeric(),
         EditField::StatsEmail | EditField::ReplayNote { .. } | EditField::ChatMessage => true,
     }
@@ -318,7 +320,10 @@ pub fn draw_modal(
     // mockup, SPACE takes 2/3 of the width, backspace the remaining 1/3.
     let space_w = (grid_w - KEY_GAP) * 2.0 / 3.0;
     let back_w = grid_w - KEY_GAP - space_w;
-    let space_allowed = !matches!(field, EditField::JoinCode | EditField::Username);
+    let space_allowed = !matches!(
+        field,
+        EditField::JoinCode | EditField::Username | EditField::ClaimName
+    );
     draw_key(canvas, fonts, scale, content_x, y, space_w, KEY_H, "SPACE", FpFont::ChakraPetchSemiBold, 12.0, cursor == (SPACE_ROW, 0), space_allowed)?;
     // "BACKSPACE" as text — the mockup's ⌫ glyph isn't in any bundled font.
     draw_key(

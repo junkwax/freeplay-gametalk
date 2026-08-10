@@ -409,6 +409,11 @@ pub enum FpResult {
     /// `text_entry.rs` (the shared on-screen keyboard) since the capture
     /// was opened from fp_ui.
     BeginAccountEdit(crate::menu::EditField),
+    /// Open the shared on-screen keyboard over the claim screen, carrying the
+    /// name currently in the field. Separate from `BeginAccountEdit` because
+    /// commit belongs back on the claim screen, not in config — see
+    /// `EditField::ClaimName`.
+    EditClaimName(String),
     /// Confirm on the Account category's Discord row. Caller mirrors
     /// legacy's `NavResult::ConnectDiscord`, but stays native end to end:
     /// connect waits on `FpScreen::DiscordConnect`, and both directions
@@ -752,6 +757,11 @@ pub fn nav(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult {
             _ => FpResult::Stay,
         },
         FpScreen::Profile => match input {
+            // Profile is where a player looks for their own identity, so it
+            // is where renaming belongs. The only other route is four levels
+            // deep in Settings -> Account, and this screen had no action of
+            // its own before.
+            FpNav::Confirm => FpResult::BeginAccountEdit(crate::menu::EditField::Username),
             FpNav::Back => {
                 *screen = FpScreen::Main { cursor: MAIN_STATS_INDEX };
                 FpResult::Stay
@@ -1045,6 +1055,12 @@ pub fn nav(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult {
                 *status = "New callsign rolled - Enter to claim it".into();
                 FpResult::Stay
             }
+            // Select opens the on-screen keyboard, matching the Chat tab's
+            // own "SELECT TO OPEN KEYBOARD" compose row. Without it this
+            // screen is hardware-keyboard-only, and it is the screen every
+            // fresh install lands on — so a pad-only player had no way to
+            // set a name at all.
+            FpNav::Info if !*checking => FpResult::EditClaimName(value.clone()),
             // Back abandons the claim and returns to the Lobby's Quick
             // Match tab it was triggered from (matching legacy
             // `MatchUsername`, whose `nav_back` arm exits to the main
@@ -1266,4 +1282,85 @@ pub fn draw_spectate_connecting(
     canvas.set_draw_color(theme::BG);
     canvas.clear();
     spectate_connecting::draw(canvas, fonts, &scale, status, username)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::menu::EditField;
+
+    fn claim(value: &str, checking: bool) -> FpScreen {
+        FpScreen::ClaimUsername {
+            value: value.into(),
+            status: String::new(),
+            checking,
+        }
+    }
+
+    /// The claim screen is where every fresh install lands, and it took
+    /// hardware-keyboard input only. Select has to reach the shared OSK or a
+    /// pad-only player cannot set a name at all.
+    #[test]
+    fn select_opens_the_keyboard_on_the_claim_screen() {
+        let mut screen = claim("Drunken_Ninja", false);
+        match nav(&mut screen, FpNav::Info, true) {
+            FpResult::EditClaimName(v) => assert_eq!(v, "Drunken_Ninja"),
+            _ => panic!("Select must return EditClaimName"),
+        }
+    }
+
+    /// Mid-check the field is frozen, so offering the keyboard would let the
+    /// player edit a name whose availability answer is already in flight.
+    #[test]
+    fn the_keyboard_is_not_offered_while_a_check_is_in_flight() {
+        let mut screen = claim("Drunken_Ninja", true);
+        assert!(matches!(
+            nav(&mut screen, FpNav::Info, true),
+            FpResult::Stay
+        ));
+    }
+
+    /// Select taking over must not have displaced the two bindings that
+    /// screen already had.
+    #[test]
+    fn claim_screen_keeps_its_existing_bindings() {
+        let mut screen = claim("Drunken_Ninja", false);
+        assert!(matches!(
+            nav(&mut screen, FpNav::Confirm, true),
+            FpResult::SubmitUsername(_)
+        ));
+
+        let mut screen = claim("Drunken_Ninja", false);
+        assert!(matches!(nav(&mut screen, FpNav::Action, true), FpResult::Stay));
+        match screen {
+            FpScreen::ClaimUsername { value, .. } => {
+                assert_ne!(value, "Drunken_Ninja", "Triangle should roll a new name")
+            }
+            _ => panic!("Triangle should stay on the claim screen"),
+        }
+    }
+
+    /// Renaming from Profile is the whole point of the shortcut — the other
+    /// route is four levels deep in Settings -> Account.
+    #[test]
+    fn profile_confirm_opens_the_name_editor() {
+        let mut screen = FpScreen::Profile;
+        assert!(matches!(
+            nav(&mut screen, FpNav::Confirm, true),
+            FpResult::BeginAccountEdit(EditField::Username)
+        ));
+        assert!(
+            matches!(screen, FpScreen::Profile),
+            "Confirm must not navigate away — the editor opens over this screen"
+        );
+    }
+
+    /// Adding an action to a screen that previously had none must not have
+    /// broken the way out of it.
+    #[test]
+    fn profile_back_still_returns_to_the_main_menu() {
+        let mut screen = FpScreen::Profile;
+        assert!(matches!(nav(&mut screen, FpNav::Back, true), FpResult::Stay));
+        assert!(matches!(screen, FpScreen::Main { .. }));
+    }
 }

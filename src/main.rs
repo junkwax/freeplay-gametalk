@@ -2863,6 +2863,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     cfg.bindings.get_mut(player).clear_all();
                                     config::save(&cfg);
                                 }
+                                fp_ui::FpResult::EditClaimName(value) => {
+                                    // Same TextEdit-over-came_from handoff the
+                                    // Chat tab's compose row uses, so the shared
+                                    // OSK and the hardware keyboard both work
+                                    // here without this screen growing its own
+                                    // text-entry path.
+                                    let came_from = state.clone();
+                                    state = AppState::Menu(MenuScreen::TextEdit {
+                                        title: "Callsign".into(),
+                                        label: "Pick the name other players see".into(),
+                                        value,
+                                        field: menu::EditField::ClaimName,
+                                        came_from: Box::new(came_from),
+                                    });
+                                    fp_osk = (0, 0);
+                                }
                                 fp_ui::FpResult::BeginAccountEdit(field) => {
                                     // Mirrors legacy's NavResult::EditText for just the
                                     // two fields the Account category exposes, returning to
@@ -3299,6 +3315,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         state = *came_from;
                                         refresh_replay_select(&mut state, Some(status));
                                     }
+                                    menu::EditField::ClaimName => {
+                                        // Put the edited name back on the claim
+                                        // screen rather than saving it: the
+                                        // player still has to confirm, and the
+                                        // availability check runs from there.
+                                        let sanitized = config::sanitize_username(&value);
+                                        state = *came_from;
+                                        if let AppState::FpUi(fp_ui::FpScreen::ClaimUsername {
+                                            value: screen_value,
+                                            status,
+                                            ..
+                                        }) = &mut state
+                                        {
+                                            match sanitized {
+                                                Some(name) => {
+                                                    *screen_value = name;
+                                                    *status =
+                                                        "Enter to claim this callsign".into();
+                                                }
+                                                // Reject rather than silently
+                                                // keeping the old name, so an
+                                                // unusable entry says why.
+                                                None => {
+                                                    *status =
+                                                        "Needs at least 2 letters, digits, _ or -"
+                                                            .into();
+                                                }
+                                            }
+                                        }
+                                    }
                                     menu::EditField::ChatMessage => {
                                         // Same send path as FpResult::SendLobbyChat /
                                         // legacy's NavResult::SendLobbyChat; an empty
@@ -3318,6 +3364,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     }
                                     field => {
                                         match field {
+                                            // Handled in its own arm above; this
+                                            // inner match only sees the fields
+                                            // that fall through to the shared
+                                            // save-and-return tail.
+                                            menu::EditField::ClaimName => {}
                                             menu::EditField::Username => {
                                                 cfg.player_username =
                                                     config::sanitize_username(&value)

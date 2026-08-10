@@ -94,6 +94,11 @@ pub enum EditField {
     ReplayNote { path: String },
     /// Entering a lobby invite code to join a private lobby.
     JoinCode,
+    /// Editing the in-progress name on `FpScreen::ClaimUsername`. Distinct
+    /// from `Username`, which writes straight to config: nothing is claimed
+    /// here until the player confirms on the claim screen itself, so commit
+    /// only puts the text back on that screen.
+    ClaimName,
     /// Composing a free-text lobby chat message from fp_ui's Chat tab —
     /// commit sends it (`matchmaking::send_lobby_chat`) and returns to
     /// `came_from`, replacing the old whole-screen handoff to legacy's
@@ -864,7 +869,9 @@ impl AppState {
         if let AppState::Menu(MenuScreen::TextEdit { field, value, .. }) = self {
             for c in s.chars() {
                 match field {
-                    EditField::Username => {
+                    // ClaimName holds the same kind of value and so takes the
+                    // same filter; they differ only in where commit sends it.
+                    EditField::Username | EditField::ClaimName => {
                         if (c.is_ascii_alphanumeric() || c == '_' || c == '-' || c.is_whitespace())
                             && value.len() < MAX_USERNAME_LEN
                         {

@@ -2,7 +2,19 @@
 
 ## Unreleased
 
+### Fixed
+
+- The first-time "claim your callsign" screen took hardware-keyboard input
+  only, so a player on a controller could not set a name at all — on the one
+  screen every fresh install lands on. Select now opens the same on-screen
+  keyboard the Chat tab uses. Its footer advertises the binding, and Cross is
+  labelled "Claim" rather than the generic "Select".
+
 ### Added
+
+- Change your name from the Profile screen with Cross. Renaming previously
+  lived four levels deep in Settings → Account, and Profile — the screen
+  players actually look at for their identity — had no action of its own.
 
 - Lab frame trace: a per-frame CSV written alongside the ghost recording on
   the same hotkey, with decoded inputs next to each fighter's action id,

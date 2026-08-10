@@ -6,13 +6,14 @@
 //! Typing is real hardware-keyboard input via SDL's `TextInput`/`Backspace`
 //! events (`AppState::text_input`/`text_backspace` in `menu.rs`, widened to
 //! also cover this screen) — the exact same mechanism legacy's
-//! `MatchUsername` already uses, not a re-implementation and not a
-//! delegation to anything else. SDL's text-input mode is also what surfaces
-//! the OS/controller-overlay's own on-screen keyboard on platforms that have
-//! one (Steam Deck, Windows tablet mode, ...), so gamepad-only players get
-//! the same affordance here that they already get on every other real-
-//! keyboard-entry legacy screen (Join Code, Account Username/Email) — there
-//! is no separate "OSK" widget anywhere in this app to delegate to.
+//! `MatchUsername` already uses.
+//!
+//! Select opens the shared on-screen keyboard (`text_entry.rs`) via
+//! `FpResult::EditClaimName`, matching the Chat tab's own compose row. That
+//! matters more here than anywhere else: this is the screen every fresh
+//! install lands on, so leaving it hardware-keyboard-only meant a pad-only
+//! player could not set a name at all. Commit lands back on this screen
+//! rather than in config — nothing is claimed until the player confirms.
 //!
 //! `status`/`checking` are free-text/bool, not a closed enum — mirrors
 //! legacy's own fields exactly, since `main.rs` drives both from the same
@@ -81,7 +82,7 @@ pub fn draw(
     fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(34.0), "CLAIM YOUR CALLSIGN", tx, ty, theme::TEXT)?;
     y += 44.0;
 
-    let hint = "This is the name other players see. Edit it, then press Enter to claim it.";
+    let hint = "This is the name other players see. Edit it, then claim it.";
     let (hx, hy) = scale.point(content_x, y);
     fonts.draw(canvas, FpFont::SairaSemiBold, scale.font_px(15.0), hint, hx, hy, Color::RGB(0x8a, 0x8a, 0x92))?;
     y += 24.0;
@@ -116,14 +117,19 @@ pub fn draw(
         fonts,
         scale,
         &[
-            chrome::PROMPT_SELECT,
+            // Select is the keyboard here rather than the usual About link —
+            // on the one screen a pad-only player must type on, that is the
+            // more useful binding.
+            chrome::FooterPrompt { glyph: "SEL", label: "Keyboard", color: theme::TEXT },
             // "TRI" letters rather than the Unicode triangle glyph
             // (U+25B3) — missing from Saira Condensed Bold, same tofu
             // issue as PROMPT_BACK's U+25CB.
             chrome::FooterPrompt { glyph: "TRI", label: "New Name", color: theme::BTN_TRIANGLE },
+            // Cross claims on this screen rather than the generic "Select".
+            chrome::FooterPrompt { glyph: "X", label: "Claim", color: theme::BTN_CROSS },
             chrome::PROMPT_BACK,
         ],
-        FooterRight::Text("TYPE TO EDIT \u{b7} ENTER TO CLAIM"),
+        FooterRight::Text("SELECT FOR KEYBOARD \u{b7} ENTER TO CLAIM"),
     )?;
     Ok(())
 }

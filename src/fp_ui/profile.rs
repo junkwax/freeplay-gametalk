@@ -76,7 +76,13 @@ pub fn draw(
         canvas,
         fonts,
         scale,
-        &[chrome::PROMPT_NAVIGATE, chrome::PROMPT_BACK],
+        &[
+            chrome::PROMPT_NAVIGATE,
+            // Renaming lives here because this is the identity screen; the
+            // only other route is four levels deep in Settings -> Account.
+            chrome::FooterPrompt { glyph: "X", label: "Change Callsign", color: theme::BTN_CROSS },
+            chrome::PROMPT_BACK,
+        ],
         FooterRight::Text("GLICKO-2 RATING SYSTEM"),
     )?;
     Ok(())
