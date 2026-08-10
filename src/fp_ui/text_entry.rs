@@ -43,6 +43,25 @@ pub const KEY_ROWS: [[char; 10]; 4] = [
     ['4', '5', '6', '7', '8', '9', '_', '-', '.', '@'],
 ];
 
+/// The character a grid cell types for a given field.
+///
+/// Every cell is the literal from `KEY_ROWS` except one: an address field
+/// needs a colon to reach `IP:PORT`, and the grid has no colon anywhere. It
+/// does have `@`, which no address can contain — a cell already dimmed as
+/// unusable there. Spending that dead cell on the one character the field
+/// cannot do without beats growing the grid a row for a single key.
+///
+/// Both the renderer and `apply` go through this, so what a cell shows and
+/// what it types cannot drift apart.
+pub fn key_at(field: &EditField, row: usize, col: usize) -> char {
+    let c = KEY_ROWS[row][col.min(9)];
+    if c == '@' && matches!(field, EditField::TestConnAddress) {
+        ':'
+    } else {
+        c
+    }
+}
+
 /// Grid rows: 0..=3 are `KEY_ROWS`; row 4 is [SPACE, BACKSPACE]; row 5 is
 /// [CANCEL, CONFIRM].
 const SPACE_ROW: usize = 4;
@@ -112,7 +131,7 @@ pub fn wants_event(event: &Event, cursor: (usize, usize)) -> bool {
 /// returning the resulting action for main.rs to perform on the TextEdit
 /// state (via the same `text_input`/`text_backspace`/`nav_back` methods the
 /// hardware keyboard path uses).
-pub fn apply(event: &Event, cursor: &mut (usize, usize)) -> OskAction {
+pub fn apply(event: &Event, cursor: &mut (usize, usize), field: &EditField) -> OskAction {
     use sdl2::controller::Button;
     let Event::ControllerButtonDown { button, .. } = event else {
         return OskAction::Moved;
@@ -141,7 +160,7 @@ pub fn apply(event: &Event, cursor: &mut (usize, usize)) -> OskAction {
             OskAction::Moved
         }
         Button::A => match cursor.0 {
-            r if r < KEY_ROWS.len() => OskAction::Char(KEY_ROWS[r][cursor.1.min(9)]),
+            r if r < KEY_ROWS.len() => OskAction::Char(key_at(field, r, cursor.1)),
             r if r == SPACE_ROW => {
                 if cursor.1 == 0 {
                     OskAction::Space
@@ -164,6 +183,7 @@ fn char_allowed(field: &EditField, c: char) -> bool {
             c.is_ascii_alphanumeric() || c == '_' || c == '-'
         }
         EditField::JoinCode => c.is_ascii_alphanumeric(),
+        EditField::TestConnAddress => c.is_ascii_digit() || c == '.' || c == ':',
         EditField::StatsEmail | EditField::ReplayNote { .. } | EditField::ChatMessage => true,
     }
 }
@@ -295,10 +315,13 @@ pub fn draw_modal(
     // Character grid.
     let key_w = (grid_w - 9.0 * KEY_GAP) / 10.0;
     for (r, row) in KEY_ROWS.iter().enumerate() {
-        for (c, ch) in row.iter().enumerate() {
+        for c in 0..row.len() {
+            // Via key_at, not the raw row, so a cell always shows the
+            // character it actually types for this field.
+            let ch = key_at(field, r, c);
             let kx = content_x + c as f32 * (key_w + KEY_GAP);
             let selected = cursor == (r, c);
-            let allowed = char_allowed(field, *ch);
+            let allowed = char_allowed(field, ch);
             draw_key(
                 canvas,
                 fonts,
@@ -322,7 +345,10 @@ pub fn draw_modal(
     let back_w = grid_w - KEY_GAP - space_w;
     let space_allowed = !matches!(
         field,
-        EditField::JoinCode | EditField::Username | EditField::ClaimName
+        EditField::JoinCode
+            | EditField::Username
+            | EditField::ClaimName
+            | EditField::TestConnAddress
     );
     draw_key(canvas, fonts, scale, content_x, y, space_w, KEY_H, "SPACE", FpFont::ChakraPetchSemiBold, 12.0, cursor == (SPACE_ROW, 0), space_allowed)?;
     // "BACKSPACE" as text — the mockup's ⌫ glyph isn't in any bundled font.

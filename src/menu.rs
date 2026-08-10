@@ -94,6 +94,9 @@ pub enum EditField {
     ReplayNote { path: String },
     /// Entering a lobby invite code to join a private lobby.
     JoinCode,
+    /// Editing the peer address on Settings -> Test Connection. Commit puts
+    /// the text back on that screen; the probe still runs from there.
+    TestConnAddress,
     /// Editing the in-progress name on `FpScreen::ClaimUsername`. Distinct
     /// from `Username`, which writes straight to config: nothing is claimed
     /// here until the player confirms on the claim screen itself, so commit
@@ -881,6 +884,14 @@ impl AppState {
                     EditField::JoinCode => {
                         if c.is_ascii_alphanumeric() && value.len() < 6 {
                             value.extend(c.to_uppercase());
+                        }
+                    }
+                    // Same rule and cap the in-place field above uses, so
+                    // typing through the keyboard and typing directly on the
+                    // Test Connection screen accept exactly the same text.
+                    EditField::TestConnAddress => {
+                        if (c.is_ascii_digit() || c == '.' || c == ':') && value.len() < 24 {
+                            value.push(c);
                         }
                     }
                     EditField::StatsEmail | EditField::ReplayNote { .. } => {

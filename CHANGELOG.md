@@ -9,6 +9,14 @@
   screen every fresh install lands on. Select now opens the same on-screen
   keyboard the Chat tab uses. Its footer advertises the binding, and Cross is
   labelled "Claim" rather than the generic "Select".
+- Settings → Test Connection's address field was reachable the same way, and
+  now takes Select too. The keyboard grid has no colon, so an `IP:PORT` was
+  impossible to finish; on that field the `@` key — unusable in an address and
+  already dimmed — types `:` instead.
+- Pressing "New Name" could hand back the name already on screen, which reads
+  as a dead button. The re-roll drew a fresh seed each time but never checked
+  the resulting *name*, and the name space is small enough for two seeds to
+  collide roughly once in every `adjectives × nouns` presses.
 
 ### Added
 

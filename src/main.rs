@@ -2475,7 +2475,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Keyboard events are never claimed — typing/Enter/Esc keep
                 // working exactly as before.
                 _ if is_fp_text_edit(&state) && fp_ui::text_entry::wants_event(&event, fp_osk) => {
-                    match fp_ui::text_entry::apply(&event, &mut fp_osk) {
+                    // The grid types field-dependent characters (an address
+                    // field turns the unusable `@` cell into `:`), so the
+                    // field has to reach `apply`, not just the renderer.
+                    let field = match &state {
+                        AppState::Menu(MenuScreen::TextEdit { field, .. }) => field.clone(),
+                        // Unreachable: is_fp_text_edit already matched TextEdit.
+                        _ => menu::EditField::Username,
+                    };
+                    match fp_ui::text_entry::apply(&event, &mut fp_osk, &field) {
                         fp_ui::text_entry::OskAction::Moved => {}
                         fp_ui::text_entry::OskAction::Char(c) => state.text_input(&c.to_string()),
                         fp_ui::text_entry::OskAction::Space => state.text_input(" "),
@@ -2862,6 +2870,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 fp_ui::FpResult::ClearAllBindings(player) => {
                                     cfg.bindings.get_mut(player).clear_all();
                                     config::save(&cfg);
+                                }
+                                fp_ui::FpResult::EditTestConnAddress(value) => {
+                                    let came_from = state.clone();
+                                    state = AppState::Menu(MenuScreen::TextEdit {
+                                        title: "Peer Address".into(),
+                                        label: "IP:PORT of the peer to probe".into(),
+                                        value,
+                                        field: menu::EditField::TestConnAddress,
+                                        came_from: Box::new(came_from),
+                                    });
+                                    fp_osk = (0, 0);
                                 }
                                 fp_ui::FpResult::EditClaimName(value) => {
                                     // Same TextEdit-over-came_from handoff the
@@ -3315,6 +3334,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         state = *came_from;
                                         refresh_replay_select(&mut state, Some(status));
                                     }
+                                    menu::EditField::TestConnAddress => {
+                                        // Straight back onto the field; running
+                                        // the probe is still Confirm's job on
+                                        // that screen.
+                                        state = *came_from;
+                                        if let AppState::FpUi(fp_ui::FpScreen::Settings {
+                                            test_conn_address,
+                                            ..
+                                        }) = &mut state
+                                        {
+                                            *test_conn_address = value.clone();
+                                        }
+                                    }
                                     menu::EditField::ClaimName => {
                                         // Put the edited name back on the claim
                                         // screen rather than saving it: the
@@ -3364,11 +3396,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     }
                                     field => {
                                         match field {
-                                            // Handled in its own arm above; this
-                                            // inner match only sees the fields
-                                            // that fall through to the shared
-                                            // save-and-return tail.
-                                            menu::EditField::ClaimName => {}
+                                            // Handled in their own arms above;
+                                            // this inner match only sees the
+                                            // fields that fall through to the
+                                            // shared save-and-return tail.
+                                            menu::EditField::ClaimName
+                                            | menu::EditField::TestConnAddress => {}
                                             menu::EditField::Username => {
                                                 cfg.player_username =
                                                     config::sanitize_username(&value)

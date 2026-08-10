@@ -414,6 +414,10 @@ pub enum FpResult {
     /// commit belongs back on the claim screen, not in config — see
     /// `EditField::ClaimName`.
     EditClaimName(String),
+    /// Open the shared on-screen keyboard over Settings -> Test Connection,
+    /// carrying the address currently in the field. Commit lands back on
+    /// that screen; the probe still runs from Confirm there.
+    EditTestConnAddress(String),
     /// Confirm on the Account category's Discord row. Caller mirrors
     /// legacy's `NavResult::ConnectDiscord`, but stays native end to end:
     /// connect waits on `FpScreen::DiscordConnect`, and both directions
@@ -839,6 +843,12 @@ pub fn nav(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult {
             // to).
             FpNav::Confirm if *cat == settings::TEST_CONN_CAT_INDEX => {
                 FpResult::RunConnectionProbe(test_conn_address.clone())
+            }
+            // Same Select-opens-the-keyboard binding as the claim screen and
+            // the Chat tab. This was the last text field a pad could not
+            // reach.
+            FpNav::Info if !*sidebar_focus && *cat == settings::TEST_CONN_CAT_INDEX => {
+                FpResult::EditTestConnAddress(test_conn_address.clone())
             }
             FpNav::PrevTab => {
                 *cat = (*cat + settings::CATS.len() - 1) % settings::CATS.len();
@@ -1352,6 +1362,59 @@ mod tests {
         assert!(
             matches!(screen, FpScreen::Profile),
             "Confirm must not navigate away — the editor opens over this screen"
+        );
+    }
+
+    fn settings_test_conn(address: &str) -> FpScreen {
+        let mut screen = FpScreen::settings_account(&crate::config::Config::default());
+        if let FpScreen::Settings { cat, sidebar_focus, test_conn_address, .. } = &mut screen {
+            *cat = settings::TEST_CONN_CAT_INDEX;
+            *sidebar_focus = false;
+            *test_conn_address = address.into();
+        }
+        screen
+    }
+
+    /// The last text field a pad could not reach.
+    #[test]
+    fn select_opens_the_keyboard_on_the_test_connection_field() {
+        let mut screen = settings_test_conn("192.168.1.5:7000");
+        match nav(&mut screen, FpNav::Info, true) {
+            FpResult::EditTestConnAddress(v) => assert_eq!(v, "192.168.1.5:7000"),
+            _ => panic!("Select must return EditTestConnAddress"),
+        }
+    }
+
+    /// Confirm still probes rather than opening the keyboard.
+    #[test]
+    fn test_connection_confirm_still_runs_the_probe() {
+        let mut screen = settings_test_conn("10.0.0.2:7001");
+        assert!(matches!(
+            nav(&mut screen, FpNav::Confirm, true),
+            FpResult::RunConnectionProbe(_)
+        ));
+    }
+
+    /// An address needs a colon and the grid has none, so the unusable `@`
+    /// cell doubles as one. If that ever stops holding, the field becomes
+    /// impossible to fill in with a pad.
+    #[test]
+    fn the_address_field_can_reach_a_colon() {
+        use crate::menu::EditField;
+        let at_cell = text_entry::KEY_ROWS
+            .iter()
+            .enumerate()
+            .find_map(|(r, row)| row.iter().position(|c| *c == '@').map(|c| (r, c)))
+            .expect("grid should have an @ cell to repurpose");
+
+        assert_eq!(
+            text_entry::key_at(&EditField::TestConnAddress, at_cell.0, at_cell.1),
+            ':'
+        );
+        // Every other field keeps the literal grid.
+        assert_eq!(
+            text_entry::key_at(&EditField::StatsEmail, at_cell.0, at_cell.1),
+            '@'
         );
     }
 

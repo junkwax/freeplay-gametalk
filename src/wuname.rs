@@ -215,13 +215,36 @@ pub fn random_username() -> String {
     random_username_variant(0)
 }
 
-/// Roll a fresh name, guaranteed to differ across rapid presses. The
-/// monotonic counter feeds `variant` so a re-roll can't repeat even if every
-/// other entropy source were to return an identical value.
+/// Roll a fresh name, guaranteed to differ from the previous one.
+///
+/// The monotonic counter feeds `variant`, so every roll starts from a
+/// different seed. That is not the same as a different *name*: the seed space
+/// is 64 bits and the name space is a few thousand, so two consecutive rolls
+/// land on the same name roughly once in `ADJECTIVES * NOUNS` presses. Rare,
+/// but the failure is user-visible in the worst way — the player presses "New
+/// Name" and nothing appears to happen, which reads as a broken button. So
+/// compare against the last name handed out and roll again.
 pub fn reroll_username() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Mutex;
     static REROLL_COUNTER: AtomicU64 = AtomicU64::new(1);
-    random_username_variant(REROLL_COUNTER.fetch_add(1, Ordering::Relaxed))
+    static LAST: Mutex<Option<String>> = Mutex::new(None);
+
+    // Poisoning would mean a panic mid-roll; the value is a display name, so
+    // carrying on with it is strictly better than propagating the panic.
+    let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+    // Bounded: eight independent draws all colliding is impossible in
+    // practice, and the bound is what stops a one-name list looping forever.
+    for _ in 0..8 {
+        let name = random_username_variant(REROLL_COUNTER.fetch_add(1, Ordering::Relaxed));
+        if last.as_deref() != Some(name.as_str()) {
+            *last = Some(name.clone());
+            return name;
+        }
+    }
+    let name = random_username_variant(REROLL_COUNTER.fetch_add(1, Ordering::Relaxed));
+    *last = Some(name.clone());
+    name
 }
 
 /// Like `random_username` but folds in a caller-supplied variant, so a caller

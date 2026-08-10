@@ -533,7 +533,7 @@ fn draw_test_conn(
         canvas,
         FpFont::SairaMedium,
         scale.font_px(12.0),
-        "Type an address, then Cross to run a UDP probe",
+        "Select for keyboard \u{b7} type an address, then Cross to run a UDP probe",
         hx,
         hy,
         Color::RGB(0x52, 0x52, 0x5a),
