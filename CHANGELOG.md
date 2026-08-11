@@ -10,9 +10,7 @@
   keyboard the Chat tab uses. Its footer advertises the binding, and Cross is
   labelled "Claim" rather than the generic "Select".
 - Settings → Test Connection's address field was reachable the same way, and
-  now takes Select too. The keyboard grid has no colon, so an `IP:PORT` was
-  impossible to finish; on that field the `@` key — unusable in an address and
-  already dimmed — types `:` instead.
+  now takes Select too.
 - The selected Controls row hid its own binding: the "CROSS TO REBIND" prompt
   replaced the value instead of sitting beside it, so the one row you were
   about to change was the one row whose current binding you could not see.
@@ -34,7 +32,11 @@
 - Change your name from the Profile screen with Cross. Renaming previously
   lived four levels deep in Settings → Account, and Profile — the screen
   players actually look at for their identity — had no action of its own.
-
+- A ROM that predates the address table now says so instead of leaving Lab's
+  RAM tools reading the wrong memory. The exporter records the ROM's hash into
+  the table and the client compares it against the zip it loaded, logging at
+  boot and showing a message on entering Lab. Advisory — nothing is disabled.
+  `--addr-probe` reports the pairing and dumps what the table reads.
 - Lab frame trace: a per-frame CSV written alongside the ghost recording on
   the same hotkey, with decoded inputs next to each fighter's action id,
   health, position, and the gap between them. A move's real frame data reads
@@ -42,8 +44,9 @@
   frame, id cleared on recovery — which is data MK2 has never had published,
   since it is normally eyeballed off video. Requires the regenerated
   `mk2_addrs` table it ships with, so **a release carrying this wants the
-  matching `mk2.zip`** — the address table and the ROM build are a pair, and
-  drift shows up as Lab RAM features silently reading nothing.
+  matching `mk2.zip`** — the address table and the ROM build are a pair.
+  Players on an older ROM are now told rather than left guessing (see above),
+  but telling them is not the same as shipping them the ROM.
 
 ### Changed
 
