@@ -9,6 +9,13 @@
 /// conversion by hand -- the stored value is a raw bit address.
 pub const FBNEO_SYSTEM_RAM_BASE: usize = 0x200000;
 
+/// FNV of the mk2.zip this table was exported alongside, in the same form
+/// `matchmaking::rom_fnv_hash` produces. The table is only meaningful
+/// against that ROM; `mk2_addr_check` compares the two so a mismatch says so
+/// instead of leaving Lab reading the wrong memory. Empty means the exporter
+/// ran without `--rom` and the pairing goes unchecked.
+pub const SOURCE_ROM_FNV: &str = "24f627cd";
+
 pub const ACTIVE_PROCESS_LIST_ADDR: usize = 0x13ED8; // active
 pub const BACKGROUND_LIST_1_ADDR: usize = 0x1D4B4; // baklst1
 pub const BACKGROUND_LIST_2_ADDR: usize = 0x1D4B0; // baklst2

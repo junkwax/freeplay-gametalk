@@ -28,6 +28,7 @@ mod matchmaking;
 mod memory;
 mod menu;
 mod menu_input;
+mod mk2_addr_check;
 mod mk2_addrs;
 mod mk2_perf;
 mod native_titlebar_drag;
@@ -1574,11 +1575,60 @@ fn run_core_probe() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// `--addr-probe`: boot the ROM headless and dump what the MK2 address table
+/// reads at several points during attract. The table is generated from one
+/// mk2-main build's map file and only valid against the ROM from that same
+/// build; when the two drift, every Lab RAM feature reads nonsense instead of
+/// failing, which is invisible without something like this.
+fn run_addr_probe() -> Result<(), Box<dyn std::error::Error>> {
+    log::init("addr_probe");
+    let rom_path = rom::find_rom_zip_string()
+        .ok_or_else(|| "ROM zip not found next to the executable or in roms\\".to_string())?;
+    let core_path = render::fbneo_core_path()
+        .ok_or_else(|| "FBNeo core not found next to the executable or in cores\\".to_string())?;
+    println!("[addr-probe] rom={rom_path}");
+    println!("[addr-probe] core={core_path}");
+    println!("[addr-probe] rom fnv={}", matchmaking::rom_fnv_hash());
+    println!("[addr-probe] {}", mk2_addr_check::check().log_line());
+
+    retro::set_silent(true);
+    let out = (|| -> Result<(), Box<dyn std::error::Error>> {
+        let core = unsafe { retro::load(&core_path, &rom_path)? };
+        for checkpoint in [60usize, 600, 1800, 3600] {
+            while ADDR_PROBE_FRAME.with(|f| f.get()) < checkpoint {
+                unsafe { (core.run)() };
+                ADDR_PROBE_FRAME.with(|f| f.set(f.get() + 1));
+            }
+            println!("\n--- frame {checkpoint} ---");
+            for (name, addr) in mk2_addr_check::TABLE_SAMPLE {
+                let v = memory::peek_u16(&core, *addr, memory::Endian::Little);
+                match v {
+                    Some(v) => println!("  {name:<16} 0x{addr:05X} = {v:5} (0x{v:04X})"),
+                    None => println!("  {name:<16} 0x{addr:05X} = <unreadable>"),
+                }
+            }
+
+        }
+        Ok(())
+    })();
+    retro::set_silent(false);
+    out?;
+    Ok(())
+}
+
+thread_local! {
+    static ADDR_PROBE_FRAME: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     adopt_packaged_working_dir();
 
     if cli::render_probe_requested() {
         return run_render_probe();
+    }
+
+    if cli::addr_probe_requested() {
+        return run_addr_probe();
     }
 
     if cli::core_probe_requested() {
@@ -1611,6 +1661,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     log::init(&log_tag);
     dlog!("boot", "net_mode={net_mode:?}");
     println!("Net mode: {net_mode:?}");
+
+    // Say once, at boot, whether this build's address table matches the ROM
+    // on disk. Cheap, and it puts the answer in the debug log that ships with
+    // every incident report.
+    {
+        let pairing = mk2_addr_check::check();
+        let line = pairing.log_line();
+        dlog!("boot", "{line}");
+        if matches!(pairing, mk2_addr_check::Pairing::Mismatch { .. }) {
+            println!("{line}");
+        }
+    }
 
     protocol::register_uri_scheme();
 
@@ -3225,6 +3287,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     punish_trainer.reset_stats();
                                     damage_tracker.reset_stats();
                                     if lab {
+                                        // Lab is the mode built entirely on the
+                                        // address table, so it is where a ROM
+                                        // that predates the table has to be
+                                        // called out — otherwise its tools just
+                                        // read the wrong memory in silence.
+                                        if let Some(msg) = mk2_addr_check::check().lab_warning() {
+                                            println!("[lab] {msg}");
+                                            toast = Some((
+                                                msg,
+                                                Instant::now() + Duration::from_millis(6000),
+                                            ));
+                                        }
                                         auto_start_done = false;
                                         auto_start_frame = 0;
                                     } else {

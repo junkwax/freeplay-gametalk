@@ -38,6 +38,11 @@ pub fn pad_probe_requested() -> bool {
     pad_probe_requested_from(&args)
 }
 
+pub fn addr_probe_requested() -> bool {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    addr_probe_requested_from(&args)
+}
+
 fn doctor_requested_from(args: &[String]) -> bool {
     args.iter().any(|arg| arg == "--doctor")
 }
@@ -69,6 +74,10 @@ fn core_probe_requested_from(args: &[String]) -> bool {
 
 fn pad_probe_requested_from(args: &[String]) -> bool {
     args.iter().any(|arg| arg == "--pad-probe")
+}
+
+fn addr_probe_requested_from(args: &[String]) -> bool {
+    args.iter().any(|arg| arg == "--addr-probe")
 }
 
 pub fn parse_args() -> NetMode {
@@ -124,6 +133,9 @@ fn parse_net_mode_from(args: &[String]) -> NetMode {
                 i += 1;
             }
             "--pad-probe" => {
+                i += 1;
+            }
+            "--addr-probe" => {
                 i += 1;
             }
             other => {
@@ -189,6 +201,7 @@ mod tests {
                 "--render-probe",
                 "--core-probe",
                 "--pad-probe",
+                "--addr-probe",
             ])),
             NetMode::Local
         );
@@ -212,10 +225,11 @@ mod tests {
 
     #[test]
     fn diagnostic_flag_helpers_detect_their_flags() {
-        let a = args(&["--render-probe", "--core-probe", "--pad-probe", "--doctor"]);
+        let a = args(&["--render-probe", "--core-probe", "--pad-probe", "--addr-probe", "--doctor"]);
         assert!(render_probe_requested_from(&a));
         assert!(core_probe_requested_from(&a));
         assert!(pad_probe_requested_from(&a));
+        assert!(addr_probe_requested_from(&a));
         assert!(doctor_requested_from(&a));
         assert!(!pad_probe_requested_from(&args(&["--core-probe"])));
         assert!(!doctor_requested_from(&args(&[
