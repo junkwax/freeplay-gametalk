@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.8 - 2026-08-12
 
 ### Fixed
 
@@ -40,7 +40,7 @@
   profile supplies it. The fingerprint is omitted while it matches the set
   every release so far shipped, so this build pairs with v0.8.7 exactly as
   before; only a genuinely different action set gets its own pool.
-- - A ROM that predates the address table now says so instead of leaving Lab's
+- A ROM that predates the address table now says so instead of leaving Lab's
   RAM tools reading the wrong memory. The exporter records the ROM's hash into
   the table and the client compares it against the zip it loaded, logging at
   boot and showing a message on entering Lab. Advisory — nothing is disabled.
