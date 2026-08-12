@@ -30,6 +30,42 @@ pub enum Action {
     Coin,
 }
 
+/// Fingerprint of what `NetInput`'s bits *mean*.
+///
+/// The netplay packet is a bare `u16` whose bit index is a position in
+/// `Action::ALL`, and whose bit is read out of the libretro slot that
+/// action's `retro_id` names (see `snapshot_player`/`apply_snapshot`). Both
+/// halves are therefore protocol, not preference: two peers that disagree on
+/// the list's order or on any slot don't error, they silently read each
+/// other's High Punch as Low Kick and walk apart.
+///
+/// Nothing can disagree today, because the list is one compiled-in constant.
+/// It stops being one the moment a game profile supplies it, which is why
+/// this exists now — the guard is worth having in place before the thing it
+/// guards can vary.
+pub fn action_set_fingerprint() -> String {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for (i, a) in Action::ALL.iter().enumerate() {
+        for byte in (i as u64).to_le_bytes().iter().chain(
+            (a.retro_id() as u64).to_le_bytes().iter(),
+        ) {
+            h ^= *byte as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+    }
+    format!("{:08x}", (h >> 32) as u32)
+}
+
+/// The fingerprint every client through v0.8.7 shipped.
+///
+/// Matchmaking omits the fingerprint from its key when it equals this, so a
+/// build carrying the original action set produces byte-identical keys to
+/// those releases and keeps pairing with them. Absence means "the original
+/// set" — only a profile that actually changes the wire meaning gets its own
+/// pool, which is the only case where splitting players is the correct
+/// outcome.
+pub const LEGACY_ACTION_SET: &str = "8b52357c";
+
 impl Action {
     pub const ALL: [Action; 11] = [
         Action::Up,
@@ -533,5 +569,68 @@ mod tests {
         assert!(!sources.set_source(Player::P1, Action::Left, source("Shared"), false));
         assert!(sources.is_action_held(Player::P1, Action::Right));
         assert!(sources.is_action_held(Player::P2, Action::Left));
+    }
+}
+
+#[cfg(test)]
+mod action_set_tests {
+    use super::*;
+
+    /// If this fails, the wire meaning of `NetInput` changed. That is allowed
+    /// — but it must be deliberate, and `LEGACY_ACTION_SET` must NOT be
+    /// updated to match: leaving it alone is what makes matchmaking give the
+    /// new set its own pool instead of pairing it against clients that read
+    /// the bits differently.
+    #[test]
+    fn the_shipped_action_set_still_matches_the_recorded_fingerprint() {
+        assert_eq!(
+            action_set_fingerprint(),
+            LEGACY_ACTION_SET,
+            "action list order or a retro_id changed - this alters what every \
+             netplay input bit means"
+        );
+    }
+
+    /// The fingerprint has to react to both halves of the wire contract, or
+    /// it would wave through exactly the changes it exists to catch.
+    #[test]
+    fn the_fingerprint_reacts_to_order_and_to_slots() {
+        fn fingerprint_of(pairs: &[(usize, usize)]) -> String {
+            let mut h: u64 = 0xcbf29ce484222325;
+            for (i, slot) in pairs {
+                for byte in (*i as u64)
+                    .to_le_bytes()
+                    .iter()
+                    .chain((*slot as u64).to_le_bytes().iter())
+                {
+                    h ^= *byte as u64;
+                    h = h.wrapping_mul(0x100000001b3);
+                }
+            }
+            format!("{:08x}", (h >> 32) as u32)
+        }
+
+        let actual: Vec<(usize, usize)> = Action::ALL
+            .iter()
+            .enumerate()
+            .map(|(i, a)| (i, a.retro_id()))
+            .collect();
+        assert_eq!(fingerprint_of(&actual), action_set_fingerprint());
+
+        // Same actions, two of them swapped: every bit past the swap means
+        // something else on the wire.
+        let mut reordered = actual.clone();
+        reordered.swap(4, 7);
+        let reordered: Vec<(usize, usize)> = reordered
+            .into_iter()
+            .enumerate()
+            .map(|(i, (_, slot))| (i, slot))
+            .collect();
+        assert_ne!(fingerprint_of(&reordered), action_set_fingerprint());
+
+        // Same order, one action rebound to a different libretro slot.
+        let mut reslotted = actual.clone();
+        reslotted[4].1 = 15;
+        assert_ne!(fingerprint_of(&reslotted), action_set_fingerprint());
     }
 }

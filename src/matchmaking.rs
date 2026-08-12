@@ -1236,8 +1236,24 @@ pub(crate) fn rom_fnv_hash() -> String {
     }
 }
 
+/// The value the server pairs on, by plain string equality. It has to name
+/// everything two peers must agree about to simulate the same match: the ROM,
+/// the FBNeo build, and — once game profiles supply it — what the bits in a
+/// `NetInput` mean.
+///
+/// The action-set fingerprint is appended only when it differs from the one
+/// every release so far has shipped. That keeps this build's key
+/// byte-identical to v0.8.7's, so nobody is split off from players who are
+/// genuinely compatible; a profile that really does change the wire meaning
+/// gets its own pool, which is the one case where splitting is correct.
 fn rom_short_hash() -> String {
-    format!("{}@{}", rom_fnv_hash(), crate::retro::core_compat_tag())
+    let base = format!("{}@{}", rom_fnv_hash(), crate::retro::core_compat_tag());
+    let actions = crate::input::action_set_fingerprint();
+    if actions == crate::input::LEGACY_ACTION_SET {
+        base
+    } else {
+        format!("{base}#{actions}")
+    }
 }
 
 pub(crate) fn sha256_hex(input: &[u8]) -> String {
@@ -3493,6 +3509,23 @@ mod tests {
         let mut reader = std::io::BufReader::new(&raw[..]);
         read_chunked_body(&mut reader, &mut out).unwrap();
         assert_eq!(out, b"Wikipedia in\r\n\r\nchunks.");
+    }
+
+    /// The whole point of the "omit when legacy" rule: this build must key
+    /// exactly as v0.8.7 did, or it would quietly stop matching players it is
+    /// perfectly compatible with.
+    #[test]
+    fn the_pairing_key_is_unchanged_while_the_action_set_is() {
+        assert_eq!(
+            crate::input::action_set_fingerprint(),
+            crate::input::LEGACY_ACTION_SET
+        );
+        let key = super::rom_short_hash();
+        assert!(
+            !key.contains('#'),
+            "legacy action set must not add a suffix: {key}"
+        );
+        assert_eq!(key.matches('@').count(), 1, "{key}");
     }
 
     #[test]

@@ -32,7 +32,15 @@
 - Change your name from the Profile screen with Cross. Renaming previously
   lived four levels deep in Settings → Account, and Profile — the screen
   players actually look at for their identity — had no action of its own.
-- A ROM that predates the address table now says so instead of leaving Lab's
+- Matchmaking's pairing key now covers what netplay input bits *mean*, not
+  just the ROM and core build. The packet's bit order and each action's
+  libretro slot are protocol: peers that disagree don't error, they read each
+  other's High Punch as Low Kick. Nothing can disagree yet — the action list
+  is one compiled-in constant — but it stops being one as soon as a game
+  profile supplies it. The fingerprint is omitted while it matches the set
+  every release so far shipped, so this build pairs with v0.8.7 exactly as
+  before; only a genuinely different action set gets its own pool.
+- - A ROM that predates the address table now says so instead of leaving Lab's
   RAM tools reading the wrong memory. The exporter records the ROM's hash into
   the table and the client compares it against the zip it loaded, logging at
   boot and showing a message on entering Lab. Advisory — nothing is disabled.
