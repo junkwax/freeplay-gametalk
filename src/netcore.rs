@@ -108,6 +108,43 @@ impl NetRuntime {
     }
 }
 
+/// Tell the ROM whether this is an ONLINE session.
+///
+/// `f_netplay` is a flag the ROM only ever reads; the wrapper owns it. Set,
+/// the ROM is free play (`get_adj` short-circuits the `adjfrepl` coin
+/// adjustment), takes `play9`'s rematch loop instead of the continue/buy-in
+/// countdown, ignores the TEST switch, and applies the online combo-input
+/// slack. Clear, the ROM is a coin-operated cabinet and refuses START at
+/// zero credits.
+///
+/// **Both peers must write the same value.** It feeds `cr_strtp`, the
+/// rematch branch and `combo_slack`, so a one-sided write desyncs GGRS by
+/// itself. It lives in game RAM, so it rides along in every GGRS savestate:
+/// written before the first frame is saved, rollback preserves it.
+///
+/// Refuses to write on a ROM/table mismatch. `NETPLAY_ACTIVE_ADDR` is `.bss`
+/// and moves whenever the ROM's RAM layout changes; on the wrong build it is
+/// some other variable, and corrupting that is worse than the coin gate it
+/// would have lifted. `mk2_addr_check` already knows the answer.
+pub fn set_netplay_flag(core: &retro::Core, active: bool) {
+    if let crate::mk2_addr_check::Pairing::Mismatch { expected, found } =
+        crate::mk2_addr_check::check()
+    {
+        let msg = format!(
+            "not writing f_netplay: address table is for ROM {expected}, {found} is loaded"
+        );
+        println!("[net] {msg}");
+        dlog!("net", "{}", msg);
+        return;
+    }
+    memory::poke_u16(
+        core,
+        mk2_addrs::a().NETPLAY_ACTIVE_ADDR,
+        u16::from(active),
+        memory::Endian::Little,
+    );
+}
+
 /// Wipe trainer-flag RAM and drop all training-only state before a netplay
 /// session starts. Both peers must run this so they begin from canonical
 /// state — any non-zero training byte would desync GGRS on the first
@@ -120,9 +157,13 @@ pub fn reset_for_netplay(
     ghost_recording: &mut Option<ghost::Recording>,
 ) {
     use memory::{poke_u16, Endian};
-    for addr in mk2_addrs::ZERO_TARGETS {
-        poke_u16(core, *addr, 0x0000, Endian::Little);
+    for addr in mk2_addrs::a().zero_targets() {
+        poke_u16(core, addr, 0x0000, Endian::Little);
     }
+    // After the ZERO_TARGETS wipe so ordering can never clear it, and after
+    // the caller has reloaded the clean boot savestate so the reload cannot
+    // either. The ROM is coin-operated by default and would refuse START.
+    set_netplay_flag(core, true);
     trainer.set_enabled("hitboxes", false);
     trainer.set_enabled("p1_health", false);
     trainer.set_enabled("p2_health", false);
@@ -591,7 +632,7 @@ pub fn step_netplay_frame(
                     };
                     if let Some(sync) = memory::peek_u16(
                         core,
-                        mk2_addrs::NETPLAY_SYNC_ADDR,
+                        mk2_addrs::a().NETPLAY_SYNC_ADDR,
                         memory::Endian::Little,
                     ) {
                         cksum ^= u128::from(sync) << 112;

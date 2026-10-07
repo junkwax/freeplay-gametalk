@@ -234,6 +234,11 @@ fn pixel_rgb(frame: &FrameState, row: usize, x: usize) -> [u8; 3] {
     }
 }
 
+/// Interleaved stereo s16 to a plain PCM WAV.
+pub fn write_wav_file(path: &PathBuf, sample_rate: u32, samples: &[i16]) -> Result<(), String> {
+    write_wav(path, sample_rate, samples)
+}
+
 fn write_wav(path: &PathBuf, sample_rate: u32, samples: &[i16]) -> Result<(), String> {
     let mut file =
         BufWriter::new(File::create(path).map_err(|e| format!("create {}: {e}", path.display()))?);

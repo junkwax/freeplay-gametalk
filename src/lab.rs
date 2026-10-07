@@ -106,10 +106,10 @@ impl Default for PositionPreset {
 
 pub fn apply_position_preset(core: &Core, preset: PositionPreset) {
     let (p1_x, p2_x) = preset.coords();
-    memory::poke_u16(core, mk2_addrs::P1_X_ADDR, p1_x, memory::Endian::Little);
-    memory::poke_u16(core, mk2_addrs::P2_X_ADDR, p2_x, memory::Endian::Little);
-    memory::poke_u16(core, mk2_addrs::P1_Y_ADDR, 0, memory::Endian::Little);
-    memory::poke_u16(core, mk2_addrs::P2_Y_ADDR, 0, memory::Endian::Little);
+    memory::poke_u16(core, mk2_addrs::a().P1_X_ADDR, p1_x, memory::Endian::Little);
+    memory::poke_u16(core, mk2_addrs::a().P2_X_ADDR, p2_x, memory::Endian::Little);
+    memory::poke_u16(core, mk2_addrs::a().P1_Y_ADDR, 0, memory::Endian::Little);
+    memory::poke_u16(core, mk2_addrs::a().P2_Y_ADDR, 0, memory::Endian::Little);
 }
 
 /// Value MKSEL.ASM's `player_select` writes into `p1_char`/`p2_char` on

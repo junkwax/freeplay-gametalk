@@ -116,9 +116,9 @@ impl Trace {
         writeln!(
             out,
             "# mk2 lab trace  p1={}  p2={}  round={}",
-            char_name(g(addr::P1_CHAR_ADDR)),
-            char_name(g(addr::P2_CHAR_ADDR)),
-            g(addr::ROUND_NUM)
+            char_name(g(addr::a().P1_CHAR_ADDR)),
+            char_name(g(addr::a().P2_CHAR_ADDR)),
+            g(addr::a().ROUND_NUM)
         )?;
         writeln!(
             out,
@@ -141,8 +141,8 @@ impl Trace {
     /// result of the inputs on that same row.
     pub fn record(&mut self, core: &Core, p1_bits: u16, p2_bits: u16) {
         let g = |a: usize| peek_u16(core, a, Endian::Little).unwrap_or(0);
-        let p1x = i16s(g(addr::P1_X_ADDR));
-        let p2x = i16s(g(addr::P2_X_ADDR));
+        let p1x = i16s(g(addr::a().P1_X_ADDR));
+        let p2x = i16s(g(addr::a().P2_X_ADDR));
         let act = |p: usize| {
             action_of(core, p)
                 .map(|v| format!("{v:04x}"))
@@ -154,15 +154,15 @@ impl Trace {
             self.frame,
             decode(p1_bits),
             decode(p2_bits),
-            act(addr::P1_PROC_ADDR),
-            act(addr::P2_PROC_ADDR),
-            g(addr::P1_HP_ADDR),
-            g(addr::P2_HP_ADDR),
+            act(addr::a().P1_PROC_ADDR),
+            act(addr::a().P2_PROC_ADDR),
+            g(addr::a().P1_HP_ADDR),
+            g(addr::a().P2_HP_ADDR),
             p1x,
             p2x,
             (p1x - p2x).abs(),
-            i16s(g(addr::P1_Y_ADDR)),
-            i16s(g(addr::P2_Y_ADDR)),
+            i16s(g(addr::a().P1_Y_ADDR)),
+            i16s(g(addr::a().P2_Y_ADDR)),
         );
         self.frame += 1;
         self.rows += 1;

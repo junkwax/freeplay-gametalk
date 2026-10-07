@@ -71,6 +71,14 @@ pub enum Poke {
         value: u16,
         endian: Endian,
     },
+    /// `U16` at an address looked up on every write - for game RAM named in
+    /// `mk2_addrs`, which moves with the loaded ROM (`rom_manifest`), so a
+    /// poke built at startup must not keep the address it was built with.
+    U16At {
+        addr: fn() -> usize,
+        value: u16,
+        endian: Endian,
+    },
 }
 
 impl Poke {
@@ -82,6 +90,25 @@ impl Poke {
                 value,
                 endian,
             } => poke_u16(core, addr, value, endian),
+            Poke::U16At {
+                addr,
+                value,
+                endian,
+            } => poke_u16(core, addr(), value, endian),
+        }
+    }
+
+    fn set_value16(&mut self, v: u16) {
+        match self {
+            Poke::U16 { value, .. } | Poke::U16At { value, .. } => *value = v,
+            Poke::U8 { value, .. } => *value = v as u8,
+        }
+    }
+
+    fn value16(&self) -> u16 {
+        match *self {
+            Poke::U16 { value, .. } | Poke::U16At { value, .. } => value,
+            Poke::U8 { value, .. } => u16::from(value),
         }
     }
 }
@@ -137,6 +164,21 @@ impl PokeList {
         if let Some(entry) = self.entries.iter_mut().find(|e| e.name == name) {
             entry.enabled = enabled;
         }
+    }
+
+    /// Change the value an entry writes while enabled (e.g. which boxes the
+    /// `f_colbox` mask shows). Takes effect on the next `apply`.
+    pub fn set_value(&mut self, name: &str, value: u16) {
+        if let Some(entry) = self.entries.iter_mut().find(|e| e.name == name) {
+            entry.on.set_value16(value);
+        }
+    }
+
+    pub fn value(&self, name: &str) -> Option<u16> {
+        self.entries
+            .iter()
+            .find(|e| e.name == name)
+            .map(|e| e.on.value16())
     }
 
     pub fn is_enabled(&self, name: &str) -> bool {

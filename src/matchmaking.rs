@@ -1222,18 +1222,21 @@ fn base64_decode(s: &str) -> Option<Vec<u8>> {
 /// official revision, just the file it was actually given.
 pub(crate) fn rom_fnv_hash() -> String {
     match crate::rom::read_rom_zip() {
-        Some(bytes) => {
-            let mut h: u64 = 0xcbf29ce484222325;
-            for chunk in bytes.chunks(8) {
-                let mut w = [0u8; 8];
-                w[..chunk.len()].copy_from_slice(chunk);
-                h ^= u64::from_le_bytes(w);
-                h = h.wrapping_mul(0x100000001b3);
-            }
-            format!("{:08x}", (h >> 32) as u32)
-        }
+        Some(bytes) => fnv_of(&bytes),
         None => "0".to_string(),
     }
+}
+
+/// `rom_fnv_hash` over bytes already in hand.
+pub(crate) fn fnv_of(bytes: &[u8]) -> String {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for chunk in bytes.chunks(8) {
+        let mut w = [0u8; 8];
+        w[..chunk.len()].copy_from_slice(chunk);
+        h ^= u64::from_le_bytes(w);
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    format!("{:08x}", (h >> 32) as u32)
 }
 
 /// The value the server pairs on, by plain string equality. It has to name

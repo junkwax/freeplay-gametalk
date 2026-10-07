@@ -1222,7 +1222,7 @@ pub fn draw_lab_assist_overlay(
     window_w: i32,
     window_h: i32,
     history: &crate::input_history::InputHistory,
-    hitboxes_on: bool,
+    hitboxes: &str,
     health_on: bool,
     timer_on: bool,
     dummy_status: &str,
@@ -1235,7 +1235,7 @@ pub fn draw_lab_assist_overlay(
     let line_h = 16;
     let header_gap = 30;
     let hotkeys = vec![
-        format!("F2  BOXES {}", if hitboxes_on { "ON" } else { "OFF" }),
+        format!("F2  BOXES {hitboxes}"),
         format!("F3  HEALTH {}", if health_on { "ON" } else { "OFF" }),
         format!("F4  TIMER {}", if timer_on { "ON" } else { "OFF" }),
         format!("F5  DUMMY {dummy_status}"),

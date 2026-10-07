@@ -97,20 +97,20 @@ impl Mk2PerfSample {
 
 pub fn sample(core: &Core) -> Option<Mk2PerfSample> {
     let ram = core.memory(RETRO_MEMORY_SYSTEM_RAM)?;
-    let (active_processes, active_warn) = count_list(ram, mk2_addrs::ACTIVE_PROCESS_LIST_ADDR);
-    let (free_processes, free_proc_warn) = count_list(ram, mk2_addrs::FREE_PROCESS_LIST_ADDR);
-    let (obj1, obj1_warn) = count_list(ram, mk2_addrs::OBJECT_LIST_1_ADDR);
-    let (obj2, obj2_warn) = count_list(ram, mk2_addrs::OBJECT_LIST_2_ADDR);
-    let (obj3, obj3_warn) = count_list(ram, mk2_addrs::OBJECT_LIST_3_ADDR);
-    let (bak1, bak1_warn) = count_list(ram, mk2_addrs::BACKGROUND_LIST_1_ADDR);
-    let (bak2, bak2_warn) = count_list(ram, mk2_addrs::BACKGROUND_LIST_2_ADDR);
-    let (bak3, bak3_warn) = count_list(ram, mk2_addrs::BACKGROUND_LIST_3_ADDR);
-    let (bak4, bak4_warn) = count_list(ram, mk2_addrs::BACKGROUND_LIST_4_ADDR);
-    let (bak5, bak5_warn) = count_list(ram, mk2_addrs::BACKGROUND_LIST_5_ADDR);
-    let (bak6, bak6_warn) = count_list(ram, mk2_addrs::BACKGROUND_LIST_6_ADDR);
-    let (bak7, bak7_warn) = count_list(ram, mk2_addrs::BACKGROUND_LIST_7_ADDR);
-    let (bak8, bak8_warn) = count_list(ram, mk2_addrs::BACKGROUND_LIST_8_ADDR);
-    let (free_objects, free_obj_warn) = count_list(ram, mk2_addrs::FREE_OBJECT_LIST_ADDR);
+    let (active_processes, active_warn) = count_list(ram, mk2_addrs::a().ACTIVE_PROCESS_LIST_ADDR);
+    let (free_processes, free_proc_warn) = count_list(ram, mk2_addrs::a().FREE_PROCESS_LIST_ADDR);
+    let (obj1, obj1_warn) = count_list(ram, mk2_addrs::a().OBJECT_LIST_1_ADDR);
+    let (obj2, obj2_warn) = count_list(ram, mk2_addrs::a().OBJECT_LIST_2_ADDR);
+    let (obj3, obj3_warn) = count_list(ram, mk2_addrs::a().OBJECT_LIST_3_ADDR);
+    let (bak1, bak1_warn) = count_list(ram, mk2_addrs::a().BACKGROUND_LIST_1_ADDR);
+    let (bak2, bak2_warn) = count_list(ram, mk2_addrs::a().BACKGROUND_LIST_2_ADDR);
+    let (bak3, bak3_warn) = count_list(ram, mk2_addrs::a().BACKGROUND_LIST_3_ADDR);
+    let (bak4, bak4_warn) = count_list(ram, mk2_addrs::a().BACKGROUND_LIST_4_ADDR);
+    let (bak5, bak5_warn) = count_list(ram, mk2_addrs::a().BACKGROUND_LIST_5_ADDR);
+    let (bak6, bak6_warn) = count_list(ram, mk2_addrs::a().BACKGROUND_LIST_6_ADDR);
+    let (bak7, bak7_warn) = count_list(ram, mk2_addrs::a().BACKGROUND_LIST_7_ADDR);
+    let (bak8, bak8_warn) = count_list(ram, mk2_addrs::a().BACKGROUND_LIST_8_ADDR);
+    let (free_objects, free_obj_warn) = count_list(ram, mk2_addrs::a().FREE_OBJECT_LIST_ADDR);
 
     Some(Mk2PerfSample {
         active_processes,
@@ -118,7 +118,7 @@ pub fn sample(core: &Core) -> Option<Mk2PerfSample> {
         foreground_objects: [obj1, obj2, obj3],
         background_objects: [bak1, bak2, bak3, bak4, bak5, bak6, bak7, bak8],
         free_objects,
-        overload: peek_u16(ram, mk2_addrs::OVERLOAD_ADDR).unwrap_or(0),
+        overload: peek_u16(ram, mk2_addrs::a().OVERLOAD_ADDR).unwrap_or(0),
         list_warnings: ListWarnings {
             active: active_warn,
             free_processes: free_proc_warn,

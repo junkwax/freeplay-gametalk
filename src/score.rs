@@ -17,10 +17,10 @@ pub struct Score {
 impl Score {
     pub fn read(core: &Core) -> Score {
         Score {
-            p1_match_wins: peek_u16(core, mk2_addrs::P1_MATCHW, Endian::Little).unwrap_or(0),
-            p2_match_wins: peek_u16(core, mk2_addrs::P2_MATCHW, Endian::Little).unwrap_or(0),
-            round_num: peek_u16(core, mk2_addrs::ROUND_NUM, Endian::Little).unwrap_or(0),
-            winner_status: peek_u16(core, mk2_addrs::WINNER_STATUS, Endian::Little).unwrap_or(0),
+            p1_match_wins: peek_u16(core, mk2_addrs::a().P1_MATCHW, Endian::Little).unwrap_or(0),
+            p2_match_wins: peek_u16(core, mk2_addrs::a().P2_MATCHW, Endian::Little).unwrap_or(0),
+            round_num: peek_u16(core, mk2_addrs::a().ROUND_NUM, Endian::Little).unwrap_or(0),
+            winner_status: peek_u16(core, mk2_addrs::a().WINNER_STATUS, Endian::Little).unwrap_or(0),
         }
     }
 }

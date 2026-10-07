@@ -530,6 +530,19 @@ fn draw_cabinet_title(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scal
     let (sx, sy) = scale.point(theme::VW - 96.0 - (sw as f32 / scale.s), bottom + 8.0);
     fonts.draw_tracked(canvas, FpFont::ChakraPetchMedium, scale.font_px(14.0), sub, sx, sy, Color::RGB(0x5e, 0x5e, 0x66), sub_track)?;
 
+    // Which ROM build is loaded, read out of the ROM itself (its `rom_name`
+    // stamp, via the address manifest) so testers can say what they played.
+    // Only shown when the ROM carries one - an older ROM gets no line rather
+    // than a guess.
+    if rom_present {
+        if let Some(stamp) = crate::rom_manifest::build_stamp() {
+            let label = crate::rom_manifest::build_label(&stamp);
+            let (bw, _) = fonts.text_size_tracked(FpFont::ChakraPetchMedium, scale.font_px(13.0), &label, sub_track);
+            let (bx, by) = scale.point(theme::VW - 96.0 - (bw as f32 / scale.s), bottom + 32.0);
+            fonts.draw_tracked(canvas, FpFont::ChakraPetchMedium, scale.font_px(13.0), &label, bx, by, theme::ACCENT, sub_track)?;
+        }
+    }
+
     // ROM identity line (FNV hash + core build tag) hidden for now per
     // direct user feedback ("not needed right now") — kept as a function,
     // not deleted, in case it comes back; same "hidden not deleted"

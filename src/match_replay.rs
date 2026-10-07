@@ -375,8 +375,8 @@ impl Playback {
         self.last_score = Some(now_score);
 
         let hp = (
-            memory::peek_u16(core, mk2_addrs::P1_HP_ADDR, Endian::Little).unwrap_or(0),
-            memory::peek_u16(core, mk2_addrs::P2_HP_ADDR, Endian::Little).unwrap_or(0),
+            memory::peek_u16(core, mk2_addrs::a().P1_HP_ADDR, Endian::Little).unwrap_or(0),
+            memory::peek_u16(core, mk2_addrs::a().P2_HP_ADDR, Endian::Little).unwrap_or(0),
         );
         if let Some(prev) = self.last_hp {
             let p1_damage = damage_taken(prev.0, hp.0);

@@ -76,6 +76,13 @@ fn pad_probe_requested_from(args: &[String]) -> bool {
     args.iter().any(|arg| arg == "--pad-probe")
 }
 
+/// `--audio-probe [frames]` - headless dump of the core's raw audio.
+pub fn audio_probe_frames() -> Option<usize> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let i = args.iter().position(|a| a == "--audio-probe")?;
+    Some(args.get(i + 1).and_then(|n| n.parse().ok()).unwrap_or(3600))
+}
+
 fn addr_probe_requested_from(args: &[String]) -> bool {
     args.iter().any(|arg| arg == "--addr-probe")
 }

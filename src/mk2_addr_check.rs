@@ -8,6 +8,10 @@
 //! errors. Releases ship no ROM, so this is the *expected* state for anyone
 //! who updates the client without updating their ROM.
 //!
+//! Since 2026-10-06 the ROM carries its own table (`rom_manifest`), and a
+//! ROM that does is `SelfDescribed` - no pairing needed. Everything below is
+//! the fallback for a ROM built before that.
+//!
 //! The check is an exact identity — the FNV of the ROM zip, the same hash
 //! `matchmaking` already computes for pairing — recorded into the table when
 //! it is exported. Both halves come out of one mk2-main build, so recording
@@ -23,55 +27,57 @@
 //! correct one. The heuristic could only ever have produced false
 //! reassurance, which is worse than no check.
 
-use crate::mk2_addrs as addr;
+use crate::rom_manifest::Source;
 
-/// Every entry `--addr-probe` dumps. Named so the output can be read against
-/// `mk2.map` by hand when a mismatch needs diagnosing rather than detecting.
-pub const TABLE_SAMPLE: &[(&str, usize)] = &[
-    ("p1_char", addr::P1_CHAR_ADDR),
-    ("p2_char", addr::P2_CHAR_ADDR),
-    ("round_num", addr::ROUND_NUM),
-    ("p1_matchw", addr::P1_MATCHW),
-    ("p2_matchw", addr::P2_MATCHW),
-    ("winner_status", addr::WINNER_STATUS),
-    ("p1_hp", addr::P1_HP_ADDR),
-    ("p2_hp", addr::P2_HP_ADDR),
-    ("p1_proc", addr::P1_PROC_ADDR),
-    ("p2_proc", addr::P2_PROC_ADDR),
-    ("gstate", addr::GSTATE_ADDR),
-    ("timer", addr::MPROC_TIMER_ADDR),
-    ("f_colbox", addr::HITBOX_FLAG_ADDR),
-    ("f_shadows", addr::SHADOWS_FLAG_ADDR),
-];
+/// Every entry `--addr-probe` dumps, from the table in use. Named so the
+/// output can be read against `mk2.map` by hand when a mismatch needs
+/// diagnosing rather than detecting.
+pub fn table_sample() -> Vec<(&'static str, usize)> {
+    let a = crate::mk2_addrs::a();
+    vec![
+        ("p1_char", a.P1_CHAR_ADDR),
+        ("p2_char", a.P2_CHAR_ADDR),
+        ("round_num", a.ROUND_NUM),
+        ("p1_matchw", a.P1_MATCHW),
+        ("p2_matchw", a.P2_MATCHW),
+        ("winner_status", a.WINNER_STATUS),
+        ("p1_hp", a.P1_HP_ADDR),
+        ("p2_hp", a.P2_HP_ADDR),
+        ("p1_proc", a.P1_PROC_ADDR),
+        ("p2_proc", a.P2_PROC_ADDR),
+        ("gstate", a.GSTATE_ADDR),
+        ("timer", a.MPROC_TIMER_ADDR),
+        ("f_colbox", a.HITBOX_FLAG_ADDR),
+        ("f_shadows", a.SHADOWS_FLAG_ADDR),
+    ]
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Pairing {
+    /// The ROM carries its own address manifest and the table came from it:
+    /// right for this ROM whichever build it is.
+    SelfDescribed,
     /// The table records no source ROM, so there is nothing to compare and
     /// no claim to make. Tables exported before the exporter recorded one.
     Unrecorded,
     /// No ROM is loaded or readable — not evidence either way.
     NoRom,
+    /// No manifest, but the zip is the one the compiled table came from.
     Matches,
     Mismatch { expected: String, found: String },
 }
 
-/// Compare the ROM on disk against the one this build's table came from.
+/// Re-read the ROM if it changed and say whether the table in use fits it.
 pub fn check() -> Pairing {
-    let expected = addr::SOURCE_ROM_FNV.trim();
-    if expected.is_empty() {
-        return Pairing::Unrecorded;
-    }
-    let found = crate::matchmaking::rom_fnv_hash();
-    if found == "0" {
-        return Pairing::NoRom;
-    }
-    if found.eq_ignore_ascii_case(expected) {
-        Pairing::Matches
-    } else {
-        Pairing::Mismatch {
-            expected: expected.to_string(),
+    match crate::rom_manifest::refresh().0 {
+        Source::Manifest => Pairing::SelfDescribed,
+        Source::CompiledByHash => Pairing::Matches,
+        Source::CompiledUnrecorded => Pairing::Unrecorded,
+        Source::NoRom => Pairing::NoRom,
+        Source::CompiledMismatch { found } => Pairing::Mismatch {
+            expected: crate::mk2_addrs::SOURCE_ROM_FNV.trim().to_string(),
             found,
-        }
+        },
     }
 }
 
@@ -83,7 +89,7 @@ impl Pairing {
     pub fn lab_warning(&self) -> Option<String> {
         match self {
             Pairing::Mismatch { .. } => Some(
-                "Lab RAM tools need the mk2.zip this build was made for - yours is different"
+                "Lab RAM tools need a newer mk2.zip - this one predates the address manifest"
                     .to_string(),
             ),
             _ => None,
@@ -93,14 +99,14 @@ impl Pairing {
     /// One line for the console and debug log at startup.
     pub fn log_line(&self) -> String {
         match self {
+            Pairing::SelfDescribed => "MK2 address table read from the loaded ROM".into(),
             Pairing::Unrecorded => {
                 "MK2 address table records no source ROM - pairing unchecked".into()
             }
             Pairing::NoRom => "MK2 address table pairing unchecked - no ROM readable".into(),
             Pairing::Matches => "MK2 address table matches the loaded ROM".into(),
             Pairing::Mismatch { expected, found } => format!(
-                "MK2 address table was built for ROM {expected} but {found} is loaded - \
-                 Lab RAM features will read the wrong memory"
+                "MK2 address table was built for ROM {expected} but {found} is loaded -                  Lab RAM features will read the wrong memory"
             ),
         }
     }
@@ -113,6 +119,7 @@ mod tests {
     #[test]
     fn only_a_mismatch_warns_the_player() {
         assert!(Pairing::Matches.lab_warning().is_none());
+        assert!(Pairing::SelfDescribed.lab_warning().is_none());
         assert!(Pairing::Unrecorded.lab_warning().is_none());
         // No ROM means Lab is not reachable anyway; warning would be noise.
         assert!(Pairing::NoRom.lab_warning().is_none());
@@ -141,7 +148,7 @@ mod tests {
     /// was run without `--rom`, and the pairing silently stops being checked.
     #[test]
     fn the_shipped_table_records_its_source_rom() {
-        let recorded = addr::SOURCE_ROM_FNV.trim();
+        let recorded = crate::mk2_addrs::SOURCE_ROM_FNV.trim();
         assert!(
             !recorded.is_empty(),
             "mk2_addrs::SOURCE_ROM_FNV is empty - re-export with --rom"

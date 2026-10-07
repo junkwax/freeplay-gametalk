@@ -73,13 +73,13 @@ pub struct GameState {
 impl GameState {
     pub fn read(core: &Core) -> Self {
         Self {
-            p1_x: memory::peek_u16(core, mk2_addrs::P1_X_ADDR, memory::Endian::Little).unwrap_or(0)
+            p1_x: memory::peek_u16(core, mk2_addrs::a().P1_X_ADDR, memory::Endian::Little).unwrap_or(0)
                 as i16,
-            p1_y: memory::peek_u16(core, mk2_addrs::P1_Y_ADDR, memory::Endian::Little).unwrap_or(0)
+            p1_y: memory::peek_u16(core, mk2_addrs::a().P1_Y_ADDR, memory::Endian::Little).unwrap_or(0)
                 as i16,
-            p2_x: memory::peek_u16(core, mk2_addrs::P2_X_ADDR, memory::Endian::Little).unwrap_or(0)
+            p2_x: memory::peek_u16(core, mk2_addrs::a().P2_X_ADDR, memory::Endian::Little).unwrap_or(0)
                 as i16,
-            p2_y: memory::peek_u16(core, mk2_addrs::P2_Y_ADDR, memory::Endian::Little).unwrap_or(0)
+            p2_y: memory::peek_u16(core, mk2_addrs::a().P2_Y_ADDR, memory::Endian::Little).unwrap_or(0)
                 as i16,
         }
     }

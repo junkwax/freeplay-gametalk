@@ -3,6 +3,7 @@
     windows_subsystem = "windows"
 )]
 
+mod audio_pacer;
 mod audio_recovery;
 mod cli;
 mod clip;
@@ -45,6 +46,7 @@ mod runahead;
 mod replay_upload;
 mod retro;
 mod rom;
+mod rom_manifest;
 mod rpc;
 mod score;
 mod session;
@@ -299,12 +301,51 @@ fn send_chat_draft(
     }
 }
 
+/// The ROM's box overlay (`f_colbox`) is a bitmask: 1 hitbox (red), 2 sprite
+/// silhouette (green), 4 hurtbox - the box a hit is actually tested against
+/// (white), 8 anchor points and ground line. Bit 16, every multipart piece,
+/// costs enough frame time to change how a fight plays, so the Lab never sets
+/// it. F2 steps through these, then off.
+const HITBOX_VIEWS: [(u16, &str); 3] = [
+    (5, "HIT+HURT"),
+    (7, "HIT+HURT+BODY"),
+    (15, "ALL"),
+];
+
+fn hitbox_view_label(trainer: &memory::PokeList) -> &'static str {
+    if !trainer.is_enabled("hitboxes") {
+        return "OFF";
+    }
+    let v = trainer.value("hitboxes").unwrap_or(0);
+    HITBOX_VIEWS
+        .iter()
+        .find(|(m, _)| *m == v)
+        .map(|(_, l)| *l)
+        .unwrap_or("ON")
+}
+
 fn toggle_hitbox_view(trainer: &mut memory::PokeList, toast: &mut Option<(String, Instant)>) {
-    let on = !trainer.is_enabled("hitboxes");
-    trainer.set_enabled("hitboxes", on);
-    println!("[trainer] Hitbox view: {}", if on { "ON" } else { "OFF" });
+    let next = if trainer.is_enabled("hitboxes") {
+        let v = trainer.value("hitboxes").unwrap_or(0);
+        HITBOX_VIEWS
+            .iter()
+            .position(|(m, _)| *m == v)
+            .map(|i| i + 1)
+            .filter(|&i| i < HITBOX_VIEWS.len())
+    } else {
+        Some(0)
+    };
+    match next {
+        Some(i) => {
+            trainer.set_value("hitboxes", HITBOX_VIEWS[i].0);
+            trainer.set_enabled("hitboxes", true);
+        }
+        None => trainer.set_enabled("hitboxes", false),
+    }
+    let label = hitbox_view_label(trainer);
+    println!("[trainer] Hitbox view: {label}");
     *toast = Some((
-        format!("Hitbox view {}", if on { "ON" } else { "OFF" }),
+        format!("Boxes: {label}"),
         Instant::now() + Duration::from_millis(1800),
     ));
 }
@@ -324,6 +365,32 @@ impl LocalPlayMode {
     fn is_lab(self) -> bool {
         self == Self::Lab
     }
+}
+
+/// Frames of coin-feeding before Lab's auto-start first presses Start.
+///
+/// At the ROM's factory CMOS (1 credit per coin, 2 credits to start) this is
+/// four coins, which covers both players joining together.
+const LAB_AUTOSTART_COIN_LEAD: u32 = 48;
+
+/// The (coin, start) button states for Lab's auto-start, by frame since it
+/// began.
+///
+/// Lab is OFFLINE, and offline the ROM is a coin-operated cabinet: START at
+/// zero credits is refused, so the old Start-only pulse would sit at the
+/// attract screen forever. Feed the coin slot first.
+///
+/// Coins keep coming after Start begins, so a cabinet on dearer pricing
+/// takes another cycle or two instead of deadlocking.
+///
+/// Each pulse is 4 frames closed. The ROM stacks one switch event per
+/// open->closed transition, so 4-on/8-off is exactly one coin per 12 frames
+/// and the scanner always sees a clean edge. Start is offset inside its
+/// cycle so the two are never pressed in the same frame.
+fn lab_autostart_pulses(frame: u32) -> (bool, bool) {
+    let coin = frame % 12 < 4;
+    let start = frame >= LAB_AUTOSTART_COIN_LEAD && (6..10).contains(&(frame % 24));
+    (coin, start)
 }
 
 /// Builds the username-claim screen.
@@ -1234,36 +1301,40 @@ fn apply_volume(samples: &mut [i16], volume_percent: u8) {
 
 fn queue_game_audio(
     q: &AudioQueue<i16>,
+    pacer: &mut audio_pacer::AudioPacer,
     samples: &mut [i16],
     volume_percent: u8,
     buffer: config::AudioBuffer,
 ) {
-    const BYTES_PER_STEREO_SAMPLE: u32 = 4;
     let freq = q.spec().freq.max(1) as u32;
-    let target_bytes = freq * BYTES_PER_STEREO_SAMPLE * buffer.ms() / 1000;
-    let max_bytes = target_bytes + freq * BYTES_PER_STEREO_SAMPLE / 10;
-    let low_water_bytes = freq * BYTES_PER_STEREO_SAMPLE / 12;
-    let queued = q.size();
-
-    if queued >= max_bytes {
-        return;
-    }
-
-    if queued < low_water_bytes {
-        dlog!(
-            "audio",
-            "low queue: {} ms queued, target={} ms",
-            queued * 1000 / (freq * BYTES_PER_STEREO_SAMPLE),
-            buffer.ms()
-        );
-    }
 
     // Scale in place: the caller clears the buffer right after queueing, so
     // mutating it avoids a per-frame allocation at sub-100% volume.
     if volume_percent < 100 {
         apply_volume(samples, volume_percent);
     }
-    let _ = q.queue_audio(samples);
+    // The pacer owns the queue level: it resamples within 0.5% to hold the
+    // target, re-primes after an underrun and drops on overflow.
+    let out = pacer.process(samples, q.size(), freq, buffer.ms());
+    if !out.is_empty() {
+        let _ = q.queue_audio(out);
+    }
+    if let Some((s, elapsed)) = pacer.take_report() {
+        let secs = elapsed.as_secs_f64().max(0.001);
+        dlog!(
+            "audio",
+            "pacer drc={} target={}ms fill={}..{}ms in={:.0}/s out={:.0}/s calls={:.1}/s underruns={} drops={}",
+            pacer.enabled(),
+            buffer.ms(),
+            if s.min_fill_ms == u32::MAX { 0 } else { s.min_fill_ms },
+            s.max_fill_ms,
+            s.in_frames as f64 / secs,
+            s.out_frames as f64 / secs,
+            s.calls as f64 / secs,
+            s.underruns,
+            s.drops
+        );
+    }
 }
 
 fn finish_clip_recording(recorder: clip::ClipRecorder) -> String {
@@ -1600,8 +1671,8 @@ fn run_addr_probe() -> Result<(), Box<dyn std::error::Error>> {
                 ADDR_PROBE_FRAME.with(|f| f.set(f.get() + 1));
             }
             println!("\n--- frame {checkpoint} ---");
-            for (name, addr) in mk2_addr_check::TABLE_SAMPLE {
-                let v = memory::peek_u16(&core, *addr, memory::Endian::Little);
+            for (name, addr) in mk2_addr_check::table_sample() {
+                let v = memory::peek_u16(&core, addr, memory::Endian::Little);
                 match v {
                     Some(v) => println!("  {name:<16} 0x{addr:05X} = {v:5} (0x{v:04X})"),
                     None => println!("  {name:<16} 0x{addr:05X} = <unreadable>"),
@@ -1620,6 +1691,46 @@ thread_local! {
     static ADDR_PROBE_FRAME: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// `--audio-probe [frames]`: boot the ROM headless, run attract for `frames`
+/// (default 3600, ~66 s) and write exactly what the core produced to
+/// `audio_probe.wav`, before volume, the pacer or SDL touch it. Separates a
+/// crackle in the SOURCE (core/ROM) from one in the DELIVERY (queue, pacer,
+/// device): if this file is clean, the fault is downstream. Also reports the
+/// samples-per-frame spread and the largest sample-to-sample steps.
+fn run_audio_probe(frames: usize) -> Result<(), Box<dyn std::error::Error>> {
+    log::init("audio_probe");
+    let rom_path = rom::find_rom_zip_string()
+        .ok_or_else(|| "ROM zip not found next to the executable or in roms\\".to_string())?;
+    let core_path = render::fbneo_core_path()
+        .ok_or_else(|| "FBNeo core not found next to the executable or in cores\\".to_string())?;
+    let core = unsafe { retro::load(&core_path, &rom_path)? };
+    let rate = core.av_info.timing.sample_rate.max(1.0).round() as u32;
+    let mut all: Vec<i16> = Vec::new();
+    let (mut min_n, mut max_n) = (usize::MAX, 0usize);
+    retro::clear_audio_buffer();
+    for _ in 0..frames {
+        unsafe { (core.run)() };
+        let s = retro::drain_audio_buffer();
+        min_n = min_n.min(s.len() / 2);
+        max_n = max_n.max(s.len() / 2);
+        all.extend_from_slice(&s);
+    }
+    let path = std::path::PathBuf::from("audio_probe.wav");
+    clip::write_wav_file(&path, rate, &all)?;
+    let mut steps: Vec<(i32, usize)> = (2..all.len())
+        .map(|i| (((all[i] as i32) - (all[i - 2] as i32)).abs(), i / 2))
+        .collect();
+    steps.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+    let peak = all.iter().map(|s| (*s as i32).abs()).max().unwrap_or(0);
+    let clipped = all.iter().filter(|s| **s == i16::MAX || **s == i16::MIN).count();
+    println!("[audio-probe] wrote {} ({} frames, {} Hz)", path.display(), all.len() / 2, rate);
+    println!("[audio-probe] samples/frame {min_n}..{max_n}, peak {peak}, clipped {clipped}");
+    for (d, at) in steps.iter().take(8) {
+        println!("[audio-probe] step {d:6} at {:.3}s", *at as f64 / rate as f64);
+    }
+    Ok(())
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     adopt_packaged_working_dir();
 
@@ -1629,6 +1740,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if cli::addr_probe_requested() {
         return run_addr_probe();
+    }
+
+    if let Some(frames) = cli::audio_probe_frames() {
+        return run_audio_probe(frames);
     }
 
     if cli::core_probe_requested() {
@@ -1873,53 +1988,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     const GHOST_CAP_PER_PEER: u32 = 3;
     let mut ghost_library = ghost::Library::load_default();
     let mut net_recording: Option<ghost::NetRecording> = None;
-    const HITBOX_FLAG_ADDR: usize = mk2_addrs::HITBOX_FLAG_ADDR;
 
     let mut trainer = memory::PokeList::new();
     trainer.add(
         "p1_health",
-        memory::Poke::U16 {
-            addr: mk2_addrs::P1_HP_ADDR,
+        memory::Poke::U16At {
+            addr: || mk2_addrs::a().P1_HP_ADDR,
             value: 0x00A1,
             endian: memory::Endian::Little,
         },
     );
     trainer.add(
         "p2_health",
-        memory::Poke::U16 {
-            addr: mk2_addrs::P2_HP_ADDR,
+        memory::Poke::U16At {
+            addr: || mk2_addrs::a().P2_HP_ADDR,
             value: 0x00A1,
             endian: memory::Endian::Little,
         },
     );
     trainer.add_with_release(
         "hitboxes",
-        memory::Poke::U16 {
-            addr: HITBOX_FLAG_ADDR,
-            value: 0x0001,
+        memory::Poke::U16At {
+            addr: || mk2_addrs::a().HITBOX_FLAG_ADDR,
+            value: 0x0005,
             endian: memory::Endian::Little,
         },
-        memory::Poke::U16 {
-            addr: HITBOX_FLAG_ADDR,
+        memory::Poke::U16At {
+            addr: || mk2_addrs::a().HITBOX_FLAG_ADDR,
             value: 0x0000,
             endian: memory::Endian::Little,
         },
     );
     trainer.add_with_release(
         "freeze_timer",
-        memory::Poke::U16 {
-            addr: mk2_addrs::FREEZE_TIMER_ADDR,
+        memory::Poke::U16At {
+            addr: || mk2_addrs::a().FREEZE_TIMER_ADDR,
             value: 0x0001,
             endian: memory::Endian::Little,
         },
-        memory::Poke::U16 {
-            addr: mk2_addrs::FREEZE_TIMER_ADDR,
+        memory::Poke::U16At {
+            addr: || mk2_addrs::a().FREEZE_TIMER_ADDR,
             value: 0x0000,
             endian: memory::Endian::Little,
         },
     );
 
-    const GSTATE_ADDR: usize = mk2_addrs::GSTATE_ADDR;
     const GS_AMODE: u16 = 0x01;
     let mut auto_start_frame: u32 = 0;
     let mut auto_start_done = false;
@@ -1957,6 +2070,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // transition into it. See the reset in the menu-state block below.
     let mut fp_osk_was_open = false;
     let mut audio_tail_sample: Option<(i16, i16)> = None;
+    let mut audio_pacer = audio_pacer::AudioPacer::default();
     let mut render_debug_visible = false;
     let mut net_spectate_next: u32 = 165; // ~3s
     let mut net_frame_counter: u32 = 0;
@@ -1968,8 +2082,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     const MATCH_WIN_TARGET: u16 = 2;
     let mut session_p1_wins: u32 = 0;
     let mut session_p2_wins: u32 = 0;
-    const P1_HP_ADDR: usize = mk2_addrs::P1_HP_ADDR;
-    const P2_HP_ADDR: usize = mk2_addrs::P2_HP_ADDR;
     let mut ghost_in_fight: bool = false;
 
     let mut net_session: Option<netplay::Session> = None;
@@ -4263,9 +4375,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             };
                             toast = Some((message, Instant::now() + Duration::from_millis(2200)));
                         } else if let Some(c) = &core {
-                            let gstate = memory::peek_u16(c, GSTATE_ADDR, memory::Endian::Little)
+                            let gstate = memory::peek_u16(c, mk2_addrs::a().GSTATE_ADDR, memory::Endian::Little)
                                 .unwrap_or(0);
-                            let p1_hp = memory::peek_u16(c, P1_HP_ADDR, memory::Endian::Little)
+                            let p1_hp = memory::peek_u16(c, mk2_addrs::a().P1_HP_ADDR, memory::Endian::Little)
                                 .unwrap_or(0);
                             let fight_loaded = matches!(gstate, GS_FIGHTING | 0x03) && p1_hp > 0;
                             if fight_loaded {
@@ -4338,9 +4450,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         && keymod.intersects(Mod::LCTRLMOD | Mod::RCTRLMOD) =>
                     {
                         if let Some(c) = &core {
-                            let gstate = memory::peek_u16(c, GSTATE_ADDR, memory::Endian::Little)
+                            let gstate = memory::peek_u16(c, mk2_addrs::a().GSTATE_ADDR, memory::Endian::Little)
                                 .unwrap_or(0);
-                            let p1_hp = memory::peek_u16(c, P1_HP_ADDR, memory::Endian::Little)
+                            let p1_hp = memory::peek_u16(c, mk2_addrs::a().P1_HP_ADDR, memory::Endian::Little)
                                 .unwrap_or(0);
                             let fight_loaded = matches!(gstate, GS_FIGHTING | 0x03) && p1_hp > 0;
                             if fight_loaded {
@@ -4757,7 +4869,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(c) = &core {
                     if let Some(sess) = net_session.as_mut() {
                         let gstate =
-                            memory::peek_u16(c, GSTATE_ADDR, memory::Endian::Little).unwrap_or(0);
+                            memory::peek_u16(c, mk2_addrs::a().GSTATE_ADDR, memory::Endian::Little).unwrap_or(0);
                         let mut reached_gameover_this_frame = false;
                         if gstate == GS_FIGHTING {
                             net_in_fight = true;
@@ -5079,9 +5191,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         input::commit_live_to_state();
                         input_history.step(input::snapshot_player(Player::P1));
                         if local_play_mode.is_lab() && ghost_playback.is_none() {
-                            let gstate = memory::peek_u16(c, GSTATE_ADDR, memory::Endian::Little)
+                            let gstate = memory::peek_u16(c, mk2_addrs::a().GSTATE_ADDR, memory::Endian::Little)
                                 .unwrap_or(0);
-                            let p1_hp = memory::peek_u16(c, P1_HP_ADDR, memory::Endian::Little)
+                            let p1_hp = memory::peek_u16(c, mk2_addrs::a().P1_HP_ADDR, memory::Endian::Little)
                                 .unwrap_or(0);
                             let fight_loaded = matches!(gstate, GS_FIGHTING | 0x03) && p1_hp > 0;
                             // A failed peek reads as 0 (a real fighter id), so
@@ -5090,15 +5202,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             // select screen waiting on a mirror that can't
                             // happen.
                             let p1_char =
-                                memory::peek_u16(c, mk2_addrs::P1_CHAR_ADDR, memory::Endian::Little)
+                                memory::peek_u16(c, mk2_addrs::a().P1_CHAR_ADDR, memory::Endian::Little)
                                     .unwrap_or(0);
                             let p2_char =
-                                memory::peek_u16(c, mk2_addrs::P2_CHAR_ADDR, memory::Endian::Little)
+                                memory::peek_u16(c, mk2_addrs::a().P2_CHAR_ADDR, memory::Endian::Little)
                                     .unwrap_or(0);
                             let phase = lab::phase_from_ram(fight_loaded, p1_char, p2_char);
-                            let p1_x = memory::peek_u16(c, mk2_addrs::P1_X_ADDR, memory::Endian::Little)
+                            let p1_x = memory::peek_u16(c, mk2_addrs::a().P1_X_ADDR, memory::Endian::Little)
                                 .unwrap_or(0);
-                            let p2_x = memory::peek_u16(c, mk2_addrs::P2_X_ADDR, memory::Endian::Little)
+                            let p2_x = memory::peek_u16(c, mk2_addrs::a().P2_X_ADDR, memory::Endian::Little)
                                 .unwrap_or(u16::MAX);
                             let p2_right_of_p1 = p2_x >= p1_x;
                             let live_p1_bits = input::snapshot_player(Player::P1);
@@ -5140,14 +5252,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         // starts with P1 and P2 joined together instead of
                         // P2 trickling in during select.
                         if local_play_mode.is_lab() && !auto_start_done {
-                            let gstate = memory::peek_u16(c, GSTATE_ADDR, memory::Endian::Little)
+                            let gstate = memory::peek_u16(c, mk2_addrs::a().GSTATE_ADDR, memory::Endian::Little)
                                 .unwrap_or(0);
                             if gstate == GS_AMODE {
-                                let pulse = (auto_start_frame % 24) < 4;
+                                let (coin, pulse) = lab_autostart_pulses(auto_start_frame);
+                                retro::set_input(0, RETRO_DEVICE_ID_JOYPAD_SELECT as usize, coin);
                                 retro::set_input(0, RETRO_DEVICE_ID_JOYPAD_START as usize, pulse);
                                 retro::set_input(1, RETRO_DEVICE_ID_JOYPAD_START as usize, pulse);
                                 auto_start_frame = auto_start_frame.wrapping_add(1);
                             } else if gstate != 0 {
+                                retro::set_input(0, RETRO_DEVICE_ID_JOYPAD_SELECT as usize, false);
                                 retro::set_input(0, RETRO_DEVICE_ID_JOYPAD_START as usize, false);
                                 retro::set_input(1, RETRO_DEVICE_ID_JOYPAD_START as usize, false);
                                 auto_start_done = true;
@@ -5156,9 +5270,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if let Some(pb) = ghost_playback.as_mut() {
                             if let Some(drone) = drone_runner.as_mut() {
                                 let gstate =
-                                    memory::peek_u16(c, GSTATE_ADDR, memory::Endian::Little)
+                                    memory::peek_u16(c, mk2_addrs::a().GSTATE_ADDR, memory::Endian::Little)
                                         .unwrap_or(0);
-                                let p1_hp = memory::peek_u16(c, P1_HP_ADDR, memory::Endian::Little)
+                                let p1_hp = memory::peek_u16(c, mk2_addrs::a().P1_HP_ADDR, memory::Endian::Little)
                                     .unwrap_or(0);
                                 let fight_loaded =
                                     matches!(gstate, GS_FIGHTING | 0x03) && p1_hp > 0;
@@ -5241,12 +5355,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             && ghost_playback.is_none()
                             && local_play_mode.is_lab()
                         {
-                            let gstate = memory::peek_u16(c, GSTATE_ADDR, memory::Endian::Little)
+                            let gstate = memory::peek_u16(c, mk2_addrs::a().GSTATE_ADDR, memory::Endian::Little)
                                 .unwrap_or(0);
-                            let p1_hp = memory::peek_u16(c, P1_HP_ADDR, memory::Endian::Little)
+                            let p1_hp = memory::peek_u16(c, mk2_addrs::a().P1_HP_ADDR, memory::Endian::Little)
                                 .unwrap_or(0);
                             let fight_loaded = matches!(gstate, GS_FIGHTING | 0x03) && p1_hp > 0;
-                            let p2_hp = memory::peek_u16(c, P2_HP_ADDR, memory::Endian::Little)
+                            let p2_hp = memory::peek_u16(c, mk2_addrs::a().P2_HP_ADDR, memory::Endian::Little)
                                 .unwrap_or(0);
                             damage_tracker.observe(fight_loaded, p2_hp);
                             let p1_bits = input::snapshot_player(Player::P1);
@@ -5262,15 +5376,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         // Drone match vs detection: track fight start/end for webhook
                         if ghost_playback.is_some() && ghost_port_mask == 0b10 {
-                            let gstate = memory::peek_u16(c, GSTATE_ADDR, memory::Endian::Little)
+                            let gstate = memory::peek_u16(c, mk2_addrs::a().GSTATE_ADDR, memory::Endian::Little)
                                 .unwrap_or(0);
                             if !ghost_in_fight && gstate == GS_FIGHTING {
                                 ghost_in_fight = true;
                             } else if ghost_in_fight && gstate == GS_GAMEOVER {
                                 ghost_in_fight = false;
-                                let p1_hp = memory::peek_u16(c, P1_HP_ADDR, memory::Endian::Little)
+                                let p1_hp = memory::peek_u16(c, mk2_addrs::a().P1_HP_ADDR, memory::Endian::Little)
                                     .unwrap_or(0);
-                                let p2_hp = memory::peek_u16(c, P2_HP_ADDR, memory::Endian::Little)
+                                let p2_hp = memory::peek_u16(c, mk2_addrs::a().P2_HP_ADDR, memory::Endian::Little)
                                     .unwrap_or(0);
                                 let outcome = if p1_hp > p2_hp { "won" } else { "lost" };
                                 let msg = format!(
@@ -5308,7 +5422,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if let Some(recorder) = clip_recorder.as_mut() {
                                 recorder.record_audio(audio);
                             }
-                            queue_game_audio(q, audio, cfg.volume_percent, cfg.audio_buffer);
+                            queue_game_audio(
+                                q,
+                                &mut audio_pacer,
+                                audio,
+                                cfg.volume_percent,
+                                cfg.audio_buffer,
+                            );
                             audio.clear();
                         });
                     }
@@ -5482,6 +5602,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             path.to_string_lossy().into_owned()
                         });
+                        // Hand the ROM back to the cabinet. `f_netplay` is
+                        // what makes it free play; left set, Lab and Arcade
+                        // would keep free credits and the online rematch loop
+                        // for the rest of the process's life.
+                        if let Some(c) = core.as_ref() {
+                            netcore::set_netplay_flag(c, false);
+                        }
                         net_session = None;
                         set_netplay_window_chrome(&mut canvas, false);
                         net_match_count = 0;
@@ -5572,9 +5699,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .as_ref()
                     .map(|c| {
                         let gstate =
-                            memory::peek_u16(c, GSTATE_ADDR, memory::Endian::Little).unwrap_or(0);
+                            memory::peek_u16(c, mk2_addrs::a().GSTATE_ADDR, memory::Endian::Little).unwrap_or(0);
                         let p1_hp =
-                            memory::peek_u16(c, P1_HP_ADDR, memory::Endian::Little).unwrap_or(0);
+                            memory::peek_u16(c, mk2_addrs::a().P1_HP_ADDR, memory::Endian::Little).unwrap_or(0);
                         let s = score::Score::read(c);
                         let match_decided = s.p1_match_wins >= MATCH_WIN_TARGET
                             || s.p2_match_wins >= MATCH_WIN_TARGET;
@@ -5592,8 +5719,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     net_overlay_diagnosed = true;
                     if let Some(c) = core.as_ref() {
                         let gstate =
-                            memory::peek_u16(c, GSTATE_ADDR, memory::Endian::Little);
-                        let p1_hp = memory::peek_u16(c, P1_HP_ADDR, memory::Endian::Little);
+                            memory::peek_u16(c, mk2_addrs::a().GSTATE_ADDR, memory::Endian::Little);
+                        let p1_hp = memory::peek_u16(c, mk2_addrs::a().P1_HP_ADDR, memory::Endian::Little);
                         let sram = c
                             .memory(retro::RETRO_MEMORY_SYSTEM_RAM)
                             .map(|r| r.len())
@@ -5775,7 +5902,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         win_w as i32,
                         win_h as i32,
                         &input_history,
-                        trainer.is_enabled("hitboxes"),
+                        hitbox_view_label(&trainer),
                         trainer.is_enabled("p1_health"),
                         trainer.is_enabled("freeze_timer"),
                         &lab_dummy.status_label(),
@@ -7365,6 +7492,52 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
+    use super::{lab_autostart_pulses, LAB_AUTOSTART_COIN_LEAD};
+
+    /// The whole point: Start must not be pressed before the machine has
+    /// been paid, or the ROM refuses it and Lab never leaves attract.
+    #[test]
+    fn lab_autostart_pays_before_it_presses_start() {
+        for frame in 0..LAB_AUTOSTART_COIN_LEAD {
+            let (_, start) = lab_autostart_pulses(frame);
+            assert!(!start, "Start pressed at frame {frame}, before any credits");
+        }
+        // Four coins is two players at the factory 2-credits-to-start.
+        // Frame 0 begins the sequence, so "was it off the frame before" has
+        // no meaning there -- wrapping back to u32::MAX lands mid-pulse.
+        let coins = (0..LAB_AUTOSTART_COIN_LEAD)
+            .filter(|f| lab_autostart_pulses(*f).0 && (*f == 0 || !lab_autostart_pulses(f - 1).0))
+            .count();
+        assert_eq!(coins, 4, "expected 4 coin edges before Start");
+    }
+
+    /// Start has to actually arrive once the credits are in, and the two
+    /// buttons must never be closed in the same frame.
+    #[test]
+    fn lab_autostart_presses_start_once_paid() {
+        let window = LAB_AUTOSTART_COIN_LEAD..LAB_AUTOSTART_COIN_LEAD + 48;
+        assert!(
+            window.clone().any(|f| lab_autostart_pulses(f).1),
+            "Start never pressed after the coin lead-in"
+        );
+        for frame in 0..240 {
+            let (coin, start) = lab_autostart_pulses(frame);
+            assert!(!(coin && start), "coin and start overlap at frame {frame}");
+        }
+    }
+
+    /// A 4-frame close is what gives the ROM's switch scanner a clean
+    /// open->closed edge; a 1-frame blip can be missed.
+    #[test]
+    fn lab_autostart_pulses_are_four_frames_wide() {
+        let coin_run = (0..12).filter(|f| lab_autostart_pulses(*f).0).count();
+        assert_eq!(coin_run, 4);
+        let start_run = (LAB_AUTOSTART_COIN_LEAD..LAB_AUTOSTART_COIN_LEAD + 24)
+            .filter(|f| lab_autostart_pulses(*f).1)
+            .count();
+        assert_eq!(start_run, 4);
+    }
+
     use super::{shutdown_local_runtime_for_netplay, LocalPlayMode};
 
     #[test]
