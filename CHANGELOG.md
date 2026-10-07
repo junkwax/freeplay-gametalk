@@ -1,5 +1,69 @@
 # Changelog
 
+## 0.8.9 - 2026-10-06
+
+This release bundles a rebuilt FBNeo core. Its FBNeo commit is unchanged
+(the compat tag is still `cf53523`), so players on 0.8.9 can still match
+players on 0.8.8.
+
+### Fixed
+
+- Hit, hurt, and strike boxes no longer show a dark 1px line with red/purple
+  flecks beside each edge. FBNeo's TMS34010 core wrote every 8-bit pixel as a
+  read-modify-write of the whole 16-bit word, and T-Unit VRAM re-stamps both
+  pixels' palette selectors on a word write. That redrew the neighbouring
+  pixel in the box's palette. The bundled core now writes only the addressed
+  byte (`tools/fbneo-patches/0001-tunit-byte-vram-writes.patch`, applied by
+  all three `tools/build-fbneo-*` scripts). VRAM is not game state, so a
+  patched peer stays in sync with an unpatched one.
+- Lab, the trainer, and the online free-play flag stopped working whenever the
+  ROM was rebuilt: they used a RAM address table compiled into the client,
+  which was valid for exactly one `mk2.zip`. ROMs from mk2-main now carry
+  their own address manifest (`fp_addr_manifest`), and the client reads it
+  from whatever `mk2.zip` is loaded. Older ROMs without a manifest fall back
+  to the compiled table and warn, as before, if that table doesn't match the
+  zip.
+- Audio delivery is paced. The SDL queue is now held near a 320 ms target by
+  small resampling adjustments instead of being fed as-is, which in earlier
+  builds could run dry and click. `FREEPLAY_AUDIO_DRC=0` restores the old
+  path for A/B testing.
+
+### Added
+
+- F2 in Lab cycles the box overlay: HIT+HURT → HIT+HURT+BODY → ALL → OFF.
+  The HUD shows the current mode.
+- The main menu shows the loaded ROM's build under the MK2 caption, for
+  example `REVISION 4.0 PLAYTEST BUILD (A71B5*)`, so two players can see at
+  a glance whether they have the same ROM. A ROM without a manifest shows no
+  line.
+- `--audio-probe [frames]` writes the core's raw audio to `audio_probe.wav`.
+  Use it to tell a dirty source from a delivery problem.
+
+### Changed
+
+- The MK2 ROM is a coin-operated board again; free play is no longer built
+  into it. Freeplay sets the ROM's `f_netplay` flag when an online match
+  starts and clears it when the match ends, so **online is free play**, while
+  local Lab and Arcade behave like a real cabinet: credits, `INSERT COIN` on
+  the attract title, and a working TEST switch.
+- Lab's auto-start feeds the coin slot before pressing Start. Offline, the
+  ROM refuses Start at zero credits, so the old Start-only pulse would have
+  sat at the attract screen forever.
+- `set_netplay_flag` refuses to write when the address table is known not to
+  fit the loaded ROM. On the wrong build, that address is some other
+  variable.
+- Release CI now keys its cached FBNeo core on the patch set as well as the
+  pin. Without that, a patch-only change would have shipped the cached,
+  unpatched core.
+
+### Note for anyone rebuilding the ROM
+
+A ROM with a manifest needs nothing copied into the client. Rebuild it, then
+copy the zip. The exported table (`src/mk2_addrs.rs`) only needs
+regenerating when a new symbol is added to the exporter's `SYMBOL_ADDRS`.
+That table's `COMPILED` values and `SOURCE_ROM_FNV` matter only for ROMs
+without a manifest.
+
 ## 0.8.8 - 2026-08-12
 
 ### Fixed
