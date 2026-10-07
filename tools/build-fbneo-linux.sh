@@ -49,6 +49,20 @@ echo "FBNeo pinned at: $(git -C "$FBNEO_DIR" rev-parse HEAD)"
 # --- Inject the mk2 subset makefile ------------------------------------------
 cp "$ROOT/tools/Makefile.mk2" "$FBNEO_DIR/src/burner/libretro/Makefile.mk2"
 
+# Local fixes on top of the pin (tools/fbneo-patches/*.patch, in name order).
+# Idempotent: a patch that already reverse-applies is left alone. A pin bump
+# force-checks-out clean sources, so every patch is re-applied after it; one
+# that no longer applies fails the build rather than shipping without it.
+for p in "$ROOT"/tools/fbneo-patches/*.patch; do
+    [ -e "$p" ] || continue
+    if git -C "$FBNEO_DIR" apply --reverse --check "$p" 2>/dev/null; then
+        echo "FBNeo patch already applied: $(basename "$p")"
+    else
+        git -C "$FBNEO_DIR" apply "$p"
+        echo "FBNeo patch applied: $(basename "$p")"
+    fi
+done
+
 # --- Build --------------------------------------------------------------------
 LIBRETRO_DIR="$FBNEO_DIR/src/burner/libretro"
 # driverlist.h must be regenerated for the subset, otherwise the checked-in

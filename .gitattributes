@@ -1,0 +1,3 @@
+# Applied with `git apply` by tools/build-fbneo-*; keep the exact bytes that
+# were tested rather than letting a Windows checkout rewrite line endings.
+tools/fbneo-patches/*.patch -text

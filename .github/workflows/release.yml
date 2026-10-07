@@ -104,7 +104,7 @@ jobs:
           path: |
             cores/fbneo_mk2_libretro.dll
             vendor/FBNeo
-          key: fbneo-windows-${{ steps.fbneo-ref.outputs.ref }}
+          key: fbneo-windows-${{ steps.fbneo-ref.outputs.ref }}-${{ hashFiles('tools/fbneo-patches/**') }}
 
       - name: Build FBNeo libretro core
         if: steps.fbneo-cache.outputs.cache-hit != 'true'
@@ -231,7 +231,7 @@ jobs:
           path: |
             cores/fbneo_mk2_libretro.so
             vendor/FBNeo
-          key: fbneo-linux-${{ steps.fbneo-ref.outputs.ref }}
+          key: fbneo-linux-${{ steps.fbneo-ref.outputs.ref }}-${{ hashFiles('tools/fbneo-patches/**') }}
 
       - name: Build FBNeo libretro core
         if: steps.fbneo-cache.outputs.cache-hit != 'true'
@@ -357,7 +357,7 @@ jobs:
             vendor/FBNeo
           # Per-arch key: an arm64 .dylib must never be restored on the Intel
           # job (or vice versa) — that would ship a core for the wrong CPU.
-          key: fbneo-macos-${{ matrix.arch }}-${{ steps.fbneo-ref.outputs.ref }}
+          key: fbneo-macos-${{ matrix.arch }}-${{ steps.fbneo-ref.outputs.ref }}-${{ hashFiles('tools/fbneo-patches/**') }}
 
       - name: Build FBNeo libretro core
         if: steps.fbneo-cache.outputs.cache-hit != 'true'

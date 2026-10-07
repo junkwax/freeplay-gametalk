@@ -1,0 +1,123 @@
+diff --git a/src/burn/drv/midway/midtunit.cpp b/src/burn/drv/midway/midtunit.cpp
+index af93a99..d2d33f5 100644
+--- a/src/burn/drv/midway/midtunit.cpp
++++ b/src/burn/drv/midway/midtunit.cpp
+@@ -464,15 +464,20 @@ static UINT16 TUnitVramRead(UINT32 address)
+ static void TUnitVramWrite(UINT32 address, UINT16 data)
+ {
+ 	UINT32 offset = TOBYTE(address & 0x3fffff);
++	// Honour a byte write (TMS34010WriteMask): MAME does, and so does the
++	// board. Without it a single-pixel CPU write (PIXT) re-stamped the
++	// NEIGHBOUR pixel's colour-map selector from DMA_PALETTE, recolouring it
++	// through the wrong palette.
++	const UINT16 mask = TMS34010WriteMask;
+ 	if (nVideoBank)
+ 	{
+-		DrvVRAM16[offset] = BURN_ENDIAN_SWAP_INT16((data & 0xff) | ((nDMA[DMA_PALETTE] & 0xff) << 8));
+-		DrvVRAM16[offset + 1] = BURN_ENDIAN_SWAP_INT16(((data >> 8) & 0xff) | (nDMA[DMA_PALETTE] & 0xff00));
++		if (mask & 0x00ff) DrvVRAM16[offset] = BURN_ENDIAN_SWAP_INT16((data & 0xff) | ((nDMA[DMA_PALETTE] & 0xff) << 8));
++		if (mask & 0xff00) DrvVRAM16[offset + 1] = BURN_ENDIAN_SWAP_INT16(((data >> 8) & 0xff) | (nDMA[DMA_PALETTE] & 0xff00));
+ 	}
+ 	else
+ 	{
+-		DrvVRAM16[offset] = BURN_ENDIAN_SWAP_INT16((BURN_ENDIAN_SWAP_INT16(DrvVRAM16[offset]) & 0xff) | ((data & 0xff) << 8));
+-		DrvVRAM16[offset + 1] = BURN_ENDIAN_SWAP_INT16((BURN_ENDIAN_SWAP_INT16(DrvVRAM16[offset + 1]) & 0xff) | (data & 0xff00));	
++		if (mask & 0x00ff) DrvVRAM16[offset] = BURN_ENDIAN_SWAP_INT16((BURN_ENDIAN_SWAP_INT16(DrvVRAM16[offset]) & 0xff) | ((data & 0xff) << 8));
++		if (mask & 0xff00) DrvVRAM16[offset + 1] = BURN_ENDIAN_SWAP_INT16((BURN_ENDIAN_SWAP_INT16(DrvVRAM16[offset + 1]) & 0xff) | (data & 0xff00));	
+ 	}
+ }
+ 
+diff --git a/src/cpu/tms34/34010ops.h b/src/cpu/tms34/34010ops.h
+index 088bd19..3a0f8a3 100644
+--- a/src/cpu/tms34/34010ops.h
++++ b/src/cpu/tms34/34010ops.h
+@@ -229,7 +229,17 @@ enum
+ // this is slower than below, but works with our word-based interface
+ // luckily most games seldom use 8bit reads/writes. -dink
+ #define WFIELDMAC_8																	\
++	if ((offset & 0x07) == 0)														\
++	{																				\
++		/* byte-aligned: say which byte, for a byte-sensitive handler */			\
++		TMS34010WriteMask = (UINT16)(0xff << (offset & 0x0f));						\
++		{ WFIELDMAC(0xff,9); }														\
++		TMS34010WriteMask = 0xffff;													\
++	}																				\
++	else																			\
++	{																				\
+ 		WFIELDMAC(0xff,9);															\
++	}																				\
+ 
+ #define RFIELDMAC_8																	\
+ 		RFIELDMAC(0xff,9);															\
+diff --git a/src/cpu/tms34/tms34010.cpp b/src/cpu/tms34/tms34010.cpp
+index f00d54d..4fb6da4 100644
+--- a/src/cpu/tms34/tms34010.cpp
++++ b/src/cpu/tms34/tms34010.cpp
+@@ -366,7 +366,7 @@ static UINT32 read_pixel_shiftreg(offs_t offset)
+ 	/* TODO: plane masking */																\
+ 	data &= m2;																				\
+ 	pix = (pix & ~(m2 << shiftcount)) | (data << shiftcount);								\
+-	TMS34010_WRMEM_WORD(a, pix);															\
++	TMS34010WriteMask = (m2 == 0xff) ? (UINT16)(0xff << shiftcount) : 0xffff; TMS34010_WRMEM_WORD(a, pix); TMS34010WriteMask = 0xffff;															\
+ 
+ /* No Raster Op + Transparency */
+ #define WP_T(m1,m2)  																		\
+@@ -380,7 +380,7 @@ static UINT32 read_pixel_shiftreg(offs_t offset)
+ 																							\
+ 		/* TODO: plane masking */															\
+ 		pix = (pix & ~(m2 << shiftcount)) | (data << shiftcount);							\
+-		TMS34010_WRMEM_WORD(a, pix);														\
++		TMS34010WriteMask = (m2 == 0xff) ? (UINT16)(0xff << shiftcount) : 0xffff; TMS34010_WRMEM_WORD(a, pix); TMS34010WriteMask = 0xffff;														\
+ 	}						  																\
+ 
+ /* Raster Op + No Transparency */
+@@ -392,7 +392,7 @@ static UINT32 read_pixel_shiftreg(offs_t offset)
+ 	/* TODO: plane masking */																\
+ 	data = state.raster_op(data & m2, (pix >> shiftcount) & m2) & m2;						\
+ 	pix = (pix & ~(m2 << shiftcount)) | (data << shiftcount);								\
+-	TMS34010_WRMEM_WORD(a, pix);															\
++	TMS34010WriteMask = (m2 == 0xff) ? (UINT16)(0xff << shiftcount) : 0xffff; TMS34010_WRMEM_WORD(a, pix); TMS34010WriteMask = 0xffff;															\
+ 
+ /* Raster Op + Transparency */
+ #define WP_R_T(m1,m2)  																		\
+@@ -405,7 +405,7 @@ static UINT32 read_pixel_shiftreg(offs_t offset)
+ 	if (data)																				\
+ 	{																						\
+ 		pix = (pix & ~(m2 << shiftcount)) | (data << shiftcount);							\
+-		TMS34010_WRMEM_WORD(a, pix);														\
++		TMS34010WriteMask = (m2 == 0xff) ? (UINT16)(0xff << shiftcount) : 0xffff; TMS34010_WRMEM_WORD(a, pix); TMS34010WriteMask = 0xffff;														\
+ 	}						  																\
+ 
+ 
+diff --git a/src/cpu/tms34_intf.cpp b/src/cpu/tms34_intf.cpp
+index eed3eac..aa2986a 100644
+--- a/src/cpu/tms34_intf.cpp
++++ b/src/cpu/tms34_intf.cpp
+@@ -361,6 +361,8 @@ void TMS34010WriteByte(UINT32 address, UINT8 value)
+     }
+ }
+ 
++UINT16 TMS34010WriteMask = 0xffff;
++
+ void TMS34010WriteWord(UINT32 address, UINT16 value)
+ {
+ 	address <<= 3;
+diff --git a/src/cpu/tms34_intf.h b/src/cpu/tms34_intf.h
+index 434885c..fe531f8 100644
+--- a/src/cpu/tms34_intf.h
++++ b/src/cpu/tms34_intf.h
+@@ -46,6 +46,14 @@ UINT8 TMS34010ReadByte(UINT32 address);
+ UINT16 TMS34010ReadWord(UINT32 address);
+ void TMS34010WriteByte(UINT32 address, UINT8 value);
+ void TMS34010WriteWord(UINT32 address, UINT16 value);
++// Which bytes of the word being written the CPU meant to change, for the
++// duration of one TMS34010WriteWord from a byte-aligned 8-bit pixel or field
++// write (PIXT, DRAV, MOVB); 0xffff otherwise. The core does those as a
++// read-modify-write of the whole word (this interface is word-based), which
++// is the same DATA, but a handler where writing a byte has side effects -
++// Midway T-Unit VRAM stamps each pixel's colour-map selector - must only
++// touch the byte that was meant. Other handlers can ignore it.
++extern UINT16 TMS34010WriteMask;
+ void TMS34010MapMemory(UINT8 *mem, UINT32 start, UINT32 end, UINT8 type);
+ void TMS34010UnmapMemory(UINT32 start, UINT32 end, UINT8 type);
+ void TMS34010MapHandler(uintptr_t num, UINT32 start, UINT32 end, UINT8 type);

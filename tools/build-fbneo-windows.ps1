@@ -71,6 +71,22 @@ Write-Host "FBNeo pinned at: $pinned"
 
 Copy-Item (Join-Path $Root "tools\Makefile.mk2") (Join-Path $FbneoDir "src\burner\libretro\Makefile.mk2") -Force
 
+# Local fixes on top of the pin (tools\fbneo-patches\*.patch, in name order).
+# Idempotent: a patch that already reverse-applies is left alone. A pin bump
+# force-checks-out clean sources, so every patch is re-applied after it; one
+# that no longer applies fails the build rather than shipping without it.
+Get-ChildItem (Join-Path $Root "tools\fbneo-patches") -Filter *.patch -ErrorAction SilentlyContinue |
+    Sort-Object Name | ForEach-Object {
+        $patch = $_.FullName
+        Invoke-Native "git -C `"$FbneoDir`" apply --reverse --check `"$patch`"" -AllowFailure | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "FBNeo patch already applied: $($_.Name)"
+        } else {
+            Invoke-Native "git -C `"$FbneoDir`" apply `"$patch`"" | Out-Null
+            Write-Host "FBNeo patch applied: $($_.Name)"
+        }
+    }
+
 # --- Build under MSYS2/MinGW64 -------------------------------------------------
 $env:MSYSTEM = "MINGW64"
 $env:CHERE_INVOKING = "1"
