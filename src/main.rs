@@ -1687,6 +1687,85 @@ fn run_addr_probe() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// `--sync-probe`: can this ROM on this core roll back? Boots headless, plays
+/// a fixed input script into a fight, and checks the two things netplay
+/// rests on: a savestate taken mid-fight reloads to the same future (rollback
+/// and runahead), and the RAM after the script is the same on every boot
+/// (two peers, or two runs of this probe, must agree - compare the printed
+/// `boot` line between runs). Prints PASS/FAIL per check; exits 1 on a FAIL.
+fn run_sync_probe() -> Result<(), Box<dyn std::error::Error>> {
+    log::init("sync_probe");
+    let rom_path = rom::find_rom_zip_string()
+        .ok_or_else(|| "ROM zip not found next to the executable or in roms\\".to_string())?;
+    let core_path = render::fbneo_core_path()
+        .ok_or_else(|| "FBNeo core not found next to the executable or in cores\\".to_string())?;
+    println!("[sync-probe] rom={rom_path}");
+    println!("[sync-probe] {}", mk2_addr_check::check().log_line());
+    retro::set_silent(true);
+    let core = unsafe { retro::load(&core_path, &rom_path)? };
+
+    // Coin, start, then mash through select into a fight, with P2 moving too
+    // so both players' input paths are in the hashed state.
+    let script = |frame: usize| -> [[bool; 16]; 2] {
+        let mut pads = [[false; 16]; 2];
+        let tap = |at: usize| frame >= at && frame < at + 6;
+        pads[0][input::Action::Coin.retro_id()] = tap(400) || tap(430);
+        pads[0][input::Action::Start.retro_id()] = tap(520) || tap(900) || tap(1100);
+        if frame > 1400 {
+            let beat = frame / 7;
+            pads[0][input::Action::ALL[beat % input::Action::ALL.len().min(9)].retro_id()] = true;
+            pads[1][input::Action::ALL[(beat * 3 + 1) % 9].retro_id()] = frame % 11 < 5;
+        }
+        pads
+    };
+    let ram_hash = |core: &retro::Core| -> u64 {
+        let ram: &[u8] = core.memory(retro::RETRO_MEMORY_SYSTEM_RAM).map(|r| &*r).unwrap_or(&[]);
+        let mut h: u64 = 0xcbf29ce484222325;
+        for b in ram {
+            h ^= *b as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+        h
+    };
+    let run_to = |core: &retro::Core, from: usize, to: usize| {
+        for f in from..to {
+            retro::set_input_all(script(f));
+            unsafe { (core.run)() };
+        }
+    };
+
+    let (anchor, end) = (2400usize, 3000usize);
+    run_to(&core, 0, anchor);
+    let a = mk2_addrs::a();
+    let gstate = memory::peek_u16(&core, a.GSTATE_ADDR, memory::Endian::Little);
+    let hp = memory::peek_u16(&core, a.P1_HP_ADDR, memory::Endian::Little);
+    println!("[sync-probe] at frame {anchor}: gstate={gstate:?} p1_hp={hp:?}");
+    let state = core.save_state().ok_or("save_state failed")?;
+    run_to(&core, anchor, end);
+    let straight = ram_hash(&core);
+    let mut ok = true;
+    for pass in 1..=2 {
+        if !core.load_state(&state) {
+            return Err("load_state failed".into());
+        }
+        run_to(&core, anchor, end);
+        let again = ram_hash(&core);
+        let pass_ok = again == straight;
+        ok &= pass_ok;
+        println!(
+            "[sync-probe] rollback {pass}: {} ({again:016x} vs {straight:016x})",
+            if pass_ok { "PASS" } else { "FAIL" }
+        );
+    }
+    println!("[sync-probe] savestate {} bytes", state.len());
+    println!("[sync-probe] boot {straight:016x} (must match on every run)");
+    retro::set_silent(false);
+    if !ok {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
 thread_local! {
     static ADDR_PROBE_FRAME: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -1732,6 +1811,7 @@ fn run_audio_probe(frames: usize) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    rom::init_override();
     adopt_packaged_working_dir();
 
     if cli::render_probe_requested() {
@@ -1740,6 +1820,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if cli::addr_probe_requested() {
         return run_addr_probe();
+    }
+
+    if cli::sync_probe_requested() {
+        return run_sync_probe();
     }
 
     if let Some(frames) = cli::audio_probe_frames() {

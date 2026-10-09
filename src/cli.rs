@@ -87,6 +87,30 @@ fn addr_probe_requested_from(args: &[String]) -> bool {
     args.iter().any(|arg| arg == "--addr-probe")
 }
 
+pub fn sync_probe_requested() -> bool {
+    std::env::args().skip(1).any(|arg| arg == "--sync-probe")
+}
+
+/// `--rom <path>` / `--rom=<path>`: the ROM zip to boot instead of the one
+/// found next to the executable.
+pub fn rom_override() -> Option<std::path::PathBuf> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    rom_override_from(&args)
+}
+
+fn rom_override_from(args: &[String]) -> Option<std::path::PathBuf> {
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        if let Some(path) = arg.strip_prefix("--rom=") {
+            return Some(std::path::PathBuf::from(path));
+        }
+        if arg == "--rom" {
+            return args.next().map(std::path::PathBuf::from);
+        }
+    }
+    None
+}
+
 pub fn parse_args() -> NetMode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     parse_net_mode_from(&args)
@@ -143,6 +167,15 @@ fn parse_net_mode_from(args: &[String]) -> NetMode {
                 i += 1;
             }
             "--addr-probe" => {
+                i += 1;
+            }
+            "--sync-probe" => {
+                i += 1;
+            }
+            "--rom" => {
+                i += 2;
+            }
+            arg if arg.starts_with("--rom=") => {
                 i += 1;
             }
             other => {
@@ -209,9 +242,26 @@ mod tests {
                 "--core-probe",
                 "--pad-probe",
                 "--addr-probe",
+                "--rom",
+                "roms/umk3.zip",
+                "--rom=roms/umk3.zip",
             ])),
             NetMode::Local
         );
+    }
+
+    #[test]
+    fn rom_override_supports_split_and_equals_forms() {
+        assert_eq!(
+            rom_override_from(&args(&["--rom", "wolf/umk3.zip"])),
+            Some(PathBuf::from("wolf/umk3.zip"))
+        );
+        assert_eq!(
+            rom_override_from(&args(&["--rom=wolf/umk3.zip"])),
+            Some(PathBuf::from("wolf/umk3.zip"))
+        );
+        assert_eq!(rom_override_from(&args(&["--rom"])), None);
+        assert_eq!(rom_override_from(&args(&["--addr-probe"])), None);
     }
 
     #[test]

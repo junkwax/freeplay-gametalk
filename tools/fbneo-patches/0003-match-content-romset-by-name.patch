@@ -1,0 +1,17 @@
+diff --git a/src/burner/libretro/libretro.cpp b/src/burner/libretro/libretro.cpp
+index 6dc2b3e..b314a98 100644
+--- a/src/burner/libretro/libretro.cpp
++++ b/src/burner/libretro/libretro.cpp
+@@ -951,7 +951,11 @@ static void locate_archive(std::vector<located_archive>& pathList, const char* c
+ 			g_find_list_path.push_back(located_archive());
+ 			located_archive* located = &g_find_list_path.back();
+ 			located->path = path;
+-			located->ignoreCrc = false;
++			// The set the frontend was pointed at is matched by name when it
++			// allows patched romsets, not only one filed under
++			// system/fbneo/patched: a rebuilt game (MK2 on the Wolf unit) is
++			// a new set on every build and has no CRCs to match.
++			located->ignoreCrc = bPatchedRomsetsEnabled;
+ 			ZipClose();
+ 			HandleMessage(RETRO_LOG_INFO, "[FBNeo] Romset found at %s\n", path);
+ 		}

@@ -8,6 +8,10 @@
 #               plus the older M6809+YM2151+OKI6295 ADPCM sound board used
 #               by other T-Unit titles registered in the same driver file
 #               (NBA Jam, Judge Dredd, ...), which d_tunit.cpp references.
+#
+# The Wolf unit (d_wunit.cpp) is built in as well: the same CPU and DCS code
+# plus the serial PIC (midwayic.cpp). It is here for MK2 rebuilt for the Wolf
+# board, which loads as "umk3" - see tools/fbneo-patches/0002.
 
 SOURCES_C += $(FBNEO_BURN_SND_DIR)/ym2151.c
 
@@ -26,7 +30,10 @@ SOURCES_CXX += $(FBNEO_BURN_DIR)/tiles_generic.cpp \
 	$(FBNEO_BURN_DEVICES_DIR)/joyprocess.cpp \
 	$(MIDWAY_DIR)/dcs2k.cpp \
 	$(MIDWAY_DIR)/midtunit.cpp \
-	$(MIDWAY_DIR)/d_tunit.cpp
+	$(MIDWAY_DIR)/d_tunit.cpp \
+	$(MIDWAY_DIR)/midwayic.cpp \
+	$(MIDWAY_DIR)/midwunit.cpp \
+	$(MIDWAY_DIR)/d_wunit.cpp
 
 CFLAGS += -DSUBSET=\"$(SUBSET)\" -DNO_NEOGEO -DNO_PGM2 -DNO_CONSOLES_COMPUTERS
 CXXFLAGS += -DSUBSET=\"$(SUBSET)\" -DNO_NEOGEO -DNO_PGM2 -DNO_CONSOLES_COMPUTERS

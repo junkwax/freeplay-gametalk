@@ -536,7 +536,10 @@ fn draw_cabinet_title(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scal
     // than a guess.
     if rom_present {
         if let Some(stamp) = crate::rom_manifest::build_stamp() {
-            let label = crate::rom_manifest::build_label(&stamp);
+            let mut label = crate::rom_manifest::build_label(&stamp);
+            if crate::rom_manifest::wolf_unit() {
+                label.push_str(" · WOLF UNIT");
+            }
             let (bw, _) = fonts.text_size_tracked(FpFont::ChakraPetchMedium, scale.font_px(13.0), &label, sub_track);
             let (bx, by) = scale.point(theme::VW - 96.0 - (bw as f32 / scale.s), bottom + 32.0);
             fonts.draw_tracked(canvas, FpFont::ChakraPetchMedium, scale.font_px(13.0), &label, bx, by, theme::ACCENT, sub_track)?;

@@ -1,0 +1,138 @@
+diff --git a/src/burn/drv/midway/d_wunit.cpp b/src/burn/drv/midway/d_wunit.cpp
+index 0a77c1a..fe93a28 100644
+--- a/src/burn/drv/midway/d_wunit.cpp
++++ b/src/burn/drv/midway/d_wunit.cpp
+@@ -804,6 +804,14 @@ static struct BurnRomInfo umk3RomDesc[] = {
+ 	{ "umk-u110.bin",	0x100000, 0x0038f205, 3 | BRF_GRA | BRF_ESS | WUNIT_GFX(0x14, 3) }, // 25
+ 	
+ 	{ "463_mk3_ultimate.u64", 0x1009, 0x4f425218, 0 | BRF_OPT },
++
++	// The sound board's spare sockets, empty on a real UMK3. MK2-on-Wolf
++	// (mk2-main makewolf.py) fills them; the CRCs are placeholders, since
++	// that set is rebuilt often and is matched by name.
++	{ "mk2wolf_sound_rom_u6.u6",	0x100000, 0x4d4b3206, 2 | BRF_PRG | BRF_OPT }, // 27
++	{ "mk2wolf_sound_rom_u7.u7",	0x100000, 0x4d4b3207, 2 | BRF_PRG | BRF_OPT }, // 28
++	{ "mk2wolf_sound_rom_u8.u8",	0x100000, 0x4d4b3208, 2 | BRF_PRG | BRF_OPT }, // 29
++	{ "mk2wolf_sound_rom_u9.u9",	0x100000, 0x4d4b3209, 2 | BRF_PRG | BRF_OPT }, // 30
+ };
+ 
+ STD_ROM_PICK(umk3)
+diff --git a/src/burn/drv/midway/midwunit.cpp b/src/burn/drv/midway/midwunit.cpp
+index 2581af7..e0a11b5 100644
+--- a/src/burn/drv/midway/midwunit.cpp
++++ b/src/burn/drv/midway/midwunit.cpp
+@@ -41,6 +41,11 @@ static INT32 nIOShuffle[16];
+ static INT32 wwfmania = 0;
+ static INT32 is_umk3 = 0;
+ static INT32 is_umk3_patchable = 0;
++// MK2 rebuilt for the Wolf board (mk2-main makewolf.py) ships inside a umk3
++// donor set, so it arrives as driver "umk3". It is told apart by the address
++// manifest its program ROM carries, and then none of the UMK3-specific
++// fix-ups below may touch it.
++static INT32 is_mk2wolf = 0;
+ 
+ static INT32 nExtraCycles = 0;
+ 
+@@ -114,7 +119,11 @@ static UINT16 WolfUnitIoRead(UINT32 address)
+     switch (offset) {
+ 		case 0: return ~DrvInputs[0];
+ 		case 1: return ~DrvInputs[1];
+-		case 2: return nWolfUnitDSW[0] | (nWolfUnitDSW[1] << 8);
++		// MK2 reads three switch positions the UMK3 DIP list does not declare
++		// (0x0100 circuit boards, 0x0800 back-block, 0x2000 low blows). They are
++		// open switches on the board and read 1 in MAME; left 0 here they would
++		// turn back-block and low blows off.
++		case 2: return nWolfUnitDSW[0] | (nWolfUnitDSW[1] << 8) | (is_mk2wolf ? 0x2900 : 0);
+ 		case 3: return ~DrvInputs[3];
+ 		case 4: {
+ 			sound_sync();
+@@ -271,15 +280,19 @@ UINT16 WolfUnitVramRead(UINT32 address)
+ void WolfUnitVramWrite(UINT32 address, UINT16 data)
+ {
+     UINT32 offset = TOBYTE(address & 0x3fffff);
++	// Honour a byte write (TMS34010WriteMask), as TUnitVramWrite does: a
++	// single-pixel CPU write must not re-stamp the neighbour pixel's
++	// colour-map selector.
++	const UINT16 mask = TMS34010WriteMask;
+     if (nVideoBank)
+     {
+-        DrvVRAM16[offset] = BURN_ENDIAN_SWAP_INT16((data & 0xff) | ((nDMA[DMA_PALETTE] & 0xff) << 8));
+-        DrvVRAM16[offset + 1] = BURN_ENDIAN_SWAP_INT16(((data >> 8) & 0xff) | (nDMA[DMA_PALETTE] & 0xff00));
++        if (mask & 0x00ff) DrvVRAM16[offset] = BURN_ENDIAN_SWAP_INT16((data & 0xff) | ((nDMA[DMA_PALETTE] & 0xff) << 8));
++        if (mask & 0xff00) DrvVRAM16[offset + 1] = BURN_ENDIAN_SWAP_INT16(((data >> 8) & 0xff) | (nDMA[DMA_PALETTE] & 0xff00));
+     }
+     else
+     {
+-        DrvVRAM16[offset] = BURN_ENDIAN_SWAP_INT16((BURN_ENDIAN_SWAP_INT16(DrvVRAM16[offset]) & 0xff) | ((data & 0xff) << 8));
+-        DrvVRAM16[offset + 1] = BURN_ENDIAN_SWAP_INT16((BURN_ENDIAN_SWAP_INT16(DrvVRAM16[offset + 1]) & 0xff) | (data & 0xff00));
++        if (mask & 0x00ff) DrvVRAM16[offset] = BURN_ENDIAN_SWAP_INT16((BURN_ENDIAN_SWAP_INT16(DrvVRAM16[offset]) & 0xff) | ((data & 0xff) << 8));
++        if (mask & 0xff00) DrvVRAM16[offset + 1] = BURN_ENDIAN_SWAP_INT16((BURN_ENDIAN_SWAP_INT16(DrvVRAM16[offset + 1]) & 0xff) | (data & 0xff00));
+     }
+ }
+ 
+@@ -376,9 +389,31 @@ static INT32 LoadSoundBanks()
+     if (BurnLoadRom(DrvSoundROM + 0x400000, 4, 2)) return 1;
+     if (BurnLoadRom(DrvSoundROM + 0x600000, 5, 2)) return 1;
+ 
++	// u6-u9, the sound board's spare sockets: optional entries in the romset,
++	// present only in an MK2-on-Wolf set. A missing one stays FF.
++	char *pRomName;
++	struct BurnRomInfo ri;
++	for (INT32 i = 6, n = 0; n < 4 && !BurnDrvGetRomName(&pRomName, i, 0); i++) {
++		BurnDrvGetRomInfo(&ri, i);
++		if ((ri.nType & 7) == 2 && (ri.nType & BRF_OPT)) {
++			BurnLoadRom(DrvSoundROM + 0x800000 + n * 0x200000, i, 2);
++			n++;
++		}
++	}
++
+     return 0;
+ }
+ 
++// The manifest's magic words (mk2-main src/FPADDR.ASM): F4E5 A9D1 5046 4441.
++static INT32 DetectMk2OnWolf()
++{
++	static const UINT8 magic[8] = { 0xe5, 0xf4, 0xd1, 0xa9, 0x46, 0x50, 0x41, 0x44 };
++	for (INT32 i = 0; i <= 0x100000 - 8; i += 2) {
++		if (memcmp(DrvBootROM + i, magic, sizeof(magic)) == 0) return 1;
++	}
++	return 0;
++}
++
+ static INT32 LoadGfxBanks()
+ {
+     char *pRomName;
+@@ -408,7 +443,7 @@ static void WolfDoReset()
+ 
+ 	MidwaySerialPicReset();
+ 
+-	if (is_umk3_patchable) {
++	if (is_umk3_patchable && !is_mk2wolf) {
+ 		// UMK3 Scorpion voice bug patch
+ 		// kredit "tehdrewsus", March 2026
+ 		const INT32 patch_len = 4;
+@@ -473,6 +508,16 @@ INT32 WolfUnitInit()
+ 	wwfmania = (strstr(BurnDrvGetTextA(DRV_NAME), "wwfmania") ? 1 : 0);
+ 	is_umk3 = (strstr(BurnDrvGetTextA(DRV_NAME), "umk3") ? 1 : 0);
+ 
++	is_mk2wolf = DetectMk2OnWolf();
++	if (is_mk2wolf) {
++		bprintf(0, _T("*** MK2 on Wolf unit: UMK3 patches off.\n"));
++		// the palette hack below watches a UMK3 RAM address
++		is_umk3 = 0;
++		// The PIC's serial number is random per boot, and this program keeps
++		// what it reads from the PIC in RAM. Two netplay peers must agree.
++		BurnRandomSetSeed(0x4d4b32574f4c46ULL);
++	}
++
+     Dcs2kInit(DCS_8K, MHz(10));
+     Dcs2kMapSoundROM(DrvSoundROM, 0x1000000);
+ 	Dcs2kSetVolume(5.25);
+@@ -624,6 +669,7 @@ INT32 WolfUnitExit()
+ 	wwfmania = 0;
+ 	is_umk3 = 0;
+ 	is_umk3_patchable = 0;
++	is_mk2wolf = 0;
+ 
+     return 0;
+ }

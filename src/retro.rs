@@ -802,7 +802,8 @@ pub unsafe fn load(dll_path: &str, rom_path: &str) -> Result<Core, Box<dyn std::
         return Err(format!(
             "FBNeo rejected the romset at {rom_path}. This usually means the zip is the \
              wrong MK2 revision or an incomplete/renamed set. Freeplay needs the arcade \
-             'mk2' romset (rev L3.1) matching the bundled FBNeo core."
+             'mk2' romset (rev L3.1), or MK2 built for the Wolf unit as 'umk3.zip', \
+             matching the bundled FBNeo core."
         )
         .into());
     }

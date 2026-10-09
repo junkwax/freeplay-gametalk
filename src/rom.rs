@@ -1,8 +1,45 @@
 use std::path::{Path, PathBuf};
 
-const ROM_NAME: &str = "mk2.zip";
+/// ROM sets this client boots, in the order they are preferred when more
+/// than one is present. FBNeo picks its driver from the file name, so these
+/// are driver names too: `mk2` is the T-unit build, and `umk3` is the same
+/// game rebuilt for the Wolf unit, which ships inside a UMK3 donor set
+/// (mk2-main `makewolf.py`).
+const ROM_NAMES: [&str; 2] = ["mk2.zip", "umk3.zip"];
+
+/// `--rom <path>`: the one ROM zip to use, instead of looking for one.
+static OVERRIDE: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+
+/// Read `--rom` off the command line. Call before anything changes the
+/// working directory, so a relative path means what the user typed.
+pub fn init_override() {
+    OVERRIDE.get_or_init(|| {
+        let path = crate::cli::rom_override()?;
+        let path = std::fs::canonicalize(&path).map(strip_verbatim).unwrap_or(path);
+        if path.is_file() {
+            println!("[rom] --rom {}", path.display());
+        } else {
+            println!("[rom] --rom {} does not exist", path.display());
+        }
+        Some(path)
+    });
+}
+
+/// `canonicalize` answers in `\\?\C:\...` form on Windows. The core builds
+/// its own paths from the one it is handed and does not take that form.
+fn strip_verbatim(path: PathBuf) -> PathBuf {
+    match path.to_str().and_then(|s| s.strip_prefix(r"\\?\")) {
+        Some(rest) if !rest.starts_with("UNC") => PathBuf::from(rest),
+        _ => path,
+    }
+}
 
 pub fn find_rom_zip() -> Option<PathBuf> {
+    // A named ROM that is missing is an error to report, not a reason to
+    // boot a different game.
+    if let Some(Some(path)) = OVERRIDE.get() {
+        return path.is_file().then(|| path.clone());
+    }
     rom_candidates()
         .into_iter()
         .find(|p| p.exists())
@@ -49,16 +86,15 @@ pub fn read_rom_zip() -> Option<Vec<u8>> {
 }
 
 fn rom_candidates() -> Vec<PathBuf> {
-    let mut candidates = vec![
-        Path::new("roms").join(ROM_NAME),
-        Path::new(ROM_NAME).to_path_buf(),
-    ];
-    if let Some(exe_dir) = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(Path::to_path_buf))
-    {
-        candidates.push(exe_dir.join("roms").join(ROM_NAME));
-        candidates.push(exe_dir.join(ROM_NAME));
+    let exe_dir = exe_dir();
+    let mut candidates = Vec::new();
+    for name in ROM_NAMES {
+        candidates.push(Path::new("roms").join(name));
+        candidates.push(Path::new(name).to_path_buf());
+        if let Some(exe_dir) = &exe_dir {
+            candidates.push(exe_dir.join("roms").join(name));
+            candidates.push(exe_dir.join(name));
+        }
     }
     candidates
 }
@@ -67,9 +103,9 @@ fn first_zip_in(dir: &str) -> Option<PathBuf> {
     first_zip_in_path(Path::new(dir))
 }
 
-/// Fallback scan for a ROM zip that isn't named exactly `mk2.zip`. Only
-/// accepts filenames that still look like an MK2 set ("mk2 (1).zip",
-/// "MK2.zip", "mk2-l31.zip", ...). An unrestricted "first zip in the folder"
+/// Fallback scan for a ROM zip that isn't named exactly `mk2.zip` (or
+/// `umk3.zip`). Only accepts filenames that still look like one of those sets
+/// ("mk2 (1).zip", "MK2.zip", "mk2-l31.zip", ...). An unrestricted "first zip in the folder"
 /// scan used to run here — with a `kof98.zip` sorting first, the client would
 /// silently boot the wrong game (or hand FBNeo garbage) and desync online.
 fn first_zip_in_path(dir: &Path) -> Option<PathBuf> {
@@ -85,7 +121,12 @@ fn first_zip_in_path(dir: &Path) -> Option<PathBuf> {
                 && path
                     .file_stem()
                     .and_then(|stem| stem.to_str())
-                    .is_some_and(|stem| stem.to_ascii_lowercase().starts_with("mk2"))
+                    .is_some_and(|stem| {
+                        let stem = stem.to_ascii_lowercase();
+                        ROM_NAMES
+                            .iter()
+                            .any(|name| stem.starts_with(name.trim_end_matches(".zip")))
+                    })
         })
         .collect();
     zips.sort();
