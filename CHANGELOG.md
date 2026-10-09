@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.9.0 - 2026-10-09
+
+This release bundles a rebuilt FBNeo core that adds the Midway Wolf unit
+(the MK3/UMK3 board). Its FBNeo commit is unchanged (the compat tag is still
+`cf53523`), and MK2 on the T-unit plays exactly as before, so 0.9.0 still
+matches 0.8.8 and 0.8.9 players on `mk2.zip`.
+
+### Added
+
+- MK2 built for the Wolf unit runs in the client, with every Lab feature.
+  mk2-main's `makewolf.py` packages it as `umk3.zip`. Drop that in `roms\` or
+  launch with `--rom <path>\umk3.zip`; if both zips are present, `mk2.zip`
+  is used. The main menu adds `· WOLF UNIT` to the build label. Wolf and
+  T-unit players are never paired, because matchmaking keys on the ROM.
+- `--rom <zip>` boots a specific ROM zip instead of searching for one.
+- `--sync-probe` checks that the loaded set can roll back. It plays a
+  scripted fight, reloads a mid-fight savestate twice, requires identical
+  RAM, and prints a boot hash that must match on every run.
+
+### Fixed
+
+- A rebuilt ROM set whose chips no longer match FBNeo's checksums is now
+  matched by file name instead of being rejected
+  (`tools/fbneo-patches/0003-match-content-romset-by-name.patch`).
+
+### Wolf-unit core details
+
+`tools/fbneo-patches/0002-wunit-mk2-on-wolf.patch` recognises MK2 by the
+address manifest in its program ROM; real UMK3 is untouched. For MK2 it:
+
+- turns off the UMK3-only Scorpion voice patch and palette hack
+- loads the sound board's spare sockets u6-u9, which hold about 380 of MK2's
+  own audio streams
+- reads the three DIP switches UMK3 does not declare as on, as MAME does, so
+  back-block and low blows stay enabled
+- seeds the security PIC, whose random bytes otherwise differ per boot and
+  would desync two peers from frame 0
+- applies the same byte-wide VRAM fix 0.8.9 made for the T-unit, so box
+  overlays draw cleanly
+
 ## 0.8.9 - 2026-10-06
 
 This release bundles a rebuilt FBNeo core. Its FBNeo commit is unchanged
