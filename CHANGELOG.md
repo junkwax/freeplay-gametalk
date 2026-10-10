@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.9.1 - 2026-10-10
+
+No core or gameplay changes: 0.9.1 matches 0.9.0, 0.8.9 and 0.8.8 players.
+
+### Fixed
+
+- The macOS and Linux downloads now include the FBNeo core. Since the core
+  was renamed `fbneo_mk2_libretro`, both packaging scripts had looked for the
+  old name, found nothing, and shipped without it, so the game could never
+  start there. A missing core now fails the release build instead of warning.
+- Editing your username (or stats email) from Settings or Profile works. The
+  Cross/Enter press that opened the on-screen keyboard was handled a second
+  time as Confirm, which saved the unchanged value and closed the keyboard in
+  the same frame. That save also cleared the cached sign-in and marked the
+  name unconfirmed. Chat compose had the same problem.
+
+### Added
+
+- Three GPU CRT filters under Settings > Video > Video Filter:
+  - **CRT LOTTES GL**: an arcade monitor with a shadow mask. Light is blended
+    linearly and scanlines widen on bright rows. Closest to an MK2 cabinet.
+  - **CRT SLOT GL**: the same model with a slot mask.
+  - **CRT HYLLIAN GL**: a sharp, flat PVM-style tube, and about 5x lighter
+    than Lottes on the GPU. Use it on weaker laptops.
+- **Keep running with lid closed** (Settings > Video, off by default), for
+  playing a laptop docked to a monitor. On Windows it sets the plugged-in lid
+  action to "Do nothing" while Freeplay is open and restores it on exit, or
+  on the next launch after a crash. Battery behavior is never changed. On
+  Linux it holds a logind lid inhibitor. Macs already do this in clamshell
+  mode.
+
+### Changed
+
+- The client is now licensed MIT OR Apache-2.0. FBNeo, the bundled fonts, and
+  `mk2.ttf` keep their own terms (see `LICENSE`).
+
 ## 0.9.0 - 2026-10-09
 
 This release bundles a rebuilt FBNeo core that adds the Midway Wolf unit
