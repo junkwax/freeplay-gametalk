@@ -18,17 +18,22 @@ cargo build --release
 cp "target/release/$EXE_NAME" "$OUT_DIR/$EXE_NAME"
 
 CORE=""
-for candidate in "cores/fbneo_libretro.dylib" "fbneo_libretro.dylib"; do
+# The build scripts produce the mk2 subset core; the stock name is only a
+# fallback for dev setups. Looking for the stock name alone shipped v0.9.0
+# and earlier without any core, so the game could never start.
+for candidate in "cores/fbneo_mk2_libretro.dylib" "fbneo_mk2_libretro.dylib" "cores/fbneo_libretro.dylib" "fbneo_libretro.dylib"; do
   if [ -f "$candidate" ]; then CORE="$candidate"; break; fi
 done
 if [ -n "$CORE" ]; then
-  cp "$CORE" "$OUT_DIR/fbneo_libretro.dylib"
+  # Keep the source name: render.rs looks for both, mk2 first.
+  cp "$CORE" "$OUT_DIR/$(basename "$CORE")"
 else
-  echo "warning: fbneo_libretro.dylib not found; run tools/build-fbneo-macos.sh" >&2
+  echo "error: no FBNeo core found; run tools/build-fbneo-macos.sh" >&2
+  exit 1
 fi
 
 [ -f ".env.example" ] && cp ".env.example" "$OUT_DIR/.env.example"
-[ -f "LICENSE" ] && cp "LICENSE" "$OUT_DIR/LICENSE"
+for f in LICENSE LICENSE-MIT LICENSE-APACHE; do [ -f "$f" ] && cp "$f" "$OUT_DIR/$f"; done
 [ -f "NOTICE.md" ] && cp "NOTICE.md" "$OUT_DIR/NOTICE.md"
 
 # Bundle a working .env with public defaults. Local .env wins if present
@@ -107,7 +112,7 @@ INSTALL:
 
 TROUBLESHOOTING:
   - "image not found: libSDL2-2.0.0.dylib" -> brew install sdl2 sdl2_ttf
-  - "fbneo_libretro.dylib not found"       -> ensure it's beside ./freeplay
+  - "FBNeo core not found"                 -> ensure fbneo_mk2_libretro.dylib is beside ./freeplay
   - Wrong-arch download: releases ship separate arm64 and x86_64 archives.
     On Apple Silicon use -macos-arm64; on Intel use -macos-x86_64.
     Check with: uname -m

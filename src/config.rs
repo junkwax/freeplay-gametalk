@@ -76,6 +76,11 @@ pub struct Config {
     /// decent hardware can enable it.
     #[serde(default)]
     pub runahead_online: bool,
+    /// Keep running when a plugged-in laptop's lid is closed, for playing
+    /// docked to a monitor. Changes the OS lid policy only while Freeplay is
+    /// open — see `lid.rs`.
+    #[serde(default)]
+    pub keep_running_lid_closed: bool,
     /// Start in desktop fullscreen and keep that preference when toggled.
     #[serde(default)]
     pub fullscreen: bool,
@@ -238,6 +243,9 @@ pub enum VideoFilter {
     CrtPvmShader,
     CrtCabinet,
     PvmSharp,
+    CrtLottesShader,
+    CrtLottesSlotShader,
+    CrtHyllianShader,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -306,6 +314,9 @@ impl VideoFilter {
             VideoFilter::CrtPvmShader => "CRT PVM GL",
             VideoFilter::CrtCabinet => "CRT CABINET",
             VideoFilter::PvmSharp => "PVM SHARP",
+            VideoFilter::CrtLottesShader => "CRT LOTTES GL",
+            VideoFilter::CrtLottesSlotShader => "CRT SLOT GL",
+            VideoFilter::CrtHyllianShader => "CRT HYLLIAN GL",
         }
     }
 
@@ -320,6 +331,9 @@ impl VideoFilter {
             VideoFilter::CrtShader,
             VideoFilter::CrtArcadeShader,
             VideoFilter::CrtPvmShader,
+            VideoFilter::CrtLottesShader,
+            VideoFilter::CrtLottesSlotShader,
+            VideoFilter::CrtHyllianShader,
             VideoFilter::CrtCabinet,
             VideoFilter::PvmSharp,
         ];
@@ -350,6 +364,13 @@ impl VideoFilter {
             "crt_pvm_gl" | "pvm_gl" | "crt_shader_pvm" | "shader_pvm" => {
                 Some(VideoFilter::CrtPvmShader)
             }
+            "crt_lottes_gl" | "crt_lottes" | "lottes" | "lottes_shadow" => {
+                Some(VideoFilter::CrtLottesShader)
+            }
+            "crt_slot_gl" | "crt_slot" | "lottes_slot" | "slot_mask" => {
+                Some(VideoFilter::CrtLottesSlotShader)
+            }
+            "crt_hyllian_gl" | "crt_hyllian" | "hyllian" => Some(VideoFilter::CrtHyllianShader),
             "crt_cabinet" | "cabinet" => Some(VideoFilter::CrtCabinet),
             "pvm_sharp" | "pvm" => Some(VideoFilter::PvmSharp),
             _ => None,
@@ -364,6 +385,9 @@ impl VideoFilter {
                 | VideoFilter::CrtShader
                 | VideoFilter::CrtArcadeShader
                 | VideoFilter::CrtPvmShader
+                | VideoFilter::CrtLottesShader
+                | VideoFilter::CrtLottesSlotShader
+                | VideoFilter::CrtHyllianShader
                 | VideoFilter::CrtCabinet
         )
     }
@@ -377,6 +401,10 @@ impl VideoFilter {
             VideoFilter::CrtShader => Some(0),
             VideoFilter::CrtArcadeShader => Some(1),
             VideoFilter::CrtPvmShader => Some(2),
+            // gl_crt::GlCrtRenderer::program_for owns what 3-5 select.
+            VideoFilter::CrtLottesShader => Some(3),
+            VideoFilter::CrtLottesSlotShader => Some(4),
+            VideoFilter::CrtHyllianShader => Some(5),
             _ => None,
         }
     }

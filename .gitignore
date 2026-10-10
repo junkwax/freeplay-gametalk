@@ -79,6 +79,7 @@ node_modules
 # User-specific config — contains the Discord webhook URL (a secret) and
 # personal key bindings. Never commit.
 config.toml
+lid_restore.txt
 .env
 .env.*
 !.env.example

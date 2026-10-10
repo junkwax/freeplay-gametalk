@@ -1,8 +1,25 @@
 Copyright (c) 2026 freeplay-gametalk contributors.
 
-No open-source license has been selected for this client yet. Until a license
-is added, all rights are reserved by the copyright holders.
+The freeplay-gametalk client is licensed under either of
 
-This notice does not apply to third-party dependencies, which remain under
-their own licenses. FBNeo is not included in this repository and is governed by
-its upstream non-commercial license when users build or provide it locally.
+  * Apache License, Version 2.0 (LICENSE-APACHE or
+    http://www.apache.org/licenses/LICENSE-2.0)
+  * MIT license (LICENSE-MIT or http://opensource.org/licenses/MIT)
+
+at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in this work by you, as defined in the Apache-2.0 license, shall
+be dual licensed as above, without any additional terms or conditions.
+
+This license covers the client's own source code only. It does not apply to:
+
+  * Third-party dependencies, which remain under their own licenses.
+  * FBNeo, which is not included in this repository and is governed by its
+    upstream non-commercial license when users build or provide it locally.
+    Release packages that bundle an FBNeo core are subject to that license as
+    well; see NOTICE.md.
+  * Bundled fonts under assets/fonts/, which are under the SIL Open Font
+    License (see the OFL-*.txt files alongside them).
+  * src/media/mk2.ttf and any game ROMs, which belong to their respective
+    owners; see NOTICE.md.

@@ -13,17 +13,22 @@ cargo build --release
 cp "target/release/$EXE_NAME" "$OUT_DIR/$EXE_NAME"
 
 CORE=""
-for candidate in "cores/fbneo_libretro.so" "fbneo_libretro.so"; do
+# The build scripts produce the mk2 subset core; the stock name is only a
+# fallback for dev setups. Looking for the stock name alone shipped v0.9.0
+# and earlier without any core, so the game could never start.
+for candidate in "cores/fbneo_mk2_libretro.so" "fbneo_mk2_libretro.so" "cores/fbneo_libretro.so" "fbneo_libretro.so"; do
   if [ -f "$candidate" ]; then CORE="$candidate"; break; fi
 done
 if [ -n "$CORE" ]; then
-  cp "$CORE" "$OUT_DIR/fbneo_libretro.so"
+  # Keep the source name: render.rs looks for both, mk2 first.
+  cp "$CORE" "$OUT_DIR/$(basename "$CORE")"
 else
-  echo "warning: fbneo_libretro.so not found; run tools/build-fbneo-linux.sh" >&2
+  echo "error: no FBNeo core found; run tools/build-fbneo-linux.sh" >&2
+  exit 1
 fi
 
 [ -f ".env.example" ] && cp ".env.example" "$OUT_DIR/.env.example"
-[ -f "LICENSE" ] && cp "LICENSE" "$OUT_DIR/LICENSE"
+for f in LICENSE LICENSE-MIT LICENSE-APACHE; do [ -f "$f" ] && cp "$f" "$OUT_DIR/$f"; done
 [ -f "NOTICE.md" ] && cp "NOTICE.md" "$OUT_DIR/NOTICE.md"
 
 # Bundle a working .env with public defaults (signaling URL, Discord
@@ -106,8 +111,8 @@ INSTALL:
 TROUBLESHOOTING:
   - "error while loading shared libraries: libSDL2-2.0.so.0"
         -> install the SDL2 package for your distro (above).
-  - "fbneo_libretro.so not found"
-        -> ensure it's beside ./freeplay.
+  - "FBNeo core not found"
+        -> ensure fbneo_mk2_libretro.so is beside ./freeplay.
   - No audio: PulseAudio/PipeWire not running for your user. SDL falls
     back to silent; the game still runs.
 EOF

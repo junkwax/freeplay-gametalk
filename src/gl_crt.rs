@@ -32,15 +32,51 @@ const GL_TEXTURE_MAG_FILTER: GLenum = 0x2800;
 const GL_TEXTURE_WRAP_S: GLenum = 0x2802;
 const GL_TEXTURE_WRAP_T: GLenum = 0x2803;
 const GL_LINEAR: GLint = 0x2601;
+const GL_NEAREST: GLint = 0x2600;
 const GL_CLAMP_TO_EDGE: GLint = 0x812F;
 
-pub struct GlCrtRenderer {
-    gl: GlFns,
-    program: GLuint,
+/// One linked shader family. Each family reads its own variant out of
+/// `u_mode`, so a family with a single look may compile that uniform away.
+struct CrtProgram {
+    id: GLuint,
     u_frame: GLint,
     u_tex_scale: GLint,
     u_frame_size: GLint,
     u_mode: GLint,
+}
+
+impl CrtProgram {
+    unsafe fn new(gl: &GlFns, fragment_src: &str) -> Result<Self, String> {
+        let id = compile_program(gl, CRT_VERTEX_SHADER, fragment_src)?;
+        let located = (|| {
+            Ok::<_, String>((
+                uniform_location(gl, id, "u_frame")?,
+                uniform_location(gl, id, "u_tex_scale")?,
+                uniform_location(gl, id, "u_frame_size")?,
+            ))
+        })();
+        match located {
+            Ok((u_frame, u_tex_scale, u_frame_size)) => Ok(Self {
+                id,
+                u_frame,
+                u_tex_scale,
+                u_frame_size,
+                // -1 is a valid location to set: GL ignores it.
+                u_mode: optional_uniform_location(gl, id, "u_mode"),
+            }),
+            Err(e) => {
+                gl.delete_program(id);
+                Err(e)
+            }
+        }
+    }
+}
+
+pub struct GlCrtRenderer {
+    gl: GlFns,
+    classic: CrtProgram,
+    lottes: CrtProgram,
+    hyllian: CrtProgram,
 }
 
 impl GlCrtRenderer {
@@ -61,21 +97,43 @@ impl GlCrtRenderer {
             }
         }
 
-        let program = unsafe { compile_program(&gl, CRT_VERTEX_SHADER, CRT_FRAGMENT_SHADER)? };
-        let u_frame = uniform_location(&gl, program, "u_frame")?;
-        let u_tex_scale = uniform_location(&gl, program, "u_tex_scale")?;
-        let u_frame_size = uniform_location(&gl, program, "u_frame_size")?;
-        let u_mode = uniform_location(&gl, program, "u_mode")?;
+        let (classic, lottes, hyllian) = unsafe {
+            let classic = CrtProgram::new(&gl, CRT_FRAGMENT_SHADER)?;
+            let lottes = match CrtProgram::new(&gl, LOTTES_FRAGMENT_SHADER) {
+                Ok(p) => p,
+                Err(e) => {
+                    gl.delete_program(classic.id);
+                    return Err(e);
+                }
+            };
+            let hyllian = match CrtProgram::new(&gl, HYLLIAN_FRAGMENT_SHADER) {
+                Ok(p) => p,
+                Err(e) => {
+                    gl.delete_program(classic.id);
+                    gl.delete_program(lottes.id);
+                    return Err(e);
+                }
+            };
+            (classic, lottes, hyllian)
+        };
         println!("[render] CRT shader initialized");
 
         Ok(Self {
             gl,
-            program,
-            u_frame,
-            u_tex_scale,
-            u_frame_size,
-            u_mode,
+            classic,
+            lottes,
+            hyllian,
         })
+    }
+
+    /// `mode` is `VideoFilter::opengl_shader_mode`: 0-2 classic presets,
+    /// 3-4 Lottes (shadow / slot mask), 5 Hyllian.
+    fn program_for(&self, mode: i32) -> (&CrtProgram, i32, GLint) {
+        match mode {
+            3 | 4 => (&self.lottes, mode - 3, GL_NEAREST),
+            5 => (&self.hyllian, 0, GL_NEAREST),
+            _ => (&self.classic, mode, GL_LINEAR),
+        }
     }
 
     pub fn draw(
@@ -108,20 +166,23 @@ impl GlCrtRenderer {
             self.gl.disable(GL_BLEND);
             self.gl
                 .viewport(0, 0, output_size.0 as GLsizei, output_size.1 as GLsizei);
-            self.gl.use_program(self.program);
+            // Lottes and Hyllian reconstruct between texels themselves and
+            // fetch texel centers, so the sampler must not blend for them.
+            let (program, variant, sampling) = self.program_for(mode);
+            self.gl.use_program(program.id);
             self.gl.active_texture(GL_TEXTURE0);
-            self.gl.uniform_1i(self.u_frame, 0);
-            self.gl.uniform_1i(self.u_mode, mode);
-            self.gl.uniform_2f(self.u_tex_scale, tex_w, tex_h);
+            self.gl.uniform_1i(program.u_frame, 0);
+            self.gl.uniform_1i(program.u_mode, variant);
+            self.gl.uniform_2f(program.u_tex_scale, tex_w, tex_h);
             self.gl.uniform_2f(
-                self.u_frame_size,
+                program.u_frame_size,
                 frame_size.0 as GLfloat,
                 frame_size.1 as GLfloat,
             );
             self.gl
-                .tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                .tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, sampling);
             self.gl
-                .tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                .tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, sampling);
             self.gl
                 .tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
             self.gl
@@ -160,7 +221,9 @@ impl GlCrtRenderer {
 impl Drop for GlCrtRenderer {
     fn drop(&mut self) {
         unsafe {
-            self.gl.delete_program(self.program);
+            self.gl.delete_program(self.classic.id);
+            self.gl.delete_program(self.lottes.id);
+            self.gl.delete_program(self.hyllian.id);
         }
     }
 }
@@ -503,6 +566,13 @@ fn uniform_location(gl: &GlFns, program: GLuint, name: &str) -> Result<GLint, St
     }
 }
 
+fn optional_uniform_location(gl: &GlFns, program: GLuint, name: &str) -> GLint {
+    match CString::new(name) {
+        Ok(name) => unsafe { gl.get_uniform_location(program, name.as_ptr()) },
+        Err(_) => -1,
+    }
+}
+
 unsafe fn shader_log(gl: &GlFns, shader: GLuint) -> String {
     let mut len = 0;
     gl.get_shader_iv(shader, GL_INFO_LOG_LENGTH, &mut len);
@@ -671,5 +741,240 @@ void main() {
 
     color = pow(max(color, vec3(0.0)), vec3(0.92));
     gl_FragColor = vec4(color, 1.0);
+}
+"#;
+
+// Timothy Lottes' CRT model (released into the public domain), rewritten for
+// this renderer's uniforms. What it adds over the classic shader is the part
+// that makes an arcade monitor read as one: everything is blended in linear
+// light, and each scanline is a Gaussian beam whose sharpness is fixed in
+// source-pixel space, so bright rows visibly fatten and dark rows stay thin.
+// u_mode 0 = shadow mask (Wells-Gardner / Electrohome style), 1 = slot mask.
+const LOTTES_FRAGMENT_SHADER: &str = r#"
+#version 120
+uniform sampler2D u_frame;
+uniform vec2 u_tex_scale;
+uniform vec2 u_frame_size;
+uniform int u_mode;
+varying vec2 v_uv;
+
+const float HARD_SCAN = -8.0;
+const float HARD_PIX = -3.0;
+const float HARD_BLOOM_PIX = -1.5;
+const float HARD_BLOOM_SCAN = -2.0;
+const float BLOOM_AMOUNT = 0.15;
+const float SHAPE = 2.0;
+const vec2 WARP = vec2(1.0 / 32.0, 1.0 / 24.0);
+const float MASK_DARK = 0.5;
+const float MASK_LIGHT = 1.5;
+
+vec3 to_linear(vec3 c) {
+    vec3 lo = c / 12.92;
+    vec3 hi = pow((c + 0.055) / 1.055, vec3(2.4));
+    return mix(hi, lo, vec3(lessThanEqual(c, vec3(0.04045))));
+}
+
+vec3 to_srgb(vec3 c) {
+    vec3 lo = c * 12.92;
+    vec3 hi = 1.055 * pow(c, vec3(0.41666)) - 0.055;
+    return mix(hi, lo, vec3(lessThan(c, vec3(0.0031308))));
+}
+
+// Nearest texel at an integer offset from `pos`, in linear light. Outside the
+// frame is black, which is also what gives the warped edge its border.
+vec3 fetch(vec2 pos, vec2 off) {
+    pos = (floor(pos * u_frame_size + off) + 0.5) / u_frame_size;
+    if (pos.x < 0.0 || pos.y < 0.0 || pos.x > 1.0 || pos.y > 1.0) {
+        return vec3(0.0);
+    }
+    return to_linear(texture2D(u_frame, pos * u_tex_scale).rgb);
+}
+
+vec2 dist(vec2 pos) {
+    pos *= u_frame_size;
+    return -((pos - floor(pos)) - 0.5);
+}
+
+float gaus(float pos, float scale) {
+    return exp2(scale * pow(abs(pos), SHAPE));
+}
+
+vec3 horz3(vec2 pos, float off) {
+    vec3 b = fetch(pos, vec2(-1.0, off));
+    vec3 c = fetch(pos, vec2(0.0, off));
+    vec3 d = fetch(pos, vec2(1.0, off));
+    float dst = dist(pos).x;
+    float wb = gaus(dst - 1.0, HARD_PIX);
+    float wc = gaus(dst, HARD_PIX);
+    float wd = gaus(dst + 1.0, HARD_PIX);
+    return (b * wb + c * wc + d * wd) / (wb + wc + wd);
+}
+
+vec3 horz5(vec2 pos, float off) {
+    vec3 a = fetch(pos, vec2(-2.0, off));
+    vec3 b = fetch(pos, vec2(-1.0, off));
+    vec3 c = fetch(pos, vec2(0.0, off));
+    vec3 d = fetch(pos, vec2(1.0, off));
+    vec3 e = fetch(pos, vec2(2.0, off));
+    float dst = dist(pos).x;
+    float wa = gaus(dst - 2.0, HARD_PIX);
+    float wb = gaus(dst - 1.0, HARD_PIX);
+    float wc = gaus(dst, HARD_PIX);
+    float wd = gaus(dst + 1.0, HARD_PIX);
+    float we = gaus(dst + 2.0, HARD_PIX);
+    return (a * wa + b * wb + c * wc + d * wd + e * we) / (wa + wb + wc + wd + we);
+}
+
+vec3 horz7(vec2 pos, float off) {
+    vec3 a = fetch(pos, vec2(-3.0, off));
+    vec3 b = fetch(pos, vec2(-2.0, off));
+    vec3 c = fetch(pos, vec2(-1.0, off));
+    vec3 d = fetch(pos, vec2(0.0, off));
+    vec3 e = fetch(pos, vec2(1.0, off));
+    vec3 f = fetch(pos, vec2(2.0, off));
+    vec3 g = fetch(pos, vec2(3.0, off));
+    float dst = dist(pos).x;
+    float wa = gaus(dst - 3.0, HARD_BLOOM_PIX);
+    float wb = gaus(dst - 2.0, HARD_BLOOM_PIX);
+    float wc = gaus(dst - 1.0, HARD_BLOOM_PIX);
+    float wd = gaus(dst, HARD_BLOOM_PIX);
+    float we = gaus(dst + 1.0, HARD_BLOOM_PIX);
+    float wf = gaus(dst + 2.0, HARD_BLOOM_PIX);
+    float wg = gaus(dst + 3.0, HARD_BLOOM_PIX);
+    return (a * wa + b * wb + c * wc + d * wd + e * we + f * wf + g * wg) /
+        (wa + wb + wc + wd + we + wf + wg);
+}
+
+float scan(vec2 pos, float off) {
+    return gaus(dist(pos).y + off, HARD_SCAN);
+}
+
+float bloom_scan(vec2 pos, float off) {
+    return gaus(dist(pos).y + off, HARD_BLOOM_SCAN);
+}
+
+vec3 tri(vec2 pos) {
+    return horz3(pos, -1.0) * scan(pos, -1.0) +
+        horz5(pos, 0.0) * scan(pos, 0.0) +
+        horz3(pos, 1.0) * scan(pos, 1.0);
+}
+
+vec3 bloom(vec2 pos) {
+    return horz5(pos, -2.0) * bloom_scan(pos, -2.0) +
+        horz7(pos, -1.0) * bloom_scan(pos, -1.0) +
+        horz7(pos, 0.0) * bloom_scan(pos, 0.0) +
+        horz7(pos, 1.0) * bloom_scan(pos, 1.0) +
+        horz5(pos, 2.0) * bloom_scan(pos, 2.0);
+}
+
+vec2 warp(vec2 pos) {
+    pos = pos * 2.0 - 1.0;
+    pos *= vec2(1.0 + pos.y * pos.y * WARP.x, 1.0 + pos.x * pos.x * WARP.y);
+    return pos * 0.5 + 0.5;
+}
+
+// Phosphor pattern in output pixels, so it stays crisp at any window size.
+vec3 mask(vec2 pos) {
+    vec3 m = vec3(MASK_DARK);
+    float line = 1.0;
+    if (u_mode == 1) {
+        // Slot mask: triads in rows, alternate rows offset by half a triad.
+        line = MASK_LIGHT;
+        float odd = fract(pos.x / 6.0) < 0.5 ? 1.0 : 0.0;
+        if (fract((pos.y + odd) * 0.5) < 0.5) {
+            line = MASK_DARK;
+        }
+        pos.x = fract(pos.x / 3.0);
+    } else {
+        // Shadow mask: dot triads staggered diagonally.
+        pos.x += pos.y * 3.0;
+        pos.x = fract(pos.x / 6.0);
+    }
+    if (pos.x < 0.333) {
+        m.r = MASK_LIGHT;
+    } else if (pos.x < 0.666) {
+        m.g = MASK_LIGHT;
+    } else {
+        m.b = MASK_LIGHT;
+    }
+    return m * line;
+}
+
+void main() {
+    vec2 pos = warp(v_uv);
+    vec3 color = tri(pos) + bloom(pos) * BLOOM_AMOUNT;
+    color *= mask(gl_FragCoord.xy * 1.000001);
+    gl_FragColor = vec4(to_srgb(max(color, vec3(0.0))), 1.0);
+}
+"#;
+
+// Hyllian's CRT (MIT), rewritten for this renderer's uniforms. Sharper than
+// Lottes: a Catmull-Rom horizontal filter clamped against ringing, and a beam
+// whose width tracks brightness per color channel. Its look is a well
+// adjusted PVM-class tube more than a worn cabinet, and it is the cheaper of
+// the two (8 texture reads per pixel against Lottes' ~40).
+const HYLLIAN_FRAGMENT_SHADER: &str = r#"
+#version 120
+uniform sampler2D u_frame;
+uniform vec2 u_tex_scale;
+uniform vec2 u_frame_size;
+varying vec2 v_uv;
+
+const float BEAM_MIN_WIDTH = 0.86;
+const float BEAM_MAX_WIDTH = 1.0;
+const float SCANLINES_STRENGTH = 0.72;
+const float COLOR_BOOST = 1.5;
+const float MASK_INTENSITY = 0.4;
+const float INPUT_GAMMA = 2.4;
+const float OUTPUT_GAMMA = 2.2;
+
+vec3 tex(vec2 uv) {
+    if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) {
+        return vec3(0.0);
+    }
+    return pow(texture2D(u_frame, uv * u_tex_scale).rgb, vec3(INPUT_GAMMA));
+}
+
+vec3 catmull_rom(vec3 c0, vec3 c1, vec3 c2, vec3 c3, float t) {
+    float t2 = t * t;
+    float t3 = t2 * t;
+    float w0 = -0.5 * t3 + t2 - 0.5 * t;
+    float w1 = 1.5 * t3 - 2.5 * t2 + 1.0;
+    float w2 = -1.5 * t3 + 2.0 * t2 + 0.5 * t;
+    float w3 = 0.5 * t3 - 0.5 * t2;
+    // Clamped to the two middle texels: an unclamped cubic overshoots at
+    // hard edges and paints a halo around every sprite outline.
+    vec3 c = c0 * w0 + c1 * w1 + c2 * w2 + c3 * w3;
+    return clamp(c, min(c1, c2), max(c1, c2));
+}
+
+vec3 beam(vec3 color, float pos) {
+    vec3 width = mix(vec3(BEAM_MIN_WIDTH), vec3(BEAM_MAX_WIDTH), color);
+    vec3 d = clamp(pos / (width + 0.0000001), 0.0, 1.0);
+    return exp(-10.0 * SCANLINES_STRENGTH * d * d);
+}
+
+void main() {
+    vec2 dx = vec2(1.0 / u_frame_size.x, 0.0);
+    vec2 dy = vec2(0.0, 1.0 / u_frame_size.y);
+    vec2 pix = v_uv * u_frame_size - 0.5;
+    vec2 tc = (floor(pix) + 0.5) / u_frame_size;
+    vec2 fp = fract(pix);
+
+    vec3 row0 = catmull_rom(tex(tc - dx), tex(tc), tex(tc + dx), tex(tc + 2.0 * dx), fp.x);
+    vec3 row1 = catmull_rom(
+        tex(tc - dx + dy), tex(tc + dy), tex(tc + dx + dy), tex(tc + 2.0 * dx + dy), fp.x);
+
+    vec3 color = row0 * beam(row0, fp.y) + row1 * beam(row1, 1.0 - fp.y);
+    color = clamp(color * COLOR_BOOST, 0.0, 1.0);
+
+    // Aperture grille in output pixels.
+    float triad = mod(floor(gl_FragCoord.x), 3.0);
+    vec3 grille = triad < 1.0 ? vec3(1.0, 0.0, 0.0)
+        : triad < 2.0 ? vec3(0.0, 1.0, 0.0)
+        : vec3(0.0, 0.0, 1.0);
+    color *= mix(vec3(1.0), 0.6 + 0.8 * grille, MASK_INTENSITY);
+
+    gl_FragColor = vec4(pow(max(color, vec3(0.0)), vec3(1.0 / OUTPUT_GAMMA)), 1.0);
 }
 "#;

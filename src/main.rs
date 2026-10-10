@@ -23,6 +23,7 @@ mod input;
 mod input_history;
 mod lab;
 mod lab_trace;
+mod lid;
 mod log;
 mod match_replay;
 mod matchmaking;
@@ -2263,6 +2264,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut live_matches_next_refresh = Instant::now();
     let mut toast: Option<(String, Instant)> =
         render_startup_toast.map(|message| (message, Instant::now() + Duration::from_millis(2600)));
+    // Recover first: otherwise a crashed session's "Do nothing" would be read
+    // back as this session's original and made permanent on exit.
+    lid::recover_from_crash();
+    let mut lid_guard = lid::LidGuard::inactive();
+    if cfg.keep_running_lid_closed {
+        if let Some(message) = lid_guard.set_enabled(true) {
+            println!("[lid] {message}");
+        }
+    }
     let frame_duration = Duration::from_micros(18281);
     let mut next_frame_deadline = Instant::now() + frame_duration;
     let mut fps_sample_started = Instant::now();
@@ -2772,6 +2782,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // NavResult side effects (session start, profile fetch,
                 // replay listing, ...) instead of re-implementing them here.
                 _ if matches!(state, AppState::FpUi(_)) || matches!(state, AppState::Menu(_)) => {
+                    let entered_from_fp = matches!(state, AppState::FpUi(_));
                     if let AppState::FpUi(screen) = &mut state {
                         if let Some(nav) = fp_ui::event_to_fp_nav(&event) {
                             match fp_ui::nav(screen, nav, rom_present.check()) {
@@ -2805,6 +2816,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         cfg.runahead = fields.runahead;
                                         cfg.runahead_online = fields.runahead_online;
                                         cfg.discord_rpc_enabled = fields.discord_rpc_enabled;
+                                        cfg.keep_running_lid_closed = fields.keep_running_lid_closed;
+                                        if let Some(message) =
+                                            lid_guard.set_enabled(cfg.keep_running_lid_closed)
+                                        {
+                                            toast = Some((
+                                                message,
+                                                Instant::now() + Duration::from_millis(2600),
+                                            ));
+                                        }
                                         config::save(&cfg);
                                     }
                                 }
@@ -3445,6 +3465,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // the legacy nav_* methods it falls through to on a miss)
                     // already no-op safely for any other `AppState::FpUi`.
                     if !matches!(state, AppState::Menu(_))
+                        && !matches!(state, AppState::FpUi(fp_ui::FpScreen::ReplaySelect { .. }))
+                    {
+                        continue;
+                    }
+                    // Only the two dispatch vehicles are meant to see this
+                    // event a second time. Any other Menu state an FpResult
+                    // just opened (a TextEdit, Spectate) would otherwise read
+                    // the same Confirm as its own Accept — a keyboard opened
+                    // by Cross would commit its unchanged value and close in
+                    // the frame it opened.
+                    if entered_from_fp
+                        && !matches!(
+                            state,
+                            AppState::Menu(MenuScreen::Main { .. } | MenuScreen::LabMenu { .. })
+                        )
                         && !matches!(state, AppState::FpUi(fp_ui::FpScreen::ReplaySelect { .. }))
                     {
                         continue;

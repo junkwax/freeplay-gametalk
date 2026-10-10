@@ -51,7 +51,7 @@ pub const TEST_CONN_CAT_INDEX: usize = 5;
 pub const CATS: [&str; 6] = ["CONTROLS", "VIDEO", "AUDIO", "NETPLAY", "ACCOUNT", "TEST CONNECTION"];
 // Controls: 11 actions + a "CLEAR ALL" row. Account: Username/Stats Email/
 // Discord. Test Connection: just the one address field.
-const ROWS_PER_CAT: [usize; 6] = [Action::ALL.len() + 1, 6, 2, 4, 3, 1];
+const ROWS_PER_CAT: [usize; 6] = [Action::ALL.len() + 1, 7, 2, 4, 3, 1];
 
 const SIDE_PAD: f32 = 56.0;
 const CONTENT_TOP: f32 = 142.0;
@@ -88,6 +88,7 @@ pub struct SettingsFields {
     pub runahead: bool,
     pub runahead_online: bool,
     pub discord_rpc_enabled: bool,
+    pub keep_running_lid_closed: bool,
 }
 
 impl SettingsFields {
@@ -105,6 +106,7 @@ impl SettingsFields {
             runahead: cfg.runahead,
             runahead_online: cfg.runahead_online,
             discord_rpc_enabled: cfg.discord_rpc_enabled,
+            keep_running_lid_closed: cfg.keep_running_lid_closed,
         }
     }
 
@@ -119,6 +121,7 @@ impl SettingsFields {
             (1, 3) => ("CRT CORNER BEND", "Rounded glass shading on CRT filters"),
             (1, 4) => ("ASPECT MODE", "How the frame fits the window"),
             (1, 5) => ("SCOREBAR STYLE", "Netplay score overlay layout"),
+            (1, 6) => ("KEEP RUNNING WITH LID CLOSED", "Plugged-in laptops, while Freeplay is open"),
             (2, 0) => ("VOLUME", "Output level"),
             (2, 1) => ("AUDIO BUFFER", "Queue depth vs. latency"),
             (3, 0) => ("INPUT DELAY", "Frames of delay before rollback"),
@@ -137,6 +140,7 @@ impl SettingsFields {
             (1, 3) => RowValue::Toggle(self.crt_corner_bend),
             (1, 4) => RowValue::Cycle(self.aspect_mode.label()),
             (1, 5) => RowValue::Cycle(self.scorebar_style.label()),
+            (1, 6) => RowValue::Toggle(self.keep_running_lid_closed),
             (2, 0) => RowValue::Slider { pct: self.volume_percent as f32, text: format!("{}%", self.volume_percent) },
             (2, 1) => RowValue::Cycle(self.audio_buffer.label()),
             (3, 0) => RowValue::Slider {
@@ -160,6 +164,7 @@ impl SettingsFields {
             (1, 3) => self.crt_corner_bend = !self.crt_corner_bend,
             (1, 4) => self.aspect_mode = self.aspect_mode.cycle(delta),
             (1, 5) => self.scorebar_style = self.scorebar_style.cycle(delta),
+            (1, 6) => self.keep_running_lid_closed = !self.keep_running_lid_closed,
             (2, 0) => {
                 self.volume_percent = (self.volume_percent as i32 + delta as i32 * 5).clamp(0, 100) as u8
             }

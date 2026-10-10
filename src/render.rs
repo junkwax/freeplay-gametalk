@@ -669,7 +669,10 @@ fn draw_overlay_layers(
         crate::config::VideoFilter::CrtArcadeShader => {
             draw_crt_deluxe(canvas, dst, crt_corner_bend)?;
         }
-        crate::config::VideoFilter::CrtPvmShader => {
+        crate::config::VideoFilter::CrtPvmShader
+        | crate::config::VideoFilter::CrtLottesShader
+        | crate::config::VideoFilter::CrtLottesSlotShader
+        | crate::config::VideoFilter::CrtHyllianShader => {
             draw_crt_deluxe(canvas, dst, crt_corner_bend)?;
         }
         crate::config::VideoFilter::CrtCabinet => {

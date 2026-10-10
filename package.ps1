@@ -220,7 +220,7 @@ if (Test-Path ".env.example") {
     Copy-Item ".env.example" $OUT_DIR
     Write-Host "  ✓ Copied .env.example"
 }
-foreach ($doc in @("LICENSE", "NOTICE.md")) {
+foreach ($doc in @("LICENSE", "LICENSE-MIT", "LICENSE-APACHE", "NOTICE.md")) {
     if (Test-Path $doc) {
         Copy-Item $doc $OUT_DIR
         Write-Host "  ✓ Copied $doc"
