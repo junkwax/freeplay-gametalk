@@ -209,6 +209,9 @@ pub struct TurnConnectInfo {
 pub enum MatchTransport {
     Direct {
         peer_addr: SocketAddr,
+        /// Median RTT measured right after the punch, if the exchange got
+        /// enough replies. Drives the per-match input delay.
+        rtt_ms: Option<u32>,
     },
     Relay {
         socket: crate::relay_socket::RelaySocket,
@@ -220,6 +223,12 @@ pub enum MatchTransport {
 const APP_VERSION: &str = crate::version::VERSION;
 const GAME_PORT: u16 = 7000;
 const PUNCH_PAYLOAD: &[u8] = b"MK2PUNCH";
+const RTT_PING_MAGIC: &[u8; 4] = b"FPRP";
+const RTT_PONG_MAGIC: &[u8; 4] = b"FPRA";
+/// Long enough for ~20 samples, short enough not to be felt between
+/// "connecting" and the match.
+const RTT_WINDOW: Duration = Duration::from_millis(600);
+const RTT_PING_EVERY: Duration = Duration::from_millis(25);
 
 static CURRENT_TOKEN: Mutex<Option<String>> = Mutex::new(None);
 static GUEST_PROFILE: Mutex<Option<(String, String, String)>> = Mutex::new(None);
@@ -402,14 +411,14 @@ fn run(tx: &Sender<Update>) -> Result<(), String> {
 
         send(tx, Update::Status("Connecting to opponent...".into()))?;
         match hole_punch(&match_info.peer_endpoint, match_info.punch_at_ms) {
-            Ok(peer_addr) => {
+            Ok((peer_addr, rtt_ms)) => {
                 println!("[mm] direct P2P established: {peer_addr}");
                 send(
                     tx,
                     Update::Connected {
                         peer_endpoint: peer_addr.to_string(),
                         is_host: match_info.role == "host",
-                        transport: MatchTransport::Direct { peer_addr },
+                        transport: MatchTransport::Direct { peer_addr, rtt_ms },
                         session_id: session_id_for_update,
                         room_id: match_info.room_id.clone(),
                         peer_username: match_info.peer_username.clone(),
@@ -514,14 +523,14 @@ fn run_with_token(tx: &Sender<Update>, token: String) -> Result<(), String> {
 
         send(tx, Update::Status("Connecting to opponent...".into()))?;
         match hole_punch(&match_info.peer_endpoint, match_info.punch_at_ms) {
-            Ok(peer_addr) => {
+            Ok((peer_addr, rtt_ms)) => {
                 println!("[mm] direct P2P established: {peer_addr}");
                 send(
                     tx,
                     Update::Connected {
                         peer_endpoint: peer_addr.to_string(),
                         is_host: match_info.role == "host",
-                        transport: MatchTransport::Direct { peer_addr },
+                        transport: MatchTransport::Direct { peer_addr, rtt_ms },
                         session_id: session_id_for_update,
                         room_id: match_info.room_id.clone(),
                         peer_username: match_info.peer_username.clone(),
@@ -600,14 +609,14 @@ fn run_join_room(tx: &Sender<Update>, room_id: &str) -> Result<(), String> {
 
     send(tx, Update::Status("Connecting to opponent...".into()))?;
     match hole_punch(&match_info.peer_endpoint, match_info.punch_at_ms) {
-        Ok(peer_addr) => {
+        Ok((peer_addr, rtt_ms)) => {
             println!("[mm] direct P2P established: {peer_addr}");
             send(
                 tx,
                 Update::Connected {
                     peer_endpoint: peer_addr.to_string(),
                     is_host: match_info.role == "host",
-                    transport: MatchTransport::Direct { peer_addr },
+                    transport: MatchTransport::Direct { peer_addr, rtt_ms },
                     session_id: match_info.session_id,
                     room_id: match_info.room_id.clone(),
                     peer_username: match_info.peer_username.clone(),
@@ -649,12 +658,12 @@ fn connect_match(
     }
     send(tx, Update::Status("Connecting to opponent...".into()))?;
     match hole_punch(&mi.peer_endpoint, mi.punch_at_ms) {
-        Ok(peer_addr) => send(
+        Ok((peer_addr, rtt_ms)) => send(
             tx,
             Update::Connected {
                 peer_endpoint: peer_addr.to_string(),
                 is_host,
-                transport: MatchTransport::Direct { peer_addr },
+                transport: MatchTransport::Direct { peer_addr, rtt_ms },
                 session_id: session_id.to_string(),
                 room_id: mi.room_id.clone(),
                 peer_username: mi.peer_username.clone(),
@@ -887,12 +896,12 @@ fn run_host_room(
 
         send(tx, Update::Status("Connecting to challenger...".into()))?;
         match hole_punch(&match_info.peer_endpoint, match_info.punch_at_ms) {
-            Ok(peer_addr) => send(
+            Ok((peer_addr, rtt_ms)) => send(
                 tx,
                 Update::Connected {
                     peer_endpoint: peer_addr.to_string(),
                     is_host: true,
-                    transport: MatchTransport::Direct { peer_addr },
+                    transport: MatchTransport::Direct { peer_addr, rtt_ms },
                     session_id: creator_session_id.clone(),
                     room_id: match_info.room_id.clone(),
                     peer_username: match_info.peer_username.clone(),
@@ -3274,7 +3283,7 @@ fn match_result_body(
 
 // ── UDP hole punch ────────────────────────────────────────────────────────────
 
-fn hole_punch(peer_endpoint: &str, punch_at_ms: i64) -> Result<SocketAddr, String> {
+fn hole_punch(peer_endpoint: &str, punch_at_ms: i64) -> Result<(SocketAddr, Option<u32>), String> {
     let peer: SocketAddr = peer_endpoint
         .parse()
         .map_err(|e| format!("Bad peer addr '{peer_endpoint}': {e}"))?;
@@ -3304,7 +3313,12 @@ fn hole_punch(peer_endpoint: &str, punch_at_ms: i64) -> Result<SocketAddr, Strin
         match sock.recv_from(&mut buf) {
             Ok((n, from)) if from == peer && &buf[..n] == PUNCH_PAYLOAD => {
                 sock.send_to(PUNCH_PAYLOAD, peer).ok();
-                return Ok(peer);
+                let rtt = measure_rtt(&sock, peer);
+                match rtt {
+                    Some(ms) => println!("[mm] measured RTT to {peer}: {ms}ms"),
+                    None => println!("[mm] RTT measurement to {peer} got too few replies"),
+                }
+                return Ok((peer, rtt));
             }
             Ok(_) => {}
             Err(ref e)
@@ -3313,6 +3327,79 @@ fn hole_punch(peer_endpoint: &str, punch_at_ms: i64) -> Result<SocketAddr, Strin
             Err(e) => println!("[mm] punch recv: {e}"),
         }
     }
+}
+
+/// Swap timestamped pings with the peer on the freshly punched socket.
+///
+/// Both peers run this at the same moment (right after their punch
+/// succeeds), each pinging and answering the other. Each ping also carries
+/// the sender's running median, and the result is the larger of the two, so
+/// both sides almost always land on the same input delay even when their
+/// own samples straddle a frame boundary. Stray pings that arrive after one
+/// side has moved on hit the GGRS socket and are dropped there (wrong
+/// magic), the same as the trailing punch packet already is.
+fn measure_rtt(sock: &UdpSocket, peer: SocketAddr) -> Option<u32> {
+    sock.set_read_timeout(Some(Duration::from_millis(5))).ok();
+    let start = Instant::now();
+    let mut sent_at: Vec<Instant> = Vec::new();
+    let mut samples: Vec<u32> = Vec::new();
+    let mut peer_median: Option<u32> = None;
+    let mut last_ping = start - RTT_PING_EVERY;
+    let mut buf = [0u8; 64];
+
+    while start.elapsed() < RTT_WINDOW {
+        if last_ping.elapsed() >= RTT_PING_EVERY && sent_at.len() < u16::MAX as usize {
+            let seq = sent_at.len() as u16;
+            let median = median_ms(&samples).unwrap_or(0).min(u16::MAX as u32) as u16;
+            let mut pkt = [0u8; 8];
+            pkt[..4].copy_from_slice(RTT_PING_MAGIC);
+            pkt[4..6].copy_from_slice(&seq.to_le_bytes());
+            pkt[6..8].copy_from_slice(&median.to_le_bytes());
+            sent_at.push(Instant::now());
+            sock.send_to(&pkt, peer).ok();
+            last_ping = Instant::now();
+        }
+        let n = match sock.recv_from(&mut buf) {
+            Ok((n, from)) if from == peer => n,
+            _ => continue,
+        };
+        let pkt = &buf[..n];
+        if pkt == PUNCH_PAYLOAD {
+            // Our closing punch was lost and the peer is still punching.
+            sock.send_to(PUNCH_PAYLOAD, peer).ok();
+        } else if n == 8 && &pkt[..4] == RTT_PING_MAGIC {
+            let mut pong = [0u8; 6];
+            pong[..4].copy_from_slice(RTT_PONG_MAGIC);
+            pong[4..6].copy_from_slice(&pkt[4..6]);
+            sock.send_to(&pong, peer).ok();
+            let theirs = u16::from_le_bytes([pkt[6], pkt[7]]) as u32;
+            if theirs > 0 {
+                peer_median = Some(theirs);
+            }
+        } else if n == 6 && &pkt[..4] == RTT_PONG_MAGIC {
+            let seq = u16::from_le_bytes([pkt[4], pkt[5]]) as usize;
+            if let Some(t) = sent_at.get(seq) {
+                samples.push(t.elapsed().as_millis() as u32);
+            }
+        }
+    }
+
+    // Fewer than this and one slow sample decides the delay for the match.
+    const MIN_SAMPLES: usize = 5;
+    if samples.len() < MIN_SAMPLES {
+        return None;
+    }
+    let mine = median_ms(&samples)?;
+    Some(peer_median.map_or(mine, |p| p.max(mine)))
+}
+
+fn median_ms(samples: &[u32]) -> Option<u32> {
+    if samples.is_empty() {
+        return None;
+    }
+    let mut v = samples.to_vec();
+    v.sort_unstable();
+    Some(v[v.len() / 2])
 }
 
 fn wait_until_ms(target_ms: i64) {
@@ -3454,6 +3541,26 @@ mod tests {
         match_result_body, parse_live_matches, parse_lobbies, parse_lobby_snapshot,
         parse_spectate_state, read_chunked_body, sha256_hex, LobbyMatchFormat,
     };
+
+    #[test]
+    fn rtt_exchange_measures_both_ways_over_loopback() {
+        use std::net::UdpSocket;
+        let a = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let b = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let (a_addr, b_addr) = (a.local_addr().unwrap(), b.local_addr().unwrap());
+        let peer_side = std::thread::spawn(move || super::measure_rtt(&b, a_addr));
+        let ours = super::measure_rtt(&a, b_addr);
+        let theirs = peer_side.join().unwrap();
+        // Loopback is sub-millisecond; anything measured at all must be tiny.
+        assert!(matches!(ours, Some(ms) if ms < 20), "ours={ours:?}");
+        assert!(matches!(theirs, Some(ms) if ms < 20), "theirs={theirs:?}");
+    }
+
+    #[test]
+    fn median_picks_middle_sample() {
+        assert_eq!(super::median_ms(&[]), None);
+        assert_eq!(super::median_ms(&[40, 10, 200, 20, 30]), Some(30));
+    }
 
     #[test]
     fn json_str_tolerates_whitespace_and_decodes_escapes() {

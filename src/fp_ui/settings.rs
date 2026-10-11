@@ -85,6 +85,7 @@ pub struct SettingsFields {
     pub volume_percent: u8,
     pub audio_buffer: AudioBuffer,
     pub input_delay: u32,
+    pub input_delay_auto: bool,
     pub runahead: bool,
     pub runahead_online: bool,
     pub discord_rpc_enabled: bool,
@@ -103,6 +104,7 @@ impl SettingsFields {
             volume_percent: cfg.volume_percent,
             audio_buffer: cfg.audio_buffer,
             input_delay: cfg.input_delay,
+            input_delay_auto: cfg.input_delay_auto,
             runahead: cfg.runahead,
             runahead_online: cfg.runahead_online,
             discord_rpc_enabled: cfg.discord_rpc_enabled,
@@ -124,7 +126,7 @@ impl SettingsFields {
             (1, 6) => ("KEEP RUNNING WITH LID CLOSED", "Plugged-in laptops, while Freeplay is open"),
             (2, 0) => ("VOLUME", "Output level"),
             (2, 1) => ("AUDIO BUFFER", "Queue depth vs. latency"),
-            (3, 0) => ("INPUT DELAY", "Frames of delay before rollback"),
+            (3, 0) => ("INPUT DELAY", "AUTO picks it per match from ping"),
             (3, 1) => ("RUNAHEAD (OFFLINE)", "One-frame speculative local play"),
             (3, 2) => ("RUNAHEAD (ONLINE)", "Experimental video-only netplay speculation"),
             (3, 3) => ("DISCORD RICH PRESENCE", "Show match status in Discord"),
@@ -143,6 +145,10 @@ impl SettingsFields {
             (1, 6) => RowValue::Toggle(self.keep_running_lid_closed),
             (2, 0) => RowValue::Slider { pct: self.volume_percent as f32, text: format!("{}%", self.volume_percent) },
             (2, 1) => RowValue::Cycle(self.audio_buffer.label()),
+            (3, 0) if self.input_delay_auto => RowValue::Slider {
+                pct: 0.0,
+                text: "AUTO".into(),
+            },
             (3, 0) => RowValue::Slider {
                 pct: self.input_delay as f32 / 8.0 * 100.0,
                 text: format!("{}f", self.input_delay),
@@ -169,6 +175,16 @@ impl SettingsFields {
                 self.volume_percent = (self.volume_percent as i32 + delta as i32 * 5).clamp(0, 100) as u8
             }
             (2, 1) => self.audio_buffer = self.audio_buffer.cycle(delta),
+            // AUTO sits one step left of 0f. Leaving it lands on 0f, so the
+            // manual value (relay/direct-IP fallback) still means "the
+            // number on the slider" once AUTO is off.
+            (3, 0) if self.input_delay_auto => {
+                if delta > 0 {
+                    self.input_delay_auto = false;
+                    self.input_delay = 0;
+                }
+            }
+            (3, 0) if delta < 0 && self.input_delay == 0 => self.input_delay_auto = true,
             (3, 0) => self.input_delay = (self.input_delay as i32 + delta as i32).clamp(0, 8) as u32,
             (3, 1) => self.runahead = !self.runahead,
             (3, 2) => self.runahead_online = !self.runahead_online,

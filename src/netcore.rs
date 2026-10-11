@@ -51,6 +51,13 @@ pub struct NetStepStats {
 #[derive(Default)]
 pub struct NetRuntime {
     pub skip_frames_remaining: u32,
+    /// Local input seen last tick, and how many ticks in a row it has held.
+    /// Gates `skip_frames_remaining` — see `take_wait_skip`.
+    last_local_bits: Option<u16>,
+    local_idle_ticks: u32,
+    /// Ticks the current skip debt has been outstanding.
+    skip_wait_ticks: u32,
+    skipped_last_tick: bool,
     pub desync_dumped: bool,
     /// Byte offset of the FBNeo wall-clock u32 inside the libretro savestate.
     /// Detected on the first save_state by scanning for a u32 close to current
@@ -72,7 +79,56 @@ pub struct NetRuntime {
 /// prediction window (8) plus bookkeeping copies; 16 gives comfortable slack.
 const STATE_POOL_MAX: usize = 16;
 
+/// Local input must be unchanged this many ticks (~146 ms) before a
+/// time-sync skip is spent.
+const SKIP_IDLE_TICKS: u32 = 8;
+/// Past this (~3 s), a skip debt is paid even mid-input: a player who never
+/// lets go would otherwise stay ahead forever and push every rollback onto
+/// the opponent.
+const SKIP_FORCE_AFTER_TICKS: u32 = 165;
+
 impl NetRuntime {
+    /// Decide whether this tick should be spent as a GGRS time-sync stall.
+    ///
+    /// GGRS 0.10 recommends waits on frame advantage alone, and spending
+    /// them as back-to-back frozen ticks puts a visible 3+ frame hitch
+    /// wherever it lands — often mid-combo. Original GGPO (what Fightcade
+    /// ships) only sleeps while the local player's input is idle; we do the
+    /// same, and never skip two ticks running, so each stall is one frame.
+    fn take_wait_skip(&mut self, local_bits: u16) -> bool {
+        if self.last_local_bits == Some(local_bits) {
+            self.local_idle_ticks = self.local_idle_ticks.saturating_add(1);
+        } else {
+            self.local_idle_ticks = 0;
+            self.last_local_bits = Some(local_bits);
+        }
+
+        if self.skip_frames_remaining == 0 {
+            self.skip_wait_ticks = 0;
+            self.skipped_last_tick = false;
+            return false;
+        }
+
+        self.skip_wait_ticks = self.skip_wait_ticks.saturating_add(1);
+        let ready = self.local_idle_ticks >= SKIP_IDLE_TICKS
+            || self.skip_wait_ticks >= SKIP_FORCE_AFTER_TICKS;
+        if ready && !self.skipped_last_tick {
+            self.skip_frames_remaining -= 1;
+            self.skipped_last_tick = true;
+            true
+        } else {
+            self.skipped_last_tick = false;
+            false
+        }
+    }
+
+    /// Record a GGRS wait recommendation. Each one measures the *current*
+    /// advantage, so it replaces any unpaid debt rather than stacking on it —
+    /// deferred skips would otherwise pile up into an over-correction.
+    fn note_wait_recommendation(&mut self, skip_frames: u32) {
+        self.skip_frames_remaining = self.skip_frames_remaining.max(skip_frames);
+    }
+
     /// Serialize the core into a pooled buffer and return an Arc clone for
     /// ggrs to own. The buffer is mutated *while the pool is its only owner*
     /// (Arc::get_mut requires refcount 1), then cloned — so the pool keeps
@@ -396,8 +452,7 @@ pub fn step_netplay_frame(
     for ev in sess.events() {
         match ev {
             ggrs::GgrsEvent::WaitRecommendation { skip_frames } => {
-                runtime.skip_frames_remaining =
-                    runtime.skip_frames_remaining.saturating_add(skip_frames);
+                runtime.note_wait_recommendation(skip_frames);
                 if let Some(f) = net_log.as_mut() {
                     let _ = writeln!(
                         f,
@@ -504,20 +559,19 @@ pub fn step_netplay_frame(
         };
     }
 
-    if runtime.skip_frames_remaining > 0 {
-        runtime.skip_frames_remaining -= 1;
-        return NetStepStats {
-            peer_disconnected: peer_disconnected_this_frame,
-            ..NetStepStats::default()
-        };
-    }
-
     let local_player = if local_handle == 0 {
         Player::P1
     } else {
         Player::P2
     };
     let local_bits = snapshot_player(local_player);
+
+    if runtime.take_wait_skip(local_bits) {
+        return NetStepStats {
+            peer_disconnected: peer_disconnected_this_frame,
+            ..NetStepStats::default()
+        };
+    }
     let local_input = NetInput { bits: local_bits };
 
     if let Err(e) = sess.add_local_input(local_handle as PlayerHandle, local_input) {
@@ -776,6 +830,47 @@ pub fn step_netplay_frame(
 #[cfg(test)]
 mod tests {
     use super::cksum_with_mask;
+    use super::{NetRuntime, SKIP_FORCE_AFTER_TICKS, SKIP_IDLE_TICKS};
+
+    #[test]
+    fn wait_skip_holds_while_input_changes() {
+        let mut rt = NetRuntime::default();
+        rt.note_wait_recommendation(3);
+        for t in 0..50u16 {
+            assert!(!rt.take_wait_skip(t % 2));
+        }
+        assert_eq!(rt.skip_frames_remaining, 3);
+    }
+
+    #[test]
+    fn wait_skip_spends_one_frame_at_a_time_when_idle() {
+        let mut rt = NetRuntime::default();
+        rt.note_wait_recommendation(3);
+        let skips: Vec<bool> = (0..SKIP_IDLE_TICKS + 6).map(|_| rt.take_wait_skip(0)).collect();
+        let idle = SKIP_IDLE_TICKS as usize;
+        assert!(skips[..idle].iter().all(|s| !s));
+        assert_eq!(&skips[idle..], &[true, false, true, false, true, false]);
+        assert_eq!(rt.skip_frames_remaining, 0);
+    }
+
+    #[test]
+    fn wait_skip_forced_after_long_debt() {
+        let mut rt = NetRuntime::default();
+        rt.note_wait_recommendation(1);
+        let paid_at = (1..=SKIP_FORCE_AFTER_TICKS + 1)
+            .find(|t| rt.take_wait_skip(*t as u16 % 2))
+            .expect("debt never paid");
+        assert_eq!(paid_at, SKIP_FORCE_AFTER_TICKS);
+    }
+
+    #[test]
+    fn wait_recommendations_replace_rather_than_stack() {
+        let mut rt = NetRuntime::default();
+        rt.note_wait_recommendation(3);
+        rt.note_wait_recommendation(4);
+        rt.note_wait_recommendation(3);
+        assert_eq!(rt.skip_frames_remaining, 4);
+    }
     use std::hint::black_box;
     use std::time::Instant;
 

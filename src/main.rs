@@ -1852,6 +1852,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let _timer_resolution = frame_timer::TimerResolution::request_1ms();
+    frame_timer::raise_process_priority();
 
     let net_mode = parse_args();
     let log_tag = match &net_mode {
@@ -2813,6 +2814,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         cfg.volume_percent = fields.volume_percent;
                                         cfg.audio_buffer = fields.audio_buffer;
                                         cfg.input_delay = fields.input_delay;
+                                        cfg.input_delay_auto = fields.input_delay_auto;
                                         cfg.runahead = fields.runahead;
                                         cfg.runahead_online = fields.runahead_online;
                                         cfg.discord_rpc_enabled = fields.discord_rpc_enabled;
@@ -6252,16 +6254,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             )
                                             .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
                                         }
-                                        matchmaking::MatchTransport::Direct { peer_addr } => {
+                                        matchmaking::MatchTransport::Direct { peer_addr, rtt_ms } => {
                                             // ── DIRECT UDP PATH ──
                                             relay_chat = None;
+                                            let input_delay = netplay::session_input_delay(
+                                                cfg.input_delay_auto,
+                                                cfg.input_delay,
+                                                rtt_ms,
+                                            );
+                                            let delay_line = format!(
+                                                "[session] input delay {input_delay}f (auto={} rtt={})",
+                                                cfg.input_delay_auto,
+                                                rtt_ms.map_or("n/a".to_string(), |r| format!("{r}ms"))
+                                            );
+                                            println!("[net] {delay_line}");
+                                            if let Some(f) = log.as_mut() {
+                                                use std::io::Write;
+                                                let _ = writeln!(f, "{delay_line}");
+                                            }
+                                            lines.push(delay_line);
                                             let log_ref = &mut log;
                                             let lines_ref = &mut lines;
                                             netplay::start_session_verbose(
                                                 menu::DEFAULT_NETPLAY_PORT,
                                                 local_handle,
                                                 peer_addr,
-                                                cfg.input_delay,
+                                                input_delay,
                                                 |line: &str| {
                                                     println!("[net] {}", line);
                                                     if let Some(f) = log_ref.as_mut() {

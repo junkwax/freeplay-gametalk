@@ -180,7 +180,11 @@ pub fn ensure_core_loaded(
         let desired = AudioSpecDesired {
             freq: Some(if rate > 0 { rate } else { 48000 }),
             channels: Some(2),
-            samples: Some(2048),
+            // SDL takes the device buffer out of the queue in one bite, so
+            // its size is both a latency floor and the sawtooth the pacer
+            // steers through. 2048 (43 ms) put the old 320 ms default out of
+            // reach of anything lower; 512 is ~11 ms.
+            samples: Some(512),
         };
         match audio_subsystem.open_queue::<i16, _>(None, &desired) {
             Ok(q) => {

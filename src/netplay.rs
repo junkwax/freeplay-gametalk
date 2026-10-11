@@ -48,6 +48,35 @@ pub type Session = P2PSession<GgrsConfig>;
 /// ggrs will actually compare, instead of every frame.
 pub const DESYNC_INTERVAL: u32 = 30;
 
+/// MK2's frame period (18281 µs), in ms.
+const FRAME_MS: f32 = 18.281;
+/// Floor for auto delay. At 0, every input change on even a LAN arrives a
+/// fraction of a frame late and costs a rollback (a 2.4 MB load + resim);
+/// one frame absorbs that for 18 ms.
+const AUTO_DELAY_MIN: u32 = 1;
+/// Ceiling: the ROM's online combo slack covers up to 6 frames without
+/// dropping specials (see `Config::input_delay`).
+const AUTO_DELAY_MAX: u32 = 6;
+
+/// Input delay for a match with this RTT: the one-way trip in frames,
+/// rounded. Delay hides that much of the latency outright and rollback
+/// covers the rest, which keeps corrections around a frame either way
+/// instead of a fixed delay that's too much on LAN and too little
+/// cross-country.
+pub fn auto_input_delay(rtt_ms: u32) -> u32 {
+    let one_way_frames = rtt_ms as f32 / 2.0 / FRAME_MS;
+    (one_way_frames.round() as u32).clamp(AUTO_DELAY_MIN, AUTO_DELAY_MAX)
+}
+
+/// The delay a session should actually use: auto when enabled and we have
+/// a measurement, otherwise the player's manual setting.
+pub fn session_input_delay(auto: bool, manual: u32, rtt_ms: Option<u32>) -> u32 {
+    match (auto, rtt_ms) {
+        (true, Some(rtt)) => auto_input_delay(rtt),
+        _ => manual,
+    }
+}
+
 /// Shared session-builder config for both transports. MK2 runs ~54.7 Hz;
 /// ggrs wants the logical tick rate so its timing calculations (timesync,
 /// drift detection) are correct — 55 is the closest integer. Only the
@@ -565,4 +594,26 @@ pub fn probe_connection(
     }
     report.duration_ms = start.elapsed().as_millis();
     report
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{auto_input_delay, session_input_delay};
+
+    #[test]
+    fn auto_delay_tracks_one_way_latency() {
+        assert_eq!(auto_input_delay(2), 1); // LAN: floor
+        assert_eq!(auto_input_delay(30), 1);
+        assert_eq!(auto_input_delay(60), 2);
+        assert_eq!(auto_input_delay(100), 3);
+        assert_eq!(auto_input_delay(150), 4);
+        assert_eq!(auto_input_delay(400), 6); // ceiling
+    }
+
+    #[test]
+    fn manual_delay_used_without_measurement_or_auto() {
+        assert_eq!(session_input_delay(true, 3, None), 3);
+        assert_eq!(session_input_delay(false, 5, Some(20)), 5);
+        assert_eq!(session_input_delay(true, 5, Some(20)), 1);
+    }
 }

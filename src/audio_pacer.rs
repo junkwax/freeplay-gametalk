@@ -13,7 +13,9 @@
 //! frame's audio by at most `MAX_DEVIATION` (0.5%, below what anyone hears as
 //! pitch), stretching when the queue is short and compressing when it is
 //! long. Skipped frames then cost cushion instead of an audible gap, and the
-//! cushion refills on its own.
+//! cushion refills on its own. An integral term learns the device clock's
+//! drift, so the queue sits at target for the whole session instead of
+//! parked off it in proportion to the drift.
 //!
 //! Two hard limits stay for what rate control cannot absorb:
 //! - an empty queue (a real underrun) is refilled with silence to half the
@@ -30,6 +32,18 @@ const BYTES_PER_STEREO_FRAME: u32 = 4;
 /// Headroom above target before a frame is dropped outright.
 const OVERFLOW_HEADROOM_MS: u32 = 100;
 const STATS_INTERVAL: Duration = Duration::from_secs(5);
+/// Smoothing for the fill that steers the rate. The raw fill is a sawtooth:
+/// a frame's audio lands at once, and the device takes it back out a
+/// callback buffer at a time. Steering off the raw value makes the error
+/// term mostly sawtooth phase; the average (~10 calls, ~180 ms) is the
+/// cushion that drift actually moves.
+const FILL_SMOOTHING: f64 = 0.1;
+/// Integral gain, per call, on the fill error. Proportional steering alone
+/// parks the queue off target by however much the device clock drifts —
+/// at +0.4% that is 20% of target, so a small cushion rides near empty for
+/// the whole session. The integral learns the drift and brings the queue
+/// back to target; at this gain a 0.4% drift is absorbed in ~10 s.
+const DRIFT_GAIN: f64 = 0.002;
 
 #[derive(Default, Debug, Clone, Copy, PartialEq)]
 pub struct PacerStats {
@@ -49,6 +63,10 @@ pub struct AudioPacer {
     t: f64,
     prev: (i16, i16),
     primed: bool,
+    fill_avg: Option<f64>,
+    /// Learned device-clock drift, as a fraction of `MAX_DEVIATION`. Kept
+    /// across `reset`: it belongs to the device, not the stream.
+    drift_trim: f64,
     out: Vec<i16>,
     stats: PacerStats,
     stats_since: Instant,
@@ -70,6 +88,8 @@ impl AudioPacer {
             t: 0.0,
             prev: (0, 0),
             primed: false,
+            fill_avg: None,
+            drift_trim: 0.0,
             out: Vec::new(),
             stats: PacerStats {
                 min_fill_ms: u32::MAX,
@@ -85,14 +105,16 @@ impl AudioPacer {
         self.t = 0.0;
         self.prev = (0, 0);
         self.primed = false;
+        self.fill_avg = None;
     }
 
     /// Input frames consumed per output frame for a queue at `fill_ms`.
     /// Below target: < 1 (stretch). Above: > 1 (compress).
-    fn step_for(fill_ms: u32, target_ms: u32) -> f64 {
+    fn step_for(&mut self, fill_ms: f64, target_ms: u32) -> f64 {
         let target = target_ms.max(1) as f64;
-        let err = (fill_ms as f64 - target) / target;
-        1.0 + MAX_DEVIATION * err.clamp(-1.0, 1.0)
+        let err = ((fill_ms - target) / target).clamp(-1.0, 1.0);
+        self.drift_trim = (self.drift_trim + DRIFT_GAIN * err).clamp(-1.0, 1.0);
+        1.0 + MAX_DEVIATION * (err + self.drift_trim).clamp(-1.0, 1.0)
     }
 
     /// Resample interleaved stereo `input` at `step`, appending to `self.out`.
@@ -165,10 +187,16 @@ impl AudioPacer {
             let frames = (freq as u64 * (target_ms / 2) as u64 / 1000) as usize;
             self.out.resize(frames * 2, 0);
             self.primed = true;
-            let step = Self::step_for(target_ms / 2, target_ms);
+            self.fill_avg = Some((target_ms / 2) as f64);
+            let step = self.step_for((target_ms / 2) as f64, target_ms);
             self.resample(input, step);
         } else {
-            let step = Self::step_for(fill_ms, target_ms);
+            let avg = match self.fill_avg {
+                Some(a) => a + FILL_SMOOTHING * (fill_ms as f64 - a),
+                None => fill_ms as f64,
+            };
+            self.fill_avg = Some(avg);
+            let step = self.step_for(avg, target_ms);
             self.resample(input, step);
         }
         self.stats.out_frames += (self.out.len() / 2) as u64;
@@ -294,6 +322,157 @@ mod tests {
         let n = p.process(&input, bytes_for_ms(TARGET + OVERFLOW_HEADROOM_MS), FREQ, TARGET).len();
         assert_eq!(n, 0);
         assert_eq!(p.stats.drops, 1);
+    }
+
+    struct SimResult {
+        /// Device callbacks that found less than a full buffer queued — each
+        /// one is an audible gap.
+        starved: u32,
+        drops: u64,
+        mean_fill_ms: f64,
+        max_fill_ms: f64,
+        min_fill_ms: f64,
+    }
+
+    /// Long-session model of the real pipeline: the frame loop produces one
+    /// MK2 frame of audio every 18.281 ms (with timer jitter, rare scheduler
+    /// hiccups and spread-out GGRS wait skips), and a device whose clock is
+    /// off by `drift` pulls `device_frames` at a time from the SDL queue.
+    fn simulate(target_ms: u32, device_frames: u32, drift: f64, minutes: f64, seed: u64) -> SimResult {
+        simulate_with(target_ms, device_frames, drift, minutes, seed, true, true)
+    }
+
+    fn simulate_with(
+        target_ms: u32,
+        device_frames: u32,
+        drift: f64,
+        minutes: f64,
+        seed: u64,
+        skips: bool,
+        hiccups: bool,
+    ) -> SimResult {
+        const FRAME_S: f64 = 0.018281;
+        let mut rng = seed | 1;
+        let mut rand = move || {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            (rng >> 11) as f64 / (1u64 << 53) as f64
+        };
+
+        let mut p = AudioPacer::new(true);
+        let dev_period = device_frames as f64 / (FREQ as f64 * (1.0 + drift));
+        let mut next_cb = dev_period;
+        let mut queue: f64 = 0.0; // stereo frames
+        let mut acc = 0.0;
+        let mut phase = 0.0;
+        let warmup = 2.0;
+        let (mut starved, mut fill_sum, mut fill_n, mut max_fill) = (0u32, 0.0, 0u64, 0.0f64);
+        let mut min_fill = f64::MAX;
+        let ticks = (minutes * 60.0 / FRAME_S) as u64;
+
+        for k in 0..ticks {
+            let mut jitter = rand() * 0.001;
+            if hiccups && rand() < 0.005 {
+                jitter += 0.006 + rand() * 0.004;
+            }
+            let now = k as f64 * FRAME_S + jitter;
+
+            while next_cb <= now {
+                if next_cb > warmup {
+                    min_fill = min_fill.min(queue * 1000.0 / FREQ as f64);
+                    if queue < device_frames as f64 {
+                        starved += 1;
+                    }
+                }
+                queue = (queue - device_frames as f64).max(0.0);
+                next_cb += dev_period;
+            }
+
+            // A 3-frame time-sync debt every ~30 s, paid one frame at a time
+            // (netcore spreads them). Both peers pace off the same 18281 µs
+            // timer, so steady skipping only comes from the other side
+            // hitching; a constant 3-per-6 s would be a 0.9% deficit, beyond
+            // what any 0.5% rate control can refill.
+            let skip = skips && k > 0 && matches!(k % 1650, 0 | 2 | 4);
+            if skip {
+                continue;
+            }
+            acc += FREQ as f64 * FRAME_S;
+            let n = acc as usize;
+            acc -= n as f64;
+            let input = tone(n, &mut phase);
+            let out = p.process(&input, (queue as u32) * BYTES_PER_STEREO_FRAME, FREQ, target_ms).len() / 2;
+            queue += out as f64;
+
+            if now > warmup {
+                let fill = queue * 1000.0 / FREQ as f64;
+                fill_sum += fill;
+                fill_n += 1;
+                max_fill = max_fill.max(fill);
+            }
+        }
+        SimResult {
+            starved,
+            drops: p.stats.drops,
+            mean_fill_ms: fill_sum / fill_n.max(1) as f64,
+            max_fill_ms: max_fill,
+            min_fill_ms: min_fill,
+        }
+    }
+
+    /// `cargo test --release sweep -- --ignored --nocapture` prints the
+    /// table used to pick `AudioBuffer::ms`.
+    /// The headline guarantee: 45 minutes (30+ rounds) at the default buffer,
+    /// with jitter, hiccups, time-sync skips and real-world clock drift,
+    /// without one audible gap or dropped frame.
+    #[test]
+    fn default_buffer_survives_a_long_session_without_gaps() {
+        let target = crate::config::AudioBuffer::default().ms();
+        for (i, drift) in [-0.001, 0.0, 0.001].iter().enumerate() {
+            let r = simulate(target, 512, *drift, 45.0, 0x51ed + i as u64);
+            assert_eq!(r.starved, 0, "drift {drift}: {} gaps", r.starved);
+            assert_eq!(r.drops, 0, "drift {drift}: {} drops", r.drops);
+        }
+    }
+
+    /// Proportional steering alone parks the queue at ~20% of target under
+    /// +0.4% drift; the learned trim must bring it back near target.
+    #[test]
+    fn drift_is_learned_not_parked_off_target() {
+        let r = simulate_with(60, 512, 0.004, 5.0, 3, false, false);
+        assert_eq!(r.starved, 0);
+        assert!(r.min_fill_ms > 25.0, "min fill {:.1}ms", r.min_fill_ms);
+    }
+
+    #[test]
+    #[ignore]
+    fn diagnose_starvation() {
+        for (skips, hiccups) in [(false, false), (true, false), (false, true), (true, true)] {
+            let r = simulate_with(60, 512, 0.0, 10.0, 7, skips, hiccups);
+            println!(
+                "skips={skips:5} hiccups={hiccups:5}: starved={} min={:.1}ms mean={:.1}ms max={:.1}ms",
+                r.starved, r.min_fill_ms, r.mean_fill_ms, r.max_fill_ms
+            );
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn sweep_targets_over_long_sessions() {
+        for dev in [256u32, 512, 1024] {
+            for target in [20u32, 30, 40, 50, 60, 80] {
+                let mut line = format!("dev={dev:5} target={target:3}ms |");
+                for (i, drift) in [-0.004, -0.001, 0.0, 0.001, 0.004].iter().enumerate() {
+                    let r = simulate(target, dev, *drift, 20.0, 0x9e37 + i as u64);
+                    line += &format!(
+                        " {:+.1}%: starved={:4} drops={} mean={:4.0}ms max={:4.0}ms |",
+                        drift * 100.0, r.starved, r.drops, r.mean_fill_ms, r.max_fill_ms
+                    );
+                }
+                println!("{line}");
+            }
+        }
     }
 
     #[test]
