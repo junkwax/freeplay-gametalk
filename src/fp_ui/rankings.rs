@@ -55,7 +55,15 @@ pub fn draw(
         theme::ACCENT,
     )?;
     let (tx, ty) = scale.point(SIDE_PAD, TOP + 26.0);
-    fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(58.0), "RANKINGS", tx, ty, theme::TEXT)?;
+    fonts.draw(
+        canvas,
+        FpFont::SairaCondensedBold,
+        scale.font_px(58.0),
+        "RANKINGS",
+        tx,
+        ty,
+        theme::TEXT,
+    )?;
 
     let body_top = TOP + 26.0 + 70.0;
     let body_h = 620.0;
@@ -69,10 +77,26 @@ pub fn draw(
 
     match leaderboard {
         LeaderboardState::Loading => {
-            draw_status(canvas, fonts, scale, body_top, body_h, w, "Loading leaderboard\u{2026}")?;
+            draw_status(
+                canvas,
+                fonts,
+                scale,
+                body_top,
+                body_h,
+                w,
+                "Loading leaderboard\u{2026}",
+            )?;
         }
         LeaderboardState::Error(message) => {
-            draw_status(canvas, fonts, scale, body_top, body_h, w, &format!("Leaderboard unavailable: {message}"))?;
+            draw_status(
+                canvas,
+                fonts,
+                scale,
+                body_top,
+                body_h,
+                w,
+                &format!("Leaderboard unavailable: {message}"),
+            )?;
         }
         LeaderboardState::Loaded(rows) => {
             draw_table(canvas, fonts, scale, body_top, w, rows, username)?;
@@ -93,7 +117,11 @@ pub fn draw(
 /// the Main Menu's "II" and the Play submenu's "PLAY" (`main_menu.rs`'s
 /// `draw_ghost_watermark`), sized/positioned per the mockup's own
 /// `right:-40px;top:56%` + `skewX(-9deg)`.
-fn draw_ghost_watermark(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scale: &Scale) -> Result<(), String> {
+fn draw_ghost_watermark(
+    canvas: &mut Canvas<Window>,
+    fonts: &mut FpFontCache,
+    scale: &Scale,
+) -> Result<(), String> {
     let px = scale.font_px(560.0);
     let (w, h) = fonts.text_size(FpFont::SairaCondensedBlack, px, "#1");
     let (x, y) = scale.point(
@@ -102,10 +130,35 @@ fn draw_ghost_watermark(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, sc
     );
     let stroke_color = Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 71);
     let r = scale.len(1.0).round().max(1.0) as i32;
-    for (dx, dy) in [(-r, -r), (0, -r), (r, -r), (-r, 0), (r, 0), (-r, r), (0, r), (r, r)] {
-        fonts.draw_italic(canvas, FpFont::SairaCondensedBlack, px, "#1", x + dx, y + dy, stroke_color)?;
+    for (dx, dy) in [
+        (-r, -r),
+        (0, -r),
+        (r, -r),
+        (-r, 0),
+        (r, 0),
+        (-r, r),
+        (0, r),
+        (r, r),
+    ] {
+        fonts.draw_italic(
+            canvas,
+            FpFont::SairaCondensedBlack,
+            px,
+            "#1",
+            x + dx,
+            y + dy,
+            stroke_color,
+        )?;
     }
-    fonts.draw_italic(canvas, FpFont::SairaCondensedBlack, px, "#1", x, y, Color::RGB(0x0c, 0x0c, 0x11))?;
+    fonts.draw_italic(
+        canvas,
+        FpFont::SairaCondensedBlack,
+        px,
+        "#1",
+        x,
+        y,
+        Color::RGB(0x0c, 0x0c, 0x11),
+    )?;
     Ok(())
 }
 
@@ -119,8 +172,19 @@ fn draw_status(
     text: &str,
 ) -> Result<(), String> {
     let (tw, _) = fonts.text_size(FpFont::ChakraPetchMedium, scale.font_px(16.0), text);
-    let (x, y) = scale.point(SIDE_PAD + (w - tw as f32 / scale.s) / 2.0, top + h / 2.0 - 8.0);
-    fonts.draw(canvas, FpFont::ChakraPetchMedium, scale.font_px(16.0), text, x, y, theme::DIM)?;
+    let (x, y) = scale.point(
+        SIDE_PAD + (w - tw as f32 / scale.s) / 2.0,
+        top + h / 2.0 - 8.0,
+    );
+    fonts.draw(
+        canvas,
+        FpFont::ChakraPetchMedium,
+        scale.font_px(16.0),
+        text,
+        x,
+        y,
+        theme::DIM,
+    )?;
     Ok(())
 }
 
@@ -134,17 +198,39 @@ fn draw_table(
     username: &str,
 ) -> Result<(), String> {
     let header_h = 44.0;
-    let cols = [SIDE_PAD + 24.0, SIDE_PAD + 140.0, SIDE_PAD + w - 280.0, SIDE_PAD + w - 190.0, SIDE_PAD + w - 100.0];
+    let cols = [
+        SIDE_PAD + 24.0,
+        SIDE_PAD + 140.0,
+        SIDE_PAD + w - 280.0,
+        SIDE_PAD + w - 190.0,
+        SIDE_PAD + w - 100.0,
+    ];
     let headers = ["RANK", "CODENAME", "W", "L", "RATING"];
     for (i, h) in headers.iter().enumerate() {
         let (hx, hy) = scale.point(cols[i], top + 14.0);
-        fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(11.0), h, hx, hy, Color::RGB(0x5a, 0x5a, 0x62))?;
+        fonts.draw(
+            canvas,
+            FpFont::ChakraPetchSemiBold,
+            scale.font_px(11.0),
+            h,
+            hx,
+            hy,
+            Color::RGB(0x5a, 0x5a, 0x62),
+        )?;
     }
     canvas.set_draw_color(Color::RGBA(255, 255, 255, 18));
     canvas.fill_rect(Some(scale.rect(SIDE_PAD, top + header_h, w, 1.0)))?;
 
     if rows.is_empty() {
-        draw_status(canvas, fonts, scale, top + header_h, 620.0 - header_h, w, "No ranked players yet")?;
+        draw_status(
+            canvas,
+            fonts,
+            scale,
+            top + header_h,
+            620.0 - header_h,
+            w,
+            "No ranked players yet",
+        )?;
         return Ok(());
     }
 
@@ -153,7 +239,12 @@ fn draw_table(
         let ry = top + header_h + i as f32 * row_h;
         let is_you = row.username.eq_ignore_ascii_case(username);
         if is_you {
-            canvas.set_draw_color(Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 22));
+            canvas.set_draw_color(Color::RGBA(
+                theme::ACCENT.r,
+                theme::ACCENT.g,
+                theme::ACCENT.b,
+                22,
+            ));
             canvas.fill_rect(Some(scale.rect(SIDE_PAD, ry, w, row_h)))?;
             canvas.set_draw_color(theme::ACCENT);
             canvas.fill_rect(Some(scale.rect(SIDE_PAD, ry, 4.0, row_h)))?;
@@ -175,38 +266,122 @@ fn draw_table(
         // different sizes that don't share a baseline that way.
         let rank_text = format!("{:02}", i + 1);
         let rank_px = scale.font_px(27.0);
-        let (rank_inset, rank_vis_h) = fonts.visible_span(FpFont::SairaCondensedBlack, rank_px, &rank_text);
-        let (rx, ry2) = scale.point(cols[0], ry + row_h / 2.0 - (rank_vis_h as f32 / scale.s) / 2.0 - rank_inset as f32 / scale.s);
-        fonts.draw(canvas, FpFont::SairaCondensedBlack, rank_px, &rank_text, rx, ry2, rank_color)?;
+        let (rank_inset, rank_vis_h) =
+            fonts.visible_span(FpFont::SairaCondensedBlack, rank_px, &rank_text);
+        let (rx, ry2) = scale.point(
+            cols[0],
+            ry + row_h / 2.0 - (rank_vis_h as f32 / scale.s) / 2.0 - rank_inset as f32 / scale.s,
+        );
+        fonts.draw(
+            canvas,
+            FpFont::SairaCondensedBlack,
+            rank_px,
+            &rank_text,
+            rx,
+            ry2,
+            rank_color,
+        )?;
 
-        let name_color = if is_you { theme::TEXT } else { Color::RGB(0xf2, 0xf2, 0xee) };
+        let name_color = if is_you {
+            theme::TEXT
+        } else {
+            Color::RGB(0xf2, 0xf2, 0xee)
+        };
         let name_px = scale.font_px(20.0);
-        let (name_inset, name_vis_h) = fonts.visible_span(FpFont::SairaSemiBold, name_px, &row.username);
-        let (nx, ny) = scale.point(cols[1], ry + row_h / 2.0 - (name_vis_h as f32 / scale.s) / 2.0 - name_inset as f32 / scale.s);
-        fonts.draw(canvas, FpFont::SairaSemiBold, name_px, &row.username, nx, ny, name_color)?;
+        let (name_inset, name_vis_h) =
+            fonts.visible_span(FpFont::SairaSemiBold, name_px, &row.username);
+        let (nx, ny) = scale.point(
+            cols[1],
+            ry + row_h / 2.0 - (name_vis_h as f32 / scale.s) / 2.0 - name_inset as f32 / scale.s,
+        );
+        fonts.draw(
+            canvas,
+            FpFont::SairaSemiBold,
+            name_px,
+            &row.username,
+            nx,
+            ny,
+            name_color,
+        )?;
         if is_you {
             let you_px = scale.font_px(11.0);
-            let (you_inset, you_vis_h) = fonts.visible_span(FpFont::ChakraPetchSemiBold, you_px, "YOU");
-            let (yx, yy) = scale.point(cols[1] + 220.0, ry + row_h / 2.0 - (you_vis_h as f32 / scale.s) / 2.0 - you_inset as f32 / scale.s);
-            fonts.draw(canvas, FpFont::ChakraPetchSemiBold, you_px, "YOU", yx, yy, theme::ACCENT)?;
+            let (you_inset, you_vis_h) =
+                fonts.visible_span(FpFont::ChakraPetchSemiBold, you_px, "YOU");
+            let (yx, yy) = scale.point(
+                cols[1] + 220.0,
+                ry + row_h / 2.0 - (you_vis_h as f32 / scale.s) / 2.0 - you_inset as f32 / scale.s,
+            );
+            fonts.draw(
+                canvas,
+                FpFont::ChakraPetchSemiBold,
+                you_px,
+                "YOU",
+                yx,
+                yy,
+                theme::ACCENT,
+            )?;
         }
 
         let wl_px = scale.font_px(16.0);
         let wins_text = row.wins.to_string();
-        let (wins_inset, wins_vis_h) = fonts.visible_span(FpFont::ChakraPetchMedium, wl_px, &wins_text);
-        let (wx, wy) = scale.point(cols[2], ry + row_h / 2.0 - (wins_vis_h as f32 / scale.s) / 2.0 - wins_inset as f32 / scale.s);
-        fonts.draw(canvas, FpFont::ChakraPetchMedium, wl_px, &wins_text, wx, wy, theme::GREEN)?;
+        let (wins_inset, wins_vis_h) =
+            fonts.visible_span(FpFont::ChakraPetchMedium, wl_px, &wins_text);
+        let (wx, wy) = scale.point(
+            cols[2],
+            ry + row_h / 2.0 - (wins_vis_h as f32 / scale.s) / 2.0 - wins_inset as f32 / scale.s,
+        );
+        fonts.draw(
+            canvas,
+            FpFont::ChakraPetchMedium,
+            wl_px,
+            &wins_text,
+            wx,
+            wy,
+            theme::GREEN,
+        )?;
         let losses_text = row.losses.to_string();
-        let (losses_inset, losses_vis_h) = fonts.visible_span(FpFont::ChakraPetchMedium, wl_px, &losses_text);
-        let (lx, ly) = scale.point(cols[3], ry + row_h / 2.0 - (losses_vis_h as f32 / scale.s) / 2.0 - losses_inset as f32 / scale.s);
-        fonts.draw(canvas, FpFont::ChakraPetchMedium, wl_px, &losses_text, lx, ly, Color::RGB(0x7a, 0x7a, 0x82))?;
+        let (losses_inset, losses_vis_h) =
+            fonts.visible_span(FpFont::ChakraPetchMedium, wl_px, &losses_text);
+        let (lx, ly) = scale.point(
+            cols[3],
+            ry + row_h / 2.0
+                - (losses_vis_h as f32 / scale.s) / 2.0
+                - losses_inset as f32 / scale.s,
+        );
+        fonts.draw(
+            canvas,
+            FpFont::ChakraPetchMedium,
+            wl_px,
+            &losses_text,
+            lx,
+            ly,
+            Color::RGB(0x7a, 0x7a, 0x82),
+        )?;
 
-        let rating_color = if is_you { theme::TEXT } else { Color::RGB(0xcf, 0xcf, 0xc9) };
+        let rating_color = if is_you {
+            theme::TEXT
+        } else {
+            Color::RGB(0xcf, 0xcf, 0xc9)
+        };
         let rating_px = scale.font_px(17.0);
         let rating_text = row.rating.to_string();
-        let (rating_inset, rating_vis_h) = fonts.visible_span(FpFont::ChakraPetchSemiBold, rating_px, &rating_text);
-        let (gx, gy) = scale.point(cols[4], ry + row_h / 2.0 - (rating_vis_h as f32 / scale.s) / 2.0 - rating_inset as f32 / scale.s);
-        fonts.draw(canvas, FpFont::ChakraPetchSemiBold, rating_px, &rating_text, gx, gy, rating_color)?;
+        let (rating_inset, rating_vis_h) =
+            fonts.visible_span(FpFont::ChakraPetchSemiBold, rating_px, &rating_text);
+        let (gx, gy) = scale.point(
+            cols[4],
+            ry + row_h / 2.0
+                - (rating_vis_h as f32 / scale.s) / 2.0
+                - rating_inset as f32 / scale.s,
+        );
+        fonts.draw(
+            canvas,
+            FpFont::ChakraPetchSemiBold,
+            rating_px,
+            &rating_text,
+            gx,
+            gy,
+            rating_color,
+        )?;
     }
 
     Ok(())

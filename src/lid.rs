@@ -208,7 +208,11 @@ mod windows {
             Ok(String::from_utf8_lossy(&out.stdout).into_owned())
         } else {
             let err = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            Err(if err.is_empty() { format!("powercfg {}", out.status) } else { err })
+            Err(if err.is_empty() {
+                format!("powercfg {}", out.status)
+            } else {
+                err
+            })
         }
     }
 
@@ -221,7 +225,13 @@ mod windows {
     }
 
     pub fn set_ac_lid_action(scheme: &str, value: u32) -> Result<(), String> {
-        powercfg(&["/setacvalueindex", scheme, "SUB_BUTTONS", "LIDACTION", &value.to_string()])?;
+        powercfg(&[
+            "/setacvalueindex",
+            scheme,
+            "SUB_BUTTONS",
+            "LIDACTION",
+            &value.to_string(),
+        ])?;
         // Writing an index doesn't apply it until the plan is re-activated.
         powercfg(&["/setactive", "SCHEME_CURRENT"])?;
         Ok(())

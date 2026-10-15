@@ -293,15 +293,16 @@ impl RpcClient {
     fn details_for(&self, u: &RpcUpdate) -> (String, String) {
         let state = &u.state;
 
+        let game = crate::game::current().short;
         let details = match state {
-            RpcState::Menu => "In Lobby",
-            RpcState::Playing => "Lab Mode",
-            RpcState::Training => "Lab Mode",
-            RpcState::Matchmaking => "MK2 Ranked Queue",
-            RpcState::Hosting => "Hosting MK2 Spar",
-            RpcState::Joining => "Joining MK2 Match",
-            RpcState::Netplay => "MK2 Ranked Match",
-            RpcState::NetplayVs(_) => "MK2 Ranked Match",
+            RpcState::Menu => "In Lobby".to_string(),
+            RpcState::Playing => "Lab Mode".to_string(),
+            RpcState::Training => "Lab Mode".to_string(),
+            RpcState::Matchmaking => format!("{game} Ranked Queue"),
+            RpcState::Hosting => format!("Hosting {game} Spar"),
+            RpcState::Joining => format!("Joining {game} Match"),
+            RpcState::Netplay => format!("{game} Ranked Match"),
+            RpcState::NetplayVs(_) => format!("{game} Ranked Match"),
         };
 
         let mut state_str = match state {

@@ -21,9 +21,7 @@ use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-use crate::retro::{
-    Core, RETRO_DEVICE_ID_JOYPAD_SELECT, RETRO_DEVICE_ID_JOYPAD_START,
-};
+use crate::retro::{Core, RETRO_DEVICE_ID_JOYPAD_SELECT, RETRO_DEVICE_ID_JOYPAD_START};
 
 /// Persistent counter of how many times we've recorded vs each peer.
 /// Used to cap netplay auto-capture at N sessions per opponent.
@@ -191,6 +189,10 @@ pub struct Recording {
 impl Recording {
     /// Start recording. Captures the current savestate as the replay anchor.
     pub fn start(core: &Core) -> Option<Self> {
+        // The drone library is MK2's; see `session::maybe_start_net_recording`.
+        if !crate::game::current().mk2_tooling {
+            return None;
+        }
         let state = core.save_state()?;
         println!(
             "[ghost] Recording started ({} bytes anchor state)",

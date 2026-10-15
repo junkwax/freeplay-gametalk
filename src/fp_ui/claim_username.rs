@@ -48,7 +48,11 @@ pub fn draw(
     // No confirmed identity yet — this screen exists specifically because
     // one doesn't exist, so the header's profile chip shows the in-progress
     // value rather than a blank/placeholder name.
-    let header_name = if value.trim().is_empty() { "PLAYER" } else { value };
+    let header_name = if value.trim().is_empty() {
+        "PLAYER"
+    } else {
+        value
+    };
     chrome::draw_header(canvas, fonts, scale, header_name, true, None)?;
 
     let card_h = PAD_TOP + 30.0 + 44.0 + 24.0 + INPUT_H + 22.0 + 30.0 + BTN_H + PAD_BOTTOM;
@@ -79,22 +83,50 @@ pub fn draw(
     )?;
     y += 30.0;
     let (tx, ty) = scale.point(content_x, y);
-    fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(34.0), "CLAIM YOUR CALLSIGN", tx, ty, theme::TEXT)?;
+    fonts.draw(
+        canvas,
+        FpFont::SairaCondensedBold,
+        scale.font_px(34.0),
+        "CLAIM YOUR CALLSIGN",
+        tx,
+        ty,
+        theme::TEXT,
+    )?;
     y += 44.0;
 
     let hint = "This is the name other players see. Edit it, then claim it.";
     let (hx, hy) = scale.point(content_x, y);
-    fonts.draw(canvas, FpFont::SairaSemiBold, scale.font_px(15.0), hint, hx, hy, Color::RGB(0x8a, 0x8a, 0x92))?;
+    fonts.draw(
+        canvas,
+        FpFont::SairaSemiBold,
+        scale.font_px(15.0),
+        hint,
+        hx,
+        hy,
+        Color::RGB(0x8a, 0x8a, 0x92),
+    )?;
     y += 24.0;
 
     // Text input box, blinking caret after the typed value.
     let input_w = CARD_W - PAD_X * 2.0;
     canvas.set_draw_color(Color::RGBA(255, 255, 255, 15));
     canvas.fill_rect(Some(scale.rect(content_x, y, input_w, INPUT_H)))?;
-    canvas.set_draw_color(if checking { Color::RGBA(255, 255, 255, 40) } else { theme::ACCENT });
+    canvas.set_draw_color(if checking {
+        Color::RGBA(255, 255, 255, 40)
+    } else {
+        theme::ACCENT
+    });
     canvas.draw_rect(scale.rect(content_x, y, input_w, INPUT_H))?;
     let (vx, vy) = scale.point(content_x + 20.0, y + INPUT_H / 2.0 - 15.0);
-    let (vw, _) = fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(30.0), value, vx, vy, theme::TEXT)?;
+    let (vw, _) = fonts.draw(
+        canvas,
+        FpFont::SairaCondensedBold,
+        scale.font_px(30.0),
+        value,
+        vx,
+        vy,
+        theme::TEXT,
+    )?;
     if !checking {
         let caret_x = content_x + 20.0 + (vw as f32 / scale.s) + 4.0;
         canvas.set_draw_color(theme::ACCENT);
@@ -106,11 +138,21 @@ pub fn draw(
     let dot_color = classify_status(status, checking);
     super::geometry::fill_circle(canvas, scale, content_x + 5.0, y - 6.0, 5.0, dot_color);
     let (sx, sy) = scale.point(content_x + 20.0, y - 14.0);
-    fonts.draw(canvas, FpFont::ChakraPetchMedium, scale.font_px(15.0), status, sx, sy, Color::RGB(0xcf, 0xcf, 0xc9))?;
+    fonts.draw(
+        canvas,
+        FpFont::ChakraPetchMedium,
+        scale.font_px(15.0),
+        status,
+        sx,
+        sy,
+        Color::RGB(0xcf, 0xcf, 0xc9),
+    )?;
     y += 30.0;
 
     let enabled = !checking && !value.trim().is_empty();
-    draw_submit_button(canvas, fonts, scale, content_x, y, input_w, BTN_H, enabled, checking)?;
+    draw_submit_button(
+        canvas, fonts, scale, content_x, y, input_w, BTN_H, enabled, checking,
+    )?;
 
     chrome::draw_footer(
         canvas,
@@ -120,13 +162,25 @@ pub fn draw(
             // Select is the keyboard here rather than the usual About link —
             // on the one screen a pad-only player must type on, that is the
             // more useful binding.
-            chrome::FooterPrompt { glyph: "SEL", label: "Keyboard", color: theme::TEXT },
+            chrome::FooterPrompt {
+                glyph: "SEL",
+                label: "Keyboard",
+                color: theme::TEXT,
+            },
             // "TRI" letters rather than the Unicode triangle glyph
             // (U+25B3) — missing from Saira Condensed Bold, same tofu
             // issue as PROMPT_BACK's U+25CB.
-            chrome::FooterPrompt { glyph: "TRI", label: "New Name", color: theme::BTN_TRIANGLE },
+            chrome::FooterPrompt {
+                glyph: "TRI",
+                label: "New Name",
+                color: theme::BTN_TRIANGLE,
+            },
             // Cross claims on this screen rather than the generic "Select".
-            chrome::FooterPrompt { glyph: "X", label: "Claim", color: theme::BTN_CROSS },
+            chrome::FooterPrompt {
+                glyph: "X",
+                label: "Claim",
+                color: theme::BTN_CROSS,
+            },
             chrome::PROMPT_BACK,
         ],
         FooterRight::Text("SELECT FOR KEYBOARD \u{b7} ENTER TO CLAIM"),
@@ -143,7 +197,11 @@ fn classify_status(status: &str, checking: bool) -> Color {
         return Color::RGB(0x8a, 0x8a, 0x92);
     }
     let lower = status.to_lowercase();
-    if lower.contains("taken") || lower.contains("invalid") || lower.contains("timed out") || lower.contains("stopped") {
+    if lower.contains("taken")
+        || lower.contains("invalid")
+        || lower.contains("timed out")
+        || lower.contains("stopped")
+    {
         theme::WARNING
     } else {
         theme::GREEN
@@ -175,9 +233,24 @@ fn draw_submit_button(
     canvas.set_draw_color(Color::RGBA(255, 255, 255, 26));
     canvas.draw_rect(scale.rect(x, y, w, h))?;
 
-    let label = if checking { "CHECKING\u{2026}" } else { "CLAIM CALLSIGN & CONTINUE" };
+    let label = if checking {
+        "CHECKING\u{2026}"
+    } else {
+        "CLAIM CALLSIGN & CONTINUE"
+    };
     let (tw, th) = fonts.text_size(FpFont::SairaCondensedBold, scale.font_px(22.0), label);
-    let (tx, ty) = scale.point(x + w / 2.0 - (tw as f32 / scale.s) / 2.0, y + h / 2.0 - (th as f32 / scale.s) / 2.0);
-    fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(22.0), label, tx, ty, text_color)?;
+    let (tx, ty) = scale.point(
+        x + w / 2.0 - (tw as f32 / scale.s) / 2.0,
+        y + h / 2.0 - (th as f32 / scale.s) / 2.0,
+    );
+    fonts.draw(
+        canvas,
+        FpFont::SairaCondensedBold,
+        scale.font_px(22.0),
+        label,
+        tx,
+        ty,
+        text_color,
+    )?;
     Ok(())
 }

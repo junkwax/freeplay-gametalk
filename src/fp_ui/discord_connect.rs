@@ -54,7 +54,16 @@ pub fn draw(
     let (ew, _) = fonts.text_size(FpFont::ChakraPetchSemiBold, epx, eyebrow);
     let etw = ew as f32 / scale.s + (eyebrow.len().saturating_sub(1)) as f32 * 6.0;
     let (ex, ey) = scale.point(center_x - etw / 2.0, y);
-    fonts.draw_tracked(canvas, FpFont::ChakraPetchSemiBold, epx, eyebrow, ex, ey, theme::ACCENT, scale.len(6.0).round() as i32)?;
+    fonts.draw_tracked(
+        canvas,
+        FpFont::ChakraPetchSemiBold,
+        epx,
+        eyebrow,
+        ex,
+        ey,
+        theme::ACCENT,
+        scale.len(6.0).round() as i32,
+    )?;
     y += 44.0;
 
     // Spinner: a faint full ring plus an accent "comet" — a head dot with a
@@ -62,7 +71,15 @@ pub fn draw(
     // mockup's border-top rotating circle (SDL has no arc primitive).
     let spin_cy = y + 28.0;
     let spin_r = 26.0;
-    geometry::stroke_circle(canvas, scale, center_x, spin_cy, spin_r, 2.0, Color::RGBA(255, 255, 255, 30));
+    geometry::stroke_circle(
+        canvas,
+        scale,
+        center_x,
+        spin_cy,
+        spin_r,
+        2.0,
+        Color::RGBA(255, 255, 255, 30),
+    );
     let t = (matchmaking::elapsed_ms() % 900) as f32 / 900.0;
     let head = t * std::f32::consts::TAU;
     for i in 0..12 {
@@ -83,14 +100,30 @@ pub fn draw(
     let spx = scale.font_px(24.0);
     let (sw, _) = fonts.text_size(FpFont::SairaCondensedBold, spx, &line);
     let (sx, sy) = scale.point(center_x - (sw as f32 / scale.s) / 2.0, y);
-    fonts.draw(canvas, FpFont::SairaCondensedBold, spx, &line, sx, sy, theme::TEXT)?;
+    fonts.draw(
+        canvas,
+        FpFont::SairaCondensedBold,
+        spx,
+        &line,
+        sx,
+        sy,
+        theme::TEXT,
+    )?;
     y += 40.0;
 
     let sub = "Complete login in your browser window.";
     let bpx = scale.font_px(14.0);
     let (bw, _) = fonts.text_size(FpFont::SairaMedium, bpx, sub);
     let (bx, by) = scale.point(center_x - (bw as f32 / scale.s) / 2.0, y);
-    fonts.draw(canvas, FpFont::SairaMedium, bpx, sub, bx, by, Color::RGB(0x8a, 0x8a, 0x92))?;
+    fonts.draw(
+        canvas,
+        FpFont::SairaMedium,
+        bpx,
+        sub,
+        bx,
+        by,
+        Color::RGB(0x8a, 0x8a, 0x92),
+    )?;
     y += 44.0;
 
     let hint = "CIRCLE TO CANCEL";
@@ -98,7 +131,16 @@ pub fn draw(
     let (hw, _) = fonts.text_size(FpFont::ChakraPetchMedium, hpx, hint);
     let htw = hw as f32 / scale.s + (hint.len().saturating_sub(1)) as f32 * 2.0;
     let (hx, hy) = scale.point(center_x - htw / 2.0, y);
-    fonts.draw_tracked(canvas, FpFont::ChakraPetchMedium, hpx, hint, hx, hy, Color::RGB(0x7a, 0x7a, 0x82), scale.len(2.0).round() as i32)?;
+    fonts.draw_tracked(
+        canvas,
+        FpFont::ChakraPetchMedium,
+        hpx,
+        hint,
+        hx,
+        hy,
+        Color::RGB(0x7a, 0x7a, 0x82),
+        scale.len(2.0).round() as i32,
+    )?;
 
     chrome::draw_footer(
         canvas,

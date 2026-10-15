@@ -91,7 +91,9 @@ pub enum MenuScreen {
 pub enum EditField {
     Username,
     StatsEmail,
-    ReplayNote { path: String },
+    ReplayNote {
+        path: String,
+    },
     /// Entering a lobby invite code to join a private lobby.
     JoinCode,
     /// Editing the peer address on Settings -> Test Connection. Commit puts
@@ -116,7 +118,11 @@ pub enum GhostEntry {
     /// straight from the file's own header (`ghost::read_ncgh_frame_count`)
     /// at scan time — real data, not fabricated, matching what
     /// `RemoteGhostMeta` already carries for remote entries.
-    Local { filename: String, path: String, frame_count: u32 },
+    Local {
+        filename: String,
+        path: String,
+        frame_count: u32,
+    },
     /// Catalogued on freeplay-stats but not yet downloaded. Pressing Enter
     /// kicks off the download to `ghosts/remote_<id>.ncgh`.
     Remote(RemoteGhostMeta),
@@ -175,7 +181,10 @@ impl ChallengeFormat {
 
     /// Index of this format in the chooser order.
     pub fn index(self) -> usize {
-        ChallengeFormat::ALL.iter().position(|f| *f == self).unwrap_or(0)
+        ChallengeFormat::ALL
+            .iter()
+            .position(|f| *f == self)
+            .unwrap_or(0)
     }
 
     /// Wire string sent to the signaling server's room/lobby format field.
@@ -268,8 +277,7 @@ impl Default for AppState {
 pub const MAIN_SETTINGS_INDEX: usize = 6;
 
 /// Common chat phrases offered as one-click inserts.
-pub const QUICK_PHRASES: [&str; 7] =
-    ["gg", "ggs", "wp", "one more?", "rematch?", "nice", "lag?"];
+pub const QUICK_PHRASES: [&str; 7] = ["gg", "ggs", "wp", "one more?", "rematch?", "nice", "lag?"];
 
 /// The quick phrase at an index (for the click handler).
 pub fn quick_phrase(idx: usize) -> &'static str {
@@ -288,15 +296,31 @@ pub fn test_state(name: &str) -> Option<AppState> {
                 menu_cursor: 0,
             }))
         }
-        "fp:playmenu" => return Some(AppState::FpUi(crate::fp_ui::FpScreen::PlayMenu { cursor: 0 })),
-        "fp:labmenu" => return Some(AppState::FpUi(crate::fp_ui::FpScreen::LabMenu { cursor: 0 })),
+        "fp:playmenu" => {
+            return Some(AppState::FpUi(crate::fp_ui::FpScreen::PlayMenu {
+                cursor: 0,
+            }))
+        }
+        "fp:labmenu" => {
+            return Some(AppState::FpUi(crate::fp_ui::FpScreen::LabMenu {
+                cursor: 0,
+            }))
+        }
         "fp:ghostselect" => {
             return Some(AppState::FpUi(crate::fp_ui::FpScreen::GhostSelect {
                 cursor: 0,
                 section: 0,
                 entries: vec![
-                    GhostEntry::Local { filename: "ghost_1720600000.ncgh".into(), path: "ghosts/ghost_1720600000.ncgh".into(), frame_count: 8420 },
-                    GhostEntry::Local { filename: "ghost_1720700000.ncgh".into(), path: "ghosts/ghost_1720700000.ncgh".into(), frame_count: 11340 },
+                    GhostEntry::Local {
+                        filename: "ghost_1720600000.ncgh".into(),
+                        path: "ghosts/ghost_1720600000.ncgh".into(),
+                        frame_count: 8420,
+                    },
+                    GhostEntry::Local {
+                        filename: "ghost_1720700000.ncgh".into(),
+                        path: "ghosts/ghost_1720700000.ncgh".into(),
+                        frame_count: 11340,
+                    },
                     GhostEntry::Remote(RemoteGhostMeta {
                         ghost_id: "g1".into(),
                         filename: "scorpion_pit.ncgh".into(),
@@ -460,8 +484,14 @@ pub fn test_state(name: &str) -> Option<AppState> {
             )))
         }
         "fp:settings:account" => {
-            let crate::fp_ui::FpScreen::Settings { fields, sidebar_focus, controls_player, test_conn_address, test_conn_lines, .. } =
-                crate::fp_ui::FpScreen::settings_from_cfg(&crate::config::load())
+            let crate::fp_ui::FpScreen::Settings {
+                fields,
+                sidebar_focus,
+                controls_player,
+                test_conn_address,
+                test_conn_lines,
+                ..
+            } = crate::fp_ui::FpScreen::settings_from_cfg(&crate::config::load())
             else {
                 unreachable!()
             };
@@ -476,8 +506,12 @@ pub fn test_state(name: &str) -> Option<AppState> {
             }));
         }
         "fp:settings:testconn" => {
-            let crate::fp_ui::FpScreen::Settings { fields, sidebar_focus, controls_player, .. } =
-                crate::fp_ui::FpScreen::settings_from_cfg(&crate::config::load())
+            let crate::fp_ui::FpScreen::Settings {
+                fields,
+                sidebar_focus,
+                controls_player,
+                ..
+            } = crate::fp_ui::FpScreen::settings_from_cfg(&crate::config::load())
             else {
                 unreachable!()
             };
@@ -634,9 +668,24 @@ pub fn test_state(name: &str) -> Option<AppState> {
                 status: String::new(),
                 chat: Vec::new(),
                 presence: vec![
-                    LobbyUser { player_id: "p1".into(), username: "ScorpionKiller".into(), status: "online".into(), rating: Some(1403) },
-                    LobbyUser { player_id: "p2".into(), username: "SubZeroFan".into(), status: "in lobby".into(), rating: Some(1521) },
-                    LobbyUser { player_id: "p3".into(), username: "Kano_Main".into(), status: "online".into(), rating: Some(1288) },
+                    LobbyUser {
+                        player_id: "p1".into(),
+                        username: "ScorpionKiller".into(),
+                        status: "online".into(),
+                        rating: Some(1403),
+                    },
+                    LobbyUser {
+                        player_id: "p2".into(),
+                        username: "SubZeroFan".into(),
+                        status: "in lobby".into(),
+                        rating: Some(1521),
+                    },
+                    LobbyUser {
+                        player_id: "p3".into(),
+                        username: "Kano_Main".into(),
+                        status: "online".into(),
+                        rating: Some(1288),
+                    },
                 ],
                 live_matches: Vec::new(),
                 challenge_pick: None,
@@ -652,9 +701,12 @@ pub fn test_state(name: &str) -> Option<AppState> {
                 lobbies: Vec::new(),
                 status: String::new(),
                 chat: Vec::new(),
-                presence: vec![
-                    LobbyUser { player_id: "p1".into(), username: "ScorpionKiller".into(), status: "online".into(), rating: Some(1403) },
-                ],
+                presence: vec![LobbyUser {
+                    player_id: "p1".into(),
+                    username: "ScorpionKiller".into(),
+                    status: "online".into(),
+                    rating: Some(1403),
+                }],
                 live_matches: Vec::new(),
                 challenge_pick: None,
                 incoming: Some(IncomingChallenge {
@@ -692,9 +744,12 @@ pub fn test_state(name: &str) -> Option<AppState> {
                     ranked: false,
                     private: true,
                     format: LobbyMatchFormat::UnrankedVs,
-                    members: vec![
-                        LobbyMemberInfo { username: "Respected_Hunter".into(), rating: Some(1502), queued: false, in_match: false },
-                    ],
+                    members: vec![LobbyMemberInfo {
+                        username: "Respected_Hunter".into(),
+                        rating: Some(1502),
+                        queued: false,
+                        in_match: false,
+                    }],
                     queue: vec![],
                     current: None,
                     ready_check: None,
@@ -717,9 +772,24 @@ pub fn test_state(name: &str) -> Option<AppState> {
                     private: true,
                     format: LobbyMatchFormat::UnrankedVs,
                     members: vec![
-                        LobbyMemberInfo { username: "Respected_Hunter".into(), rating: Some(1502), queued: true, in_match: false },
-                        LobbyMemberInfo { username: "Sub_Zero_Fan".into(), rating: Some(1610), queued: false, in_match: true },
-                        LobbyMemberInfo { username: "Kano_Main".into(), rating: Some(1480), queued: false, in_match: true },
+                        LobbyMemberInfo {
+                            username: "Respected_Hunter".into(),
+                            rating: Some(1502),
+                            queued: true,
+                            in_match: false,
+                        },
+                        LobbyMemberInfo {
+                            username: "Sub_Zero_Fan".into(),
+                            rating: Some(1610),
+                            queued: false,
+                            in_match: true,
+                        },
+                        LobbyMemberInfo {
+                            username: "Kano_Main".into(),
+                            rating: Some(1480),
+                            queued: false,
+                            in_match: true,
+                        },
                     ],
                     queue: vec!["Respected_Hunter".into()],
                     current: Some(LobbyCurrent {
@@ -748,8 +818,18 @@ pub fn test_state(name: &str) -> Option<AppState> {
                     private: true,
                     format: LobbyMatchFormat::UnrankedVs,
                     members: vec![
-                        LobbyMemberInfo { username: "Respected_Hunter".into(), rating: Some(1502), queued: false, in_match: false },
-                        LobbyMemberInfo { username: "Sub_Zero_Fan".into(), rating: Some(1610), queued: false, in_match: false },
+                        LobbyMemberInfo {
+                            username: "Respected_Hunter".into(),
+                            rating: Some(1502),
+                            queued: false,
+                            in_match: false,
+                        },
+                        LobbyMemberInfo {
+                            username: "Sub_Zero_Fan".into(),
+                            rating: Some(1610),
+                            queued: false,
+                            in_match: false,
+                        },
                     ],
                     queue: vec![],
                     current: None,
@@ -847,9 +927,12 @@ impl AppState {
                     NavResult::Stay
                 }
             },
-            AppState::Menu(MenuScreen::TextEdit { field, value, came_from, .. }) => {
-                NavResult::CommitText(field, value, came_from)
-            }
+            AppState::Menu(MenuScreen::TextEdit {
+                field,
+                value,
+                came_from,
+                ..
+            }) => NavResult::CommitText(field, value, came_from),
             _ => NavResult::Stay,
         }
     }
@@ -884,7 +967,8 @@ impl AppState {
         {
             if *cat == crate::fp_ui::settings::TEST_CONN_CAT_INDEX {
                 for c in s.chars() {
-                    if (c.is_ascii_digit() || c == '.' || c == ':') && test_conn_address.len() < 24 {
+                    if (c.is_ascii_digit() || c == '.' || c == ':') && test_conn_address.len() < 24
+                    {
                         test_conn_address.push(c);
                     }
                 }

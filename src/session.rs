@@ -131,6 +131,11 @@ pub fn maybe_start_net_recording(
     peer: std::net::SocketAddr,
     cap: u32,
 ) -> Option<ghost::NetRecording> {
+    // Ghost files carry no game tag yet, and the drone library is MK2's.
+    // Recording another game into it would hand MK2 drones it can't play.
+    if !crate::game::current().mk2_tooling {
+        return None;
+    }
     let key = ghost::peer_key(&peer);
     let count = lib.count_for(&key);
     if count >= cap {

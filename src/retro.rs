@@ -339,7 +339,34 @@ fn configure_environment_paths(dll_path: &str, rom_path: &str) {
     set_env_path(&LIBRETRO_PATH, PathBuf::from(dll_path));
     set_env_path(&SYSTEM_DIRECTORY, fallback.clone());
     set_env_path(&CONTENT_DIRECTORY, content_dir);
-    set_env_path(&SAVE_DIRECTORY, fallback);
+    set_env_path(&SAVE_DIRECTORY, isolated_save_directory(&fallback));
+}
+
+/// The core's save directory: a fresh, empty folder for this process only.
+///
+/// FBNeo loads `<save>/fbneo/<driver>.fs` - the cabinet's NVRAM/CMOS - inside
+/// `retro_load_game`, before the clean boot state is captured, and writes it
+/// back on unload. Each player's CMOS would then be baked into their own
+/// "canonical" netplay start state, and two peers would start a match from
+/// different machines. Fightcade avoids the same trap by never loading NVRAM
+/// in a netplay session. Here the core simply never finds one: every launch
+/// boots factory CMOS, which is also what MK2 online expects (`f_netplay`
+/// counts the hidden fighters as earned, so nothing earned is lost).
+fn isolated_save_directory(fallback: &Path) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("freeplay-core-save-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    match std::fs::create_dir_all(&dir) {
+        Ok(()) => dir,
+        Err(e) => {
+            // Still keep the core out of the install folder's fbneo/: a
+            // subfolder nothing else writes to is the next best thing.
+            println!("[retro] WARNING: temp save dir {} failed ({e}); using fallback", dir.display());
+            let alt = fallback.join("core-save-volatile");
+            let _ = std::fs::remove_dir_all(&alt);
+            let _ = std::fs::create_dir_all(&alt);
+            alt
+        }
+    }
 }
 
 unsafe fn write_env_path(cell: &'static OnceLock<CString>, data: *mut c_void, label: &str) -> bool {
@@ -435,6 +462,25 @@ extern "C" fn environment_cb(cmd: u32, data: *mut c_void) -> bool {
                             var.value = b"enabled\0".as_ptr() as *const c_char;
                             return true;
                         }
+                        if let Some(value) = crate::game::core_option(key_str) {
+                            // Interned per value: the core may keep the
+                            // pointer, so it has to outlive this call.
+                            static VALUES: Mutex<Vec<CString>> = Mutex::new(Vec::new());
+                            let mut values = VALUES.lock().unwrap_or_else(|e| e.into_inner());
+                            let idx = match values
+                                .iter()
+                                .position(|v| v.to_bytes() == value.as_bytes())
+                            {
+                                Some(i) => i,
+                                None => {
+                                    values.push(CString::new(value).expect("no NUL in option"));
+                                    values.len() - 1
+                                }
+                            };
+                            var.value = values[idx].as_ptr();
+                            crate::dlog!("retro", "core option {key_str}={value}");
+                            return true;
+                        }
                     }
                 }
                 false
@@ -514,16 +560,29 @@ extern "C" fn audio_sample_batch_cb(data: *const i16, frames: usize) -> usize {
 
 extern "C" fn input_poll_cb() {}
 
-extern "C" fn input_state_cb(port: u32, device: u32, index: u32, id: u32) -> i16 {
-    if device == RETRO_DEVICE_JOYPAD
-        && index == 0
-        && port < 2
-        && id < 16
-        && PADS.lock().expect("pads lock poisoned").state[port as usize][id as usize]
-    {
-        return 1;
+/// The app has two players; the cabinet may have more seats. Player 1 is
+/// always core port 0, player 2 is whichever port puts them on the other
+/// side (`game::Profile::second_player_port` — port 2 on NBA Jam's
+/// four-player cabinet). Every other seat reads as an empty stick, so the
+/// game fills it with the CPU.
+fn app_player_for_core_port(port: u32) -> Option<usize> {
+    if port == 0 {
+        Some(0)
+    } else if port == crate::game::current().second_player_port {
+        Some(1)
+    } else {
+        None
     }
-    0
+}
+
+extern "C" fn input_state_cb(port: u32, device: u32, index: u32, id: u32) -> i16 {
+    if device != RETRO_DEVICE_JOYPAD || index != 0 || id >= 16 {
+        return 0;
+    }
+    let Some(player) = app_player_for_core_port(port) else {
+        return 0;
+    };
+    i16::from(PADS.lock().expect("pads lock poisoned").state[player][id as usize])
 }
 
 /// Loaded core handle. Holds the `Library` so it stays alive, plus the
@@ -702,13 +761,14 @@ pub unsafe fn load(dll_path: &str, rom_path: &str) -> Result<Core, Box<dyn std::
     crate::dlog!("retro", "core dll={dll_path}");
     crate::dlog!("retro", "rom zip={rom_path}");
     configure_environment_paths(dll_path, rom_path);
+    crate::game::note_loaded_rom(rom_path);
     crate::dlog!("retro", "about to Library::new");
     let lib = load_core_library(dll_path)?;
     crate::dlog!("retro", "Library::new ok");
 
-    if let Ok(get_system_info) = lib.get::<Symbol<unsafe extern "C" fn(*mut RetroSystemInfo)>>(
-        b"retro_get_system_info\0",
-    ) {
+    if let Ok(get_system_info) =
+        lib.get::<Symbol<unsafe extern "C" fn(*mut RetroSystemInfo)>>(b"retro_get_system_info\0")
+    {
         crate::dlog!("retro", "about to call retro_get_system_info");
         let mut info = RetroSystemInfo {
             library_name: ptr::null(),

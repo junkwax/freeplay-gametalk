@@ -1,6 +1,8 @@
 //! Input abstraction layer.
 //!
-//! The frontend thinks in terms of **MK2 actions** (HighPunch, Block, Coin…).
+//! The frontend thinks in terms of **game actions** (HighPunch, Shoot, Coin…).
+//! Each game uses its own subset, in its own wire order — see
+//! `game::Profile::actions` and `actions()`.
 //! Raw SDL events are translated into actions via a `Bindings` table that the
 //! user can edit in the Controls menu and persist to config.toml.
 
@@ -28,6 +30,16 @@ pub enum Action {
     Block,
     Start,
     Coin,
+    // NBA Jam. Appended, never interleaved: config.toml stores bindings by
+    // variant name, and MK2's wire order is `Action::MK2`, not this enum.
+    Shoot,
+    Pass,
+    Turbo,
+}
+
+/// The current game's actions, in netplay wire order.
+pub fn actions() -> &'static [Action] {
+    crate::game::current().actions
 }
 
 /// Fingerprint of what `NetInput`'s bits *mean*.
@@ -44,11 +56,17 @@ pub enum Action {
 /// this exists now — the guard is worth having in place before the thing it
 /// guards can vary.
 pub fn action_set_fingerprint() -> String {
+    action_set_fingerprint_of(actions())
+}
+
+pub fn action_set_fingerprint_of(set: &[Action]) -> String {
     let mut h: u64 = 0xcbf29ce484222325;
-    for (i, a) in Action::ALL.iter().enumerate() {
-        for byte in (i as u64).to_le_bytes().iter().chain(
-            (a.retro_id() as u64).to_le_bytes().iter(),
-        ) {
+    for (i, a) in set.iter().enumerate() {
+        for byte in (i as u64)
+            .to_le_bytes()
+            .iter()
+            .chain((a.retro_id() as u64).to_le_bytes().iter())
+        {
             h ^= *byte as u64;
             h = h.wrapping_mul(0x100000001b3);
         }
@@ -67,7 +85,9 @@ pub fn action_set_fingerprint() -> String {
 pub const LEGACY_ACTION_SET: &str = "8b52357c";
 
 impl Action {
-    pub const ALL: [Action; 11] = [
+    /// MK2's set. Its order is the wire format every MK2 client has ever
+    /// shipped; never reorder it.
+    pub const MK2: [Action; 11] = [
         Action::Up,
         Action::Down,
         Action::Left,
@@ -77,6 +97,19 @@ impl Action {
         Action::HighKick,
         Action::LowKick,
         Action::Block,
+        Action::Start,
+        Action::Coin,
+    ];
+
+    /// NBA Jam's set: the stick, the cabinet's three buttons, start, coin.
+    pub const NBA_JAM: [Action; 9] = [
+        Action::Up,
+        Action::Down,
+        Action::Left,
+        Action::Right,
+        Action::Shoot,
+        Action::Pass,
+        Action::Turbo,
         Action::Start,
         Action::Coin,
     ];
@@ -94,6 +127,9 @@ impl Action {
             Action::Block => "Block",
             Action::Start => "Start",
             Action::Coin => "Coin",
+            Action::Shoot => "Shoot / Block",
+            Action::Pass => "Pass / Steal",
+            Action::Turbo => "Turbo",
         }
     }
 
@@ -119,6 +155,13 @@ impl Action {
             Action::Block => RETRO_DEVICE_ID_JOYPAD_L,
             Action::Start => RETRO_DEVICE_ID_JOYPAD_START,
             Action::Coin => RETRO_DEVICE_ID_JOYPAD_SELECT,
+            // NBA Jam has three plain buttons, so FBNeo gives it the generic
+            // layout: fire 1 -> B, fire 2 -> A, fire 3 -> Y. Its input list
+            // (d_tunit.cpp) wires fire 1 to the Turbo bit (0x40), fire 2 to
+            // Shoot (0x10) and fire 3 to Pass (0x20), matching MAME's names.
+            Action::Shoot => RETRO_DEVICE_ID_JOYPAD_A,
+            Action::Pass => RETRO_DEVICE_ID_JOYPAD_Y,
+            Action::Turbo => RETRO_DEVICE_ID_JOYPAD_B,
         }) as usize
     }
 }
@@ -234,6 +277,30 @@ impl Default for Bindings {
 }
 
 impl Bindings {
+    /// Give every action with no binding at all its default ones. A
+    /// config.toml written before NBA Jam existed has nothing for Shoot, Pass
+    /// or Turbo; without this an upgrading player couldn't play it until they
+    /// found the rebind screen. Never touches an action that has a binding.
+    pub fn fill_missing_defaults(&mut self) -> bool {
+        let defaults = Bindings::default();
+        let mut changed = false;
+        for (mine, theirs) in [(&mut self.p1, &defaults.p1), (&mut self.p2, &defaults.p2)] {
+            let unbound: Vec<Action> = theirs
+                .entries
+                .iter()
+                .map(|(a, _)| *a)
+                .filter(|a| !mine.entries.iter().any(|(m, _)| m == a))
+                .collect();
+            for (action, binding) in &theirs.entries {
+                if unbound.contains(action) {
+                    mine.entries.push((*action, binding.clone()));
+                    changed = true;
+                }
+            }
+        }
+        changed
+    }
+
     pub fn get(&self, p: Player) -> &PlayerBindings {
         match p {
             Player::P1 => &self.p1,
@@ -284,6 +351,23 @@ impl PlayerBindings {
                 button: "DPadRight".into(),
             },
         ));
+        // Left stick too: plenty of players move with it, and many arcade
+        // sticks report their lever as the left stick in "LS" mode. Axis and
+        // button bindings for a direction coexist (see `replace_binding`).
+        for (action, axis, positive) in [
+            (Up, "LeftY", false),
+            (Down, "LeftY", true),
+            (Left, "LeftX", false),
+            (Right, "LeftX", true),
+        ] {
+            e.push((
+                action,
+                Binding::PadAxis {
+                    axis: axis.into(),
+                    positive,
+                },
+            ));
+        }
         e.push((HighPunch, Binding::PadButton { button: "X".into() }));
         e.push((LowPunch, Binding::PadButton { button: "A".into() }));
         e.push((HighKick, Binding::PadButton { button: "Y".into() }));
@@ -301,8 +385,39 @@ impl PlayerBindings {
                 button: "Start".into(),
             },
         ));
+        e.extend(Self::p1_nba_jam_defaults());
 
         Self { entries: e }
+    }
+
+    fn p1_nba_jam_defaults() -> Vec<(Action, Binding)> {
+        use Action::*;
+        vec![
+            (Shoot, Binding::PadButton { button: "A".into() }),
+            (Pass, Binding::PadButton { button: "X".into() }),
+            (
+                Turbo,
+                Binding::PadAxis {
+                    axis: "TriggerRight".into(),
+                    positive: true,
+                },
+            ),
+            (
+                Turbo,
+                Binding::PadButton {
+                    button: "RightShoulder".into(),
+                },
+            ),
+        ]
+    }
+
+    fn p2_nba_jam_defaults() -> Vec<(Action, Binding)> {
+        use Action::*;
+        vec![
+            (Shoot, Binding::Key { key: "Kp1".into() }),
+            (Pass, Binding::Key { key: "Kp7".into() }),
+            (Turbo, Binding::Key { key: "Kp0".into() }),
+        ]
     }
 
     fn p2_default() -> Self {
@@ -331,6 +446,7 @@ impl PlayerBindings {
                 key: "KpPlus".into(),
             },
         ));
+        e.extend(Self::p2_nba_jam_defaults());
 
         Self { entries: e }
     }
@@ -465,7 +581,15 @@ fn live_input_sources() -> &'static Mutex<LiveInputSources> {
 /// This does NOT write directly to the libretro-visible input state; the
 /// main loop decides when to commit live input into it (every frame for
 /// local play; never for netplay — ggrs owns the visible state there).
+///
+/// Actions outside the current game's set are dropped here. Bindings for
+/// every game live side by side and share retropad slots (MK2's High Punch
+/// and NBA Jam's Pass are both slot Y), so without this an MK2 binding would
+/// press an NBA Jam button.
 pub fn set_action(player: Player, action: Action, pressed: bool) {
+    if !actions().contains(&action) {
+        return;
+    }
     crate::retro::set_live_input(player.port(), action.retro_id(), pressed);
 }
 
@@ -482,12 +606,12 @@ pub fn set_action_source(player: Player, action: Action, source: InputSource, pr
 }
 
 /// Serialize one player's live pad state into a compact 16-bit packet for
-/// network transmission. Bit index = position in Action::ALL.
+/// network transmission. Bit index = position in `actions()`.
 pub fn snapshot_player(player: Player) -> u16 {
     // One lock for the whole row instead of one per action.
     let row = crate::retro::live_input_port(player.port());
     let mut bits: u16 = 0;
-    for (i, a) in Action::ALL.iter().enumerate() {
+    for (i, a) in actions().iter().enumerate() {
         if row[a.retro_id()] {
             bits |= 1 << i;
         }
@@ -500,7 +624,7 @@ pub fn snapshot_player(player: Player) -> u16 {
 /// frame via `commit_live_to_state`.
 pub fn apply_snapshot(player: Player, bits: u16) {
     let mut row = [false; 16];
-    for (i, a) in Action::ALL.iter().enumerate() {
+    for (i, a) in actions().iter().enumerate() {
         row[a.retro_id()] = (bits >> i) & 1 == 1;
     }
     crate::retro::set_input_port(player.port(), row);
@@ -540,6 +664,36 @@ pub fn axis_name(a: Axis) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn p1_moves_with_the_dpad_and_the_left_stick() {
+        let p1 = Bindings::default().p1;
+        let bound = |action: Action| {
+            p1.entries
+                .iter()
+                .filter(move |(a, _)| *a == action)
+                .map(|(_, b)| b)
+        };
+        for (action, dpad, axis, positive) in [
+            (Action::Up, "DPadUp", "LeftY", false),
+            (Action::Down, "DPadDown", "LeftY", true),
+            (Action::Left, "DPadLeft", "LeftX", false),
+            (Action::Right, "DPadRight", "LeftX", true),
+        ] {
+            assert!(
+                bound(action).any(|b| matches!(b, Binding::PadButton { button } if button == dpad)),
+                "{action:?} d-pad"
+            );
+            assert!(
+                bound(action).any(|b| matches!(b, Binding::PadAxis { axis: a, positive: p } if a == axis && *p == positive)),
+                "{action:?} stick"
+            );
+        }
+        // Up on the stick must not also press Down.
+        let ups = p1.axis_updates(Axis::LeftY, i16::MIN);
+        assert!(ups.iter().any(|u| u.action == Action::Up && u.pressed));
+        assert!(!ups.iter().any(|u| u.action == Action::Down && u.pressed));
+    }
 
     fn source(name: &str) -> InputSource {
         InputSource::Key { key: name.into() }
@@ -584,7 +738,7 @@ mod action_set_tests {
     #[test]
     fn the_shipped_action_set_still_matches_the_recorded_fingerprint() {
         assert_eq!(
-            action_set_fingerprint(),
+            action_set_fingerprint_of(&Action::MK2),
             LEGACY_ACTION_SET,
             "action list order or a retro_id changed - this alters what every \
              netplay input bit means"
@@ -610,12 +764,15 @@ mod action_set_tests {
             format!("{:08x}", (h >> 32) as u32)
         }
 
-        let actual: Vec<(usize, usize)> = Action::ALL
+        let actual: Vec<(usize, usize)> = Action::MK2
             .iter()
             .enumerate()
             .map(|(i, a)| (i, a.retro_id()))
             .collect();
-        assert_eq!(fingerprint_of(&actual), action_set_fingerprint());
+        assert_eq!(
+            fingerprint_of(&actual),
+            action_set_fingerprint_of(&Action::MK2)
+        );
 
         // Same actions, two of them swapped: every bit past the swap means
         // something else on the wire.
@@ -626,11 +783,59 @@ mod action_set_tests {
             .enumerate()
             .map(|(i, (_, slot))| (i, slot))
             .collect();
-        assert_ne!(fingerprint_of(&reordered), action_set_fingerprint());
+        assert_ne!(
+            fingerprint_of(&reordered),
+            action_set_fingerprint_of(&Action::MK2)
+        );
 
         // Same order, one action rebound to a different libretro slot.
         let mut reslotted = actual.clone();
         reslotted[4].1 = 15;
-        assert_ne!(fingerprint_of(&reslotted), action_set_fingerprint());
+        assert_ne!(
+            fingerprint_of(&reslotted),
+            action_set_fingerprint_of(&Action::MK2)
+        );
+    }
+
+    #[test]
+    fn nba_jam_gets_its_own_wire_pool() {
+        assert_ne!(
+            action_set_fingerprint_of(&Action::NBA_JAM),
+            LEGACY_ACTION_SET
+        );
+    }
+
+    #[test]
+    fn old_configs_gain_nba_jam_defaults_without_losing_their_own() {
+        let mut b = Bindings::default();
+        b.p1.entries
+            .retain(|(a, _)| !matches!(a, Action::Shoot | Action::Pass | Action::Turbo));
+        b.p1.entries.retain(|(a, _)| *a != Action::HighPunch);
+        b.p1.entries
+            .push((Action::HighPunch, Binding::Key { key: "Q".into() }));
+        assert!(b.fill_missing_defaults());
+        assert!(b.p1.entries.iter().any(|(a, _)| *a == Action::Shoot));
+        let hp: Vec<_> =
+            b.p1.entries
+                .iter()
+                .filter(|(a, _)| *a == Action::HighPunch)
+                .collect();
+        assert_eq!(
+            hp.len(),
+            1,
+            "a bound action must keep only the player's binding"
+        );
+        assert!(!b.fill_missing_defaults());
+    }
+
+    #[test]
+    fn every_game_fits_the_u16_wire_packet_without_slot_collisions() {
+        for set in [&Action::MK2[..], &Action::NBA_JAM[..]] {
+            assert!(set.len() <= 16);
+            let mut slots: Vec<usize> = set.iter().map(|a| a.retro_id()).collect();
+            slots.sort();
+            slots.dedup();
+            assert_eq!(slots.len(), set.len());
+        }
     }
 }

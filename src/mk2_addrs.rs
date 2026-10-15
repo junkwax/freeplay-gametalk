@@ -74,55 +74,59 @@ pub struct Addrs {
 impl Addrs {
     /// RAM wiped before a netplay session so both peers start equal.
     pub fn zero_targets(&self) -> [usize; 3] {
-        [self.FREEZE_TIMER_ADDR, self.HITBOX_FLAG_ADDR, self.NETPLAY_SYNC_ADDR]
+        [
+            self.FREEZE_TIMER_ADDR,
+            self.HITBOX_FLAG_ADDR,
+            self.NETPLAY_SYNC_ADDR,
+        ]
     }
 }
 
 /// Exported from the map above - right only for the ROM `SOURCE_ROM_FNV` names.
 pub const COMPILED: Addrs = Addrs {
     ACTIVE_PROCESS_LIST_ADDR: 0x16F88, // active
-    BACKGROUND_LIST_1_ADDR: 0x2086E, // baklst1
-    BACKGROUND_LIST_2_ADDR: 0x2086A, // baklst2
-    BACKGROUND_LIST_3_ADDR: 0x20866, // baklst3
-    BACKGROUND_LIST_4_ADDR: 0x20862, // baklst4
-    BACKGROUND_LIST_5_ADDR: 0x2085E, // baklst5
-    BACKGROUND_LIST_6_ADDR: 0x2085A, // baklst6
-    BACKGROUND_LIST_7_ADDR: 0x20856, // baklst7
-    BACKGROUND_LIST_8_ADDR: 0x20852, // baklst8
-    FREEZE_TIMER_ADDR: 0x20B96, // f_freeze_timer
-    FREE_OBJECT_LIST_ADDR: 0x214BE, // ofree
-    FREE_PROCESS_LIST_ADDR: 0x16F8C, // free
-    GROUND_SKEW_FLAG_ADDR: 0x20B9A, // f_skew
-    GSTATE_ADDR: 0x214D2, // gstate
-    HITBOX_FLAG_ADDR: 0x21B58, // f_colbox
-    MPROC_TIMER_ADDR: 0x16F90, // timer
-    NETPLAY_ACTIVE_ADDR: 0x21B5A, // f_netplay
-    NETPLAY_SYNC_ADDR: 0x2046E, // netplay_sync
-    NO_BLOOD_FLAG_ADDR: 0x217EE, // f_no_blood
-    NO_VIOLENCE_FLAG_ADDR: 0x217EC, // f_no_violence
-    OBJECT_LIST_1_ADDR: 0x20872, // objlst
-    OBJECT_LIST_2_ADDR: 0x20876, // objlst2
-    OBJECT_LIST_3_ADDR: 0x2087A, // objlst3
-    OBJECT_LIST_END_ADDR: 0x208BA, // last_objlst
-    OBJECT_STORE_ADDR: 0x0E286, // objstr
-    OVERLOAD_ADDR: 0x16F94, // overload
-    P1_CHAR_ADDR: 0x214E8, // p1_char
-    P1_HP_ADDR: 0x214F6, // p1_bar
-    P1_MATCHW: 0x214FA, // p1_matchw
-    P1_PROC_ADDR: 0x214E4, // p1_proc
-    P1_X_ADDR: 0x21508, // p1_x, p1_bcq + 0x08
-    P1_Y_ADDR: 0x2150A, // p1_y, p1_bcq + 0x0A
-    P2_CHAR_ADDR: 0x21662, // p2_char
-    P2_HP_ADDR: 0x21670, // p2_bar
-    P2_MATCHW: 0x21674, // p2_matchw
-    P2_PROC_ADDR: 0x2165E, // p2_proc
-    P2_X_ADDR: 0x21682, // p2_x, p2_bcq + 0x08
-    P2_Y_ADDR: 0x21684, // p2_y, p2_bcq + 0x0A
-    PEAK_OVERLOAD_ADDR: 0x16FB8, // peak_overload
-    QDMA_DROPS_ADDR: 0x16FDA, // qdma_drops
-    ROUND_NUM: 0x21808, // round_num
-    SHADOWS_FLAG_ADDR: 0x20B98, // f_shadows
-    WINNER_STATUS: 0x2180A, // winner_status
+    BACKGROUND_LIST_1_ADDR: 0x2086E,   // baklst1
+    BACKGROUND_LIST_2_ADDR: 0x2086A,   // baklst2
+    BACKGROUND_LIST_3_ADDR: 0x20866,   // baklst3
+    BACKGROUND_LIST_4_ADDR: 0x20862,   // baklst4
+    BACKGROUND_LIST_5_ADDR: 0x2085E,   // baklst5
+    BACKGROUND_LIST_6_ADDR: 0x2085A,   // baklst6
+    BACKGROUND_LIST_7_ADDR: 0x20856,   // baklst7
+    BACKGROUND_LIST_8_ADDR: 0x20852,   // baklst8
+    FREEZE_TIMER_ADDR: 0x20B96,        // f_freeze_timer
+    FREE_OBJECT_LIST_ADDR: 0x214BE,    // ofree
+    FREE_PROCESS_LIST_ADDR: 0x16F8C,   // free
+    GROUND_SKEW_FLAG_ADDR: 0x20B9A,    // f_skew
+    GSTATE_ADDR: 0x214D2,              // gstate
+    HITBOX_FLAG_ADDR: 0x21B58,         // f_colbox
+    MPROC_TIMER_ADDR: 0x16F90,         // timer
+    NETPLAY_ACTIVE_ADDR: 0x21B5A,      // f_netplay
+    NETPLAY_SYNC_ADDR: 0x2046E,        // netplay_sync
+    NO_BLOOD_FLAG_ADDR: 0x217EE,       // f_no_blood
+    NO_VIOLENCE_FLAG_ADDR: 0x217EC,    // f_no_violence
+    OBJECT_LIST_1_ADDR: 0x20872,       // objlst
+    OBJECT_LIST_2_ADDR: 0x20876,       // objlst2
+    OBJECT_LIST_3_ADDR: 0x2087A,       // objlst3
+    OBJECT_LIST_END_ADDR: 0x208BA,     // last_objlst
+    OBJECT_STORE_ADDR: 0x0E286,        // objstr
+    OVERLOAD_ADDR: 0x16F94,            // overload
+    P1_CHAR_ADDR: 0x214E8,             // p1_char
+    P1_HP_ADDR: 0x214F6,               // p1_bar
+    P1_MATCHW: 0x214FA,                // p1_matchw
+    P1_PROC_ADDR: 0x214E4,             // p1_proc
+    P1_X_ADDR: 0x21508,                // p1_x, p1_bcq + 0x08
+    P1_Y_ADDR: 0x2150A,                // p1_y, p1_bcq + 0x0A
+    P2_CHAR_ADDR: 0x21662,             // p2_char
+    P2_HP_ADDR: 0x21670,               // p2_bar
+    P2_MATCHW: 0x21674,                // p2_matchw
+    P2_PROC_ADDR: 0x2165E,             // p2_proc
+    P2_X_ADDR: 0x21682,                // p2_x, p2_bcq + 0x08
+    P2_Y_ADDR: 0x21684,                // p2_y, p2_bcq + 0x0A
+    PEAK_OVERLOAD_ADDR: 0x16FB8,       // peak_overload
+    QDMA_DROPS_ADDR: 0x16FDA,          // qdma_drops
+    ROUND_NUM: 0x21808,                // round_num
+    SHADOWS_FLAG_ADDR: 0x20B98,        // f_shadows
+    WINNER_STATUS: 0x2180A,            // winner_status
 };
 
 /// Every entry's manifest name and hash - what `from_manifest` looks up.
@@ -174,9 +178,7 @@ pub const MANIFEST_NAMES: &[(&str, u32)] = &[
 
 /// Program-ROM symbols the manifest also carries (bit addresses in ROM,
 /// read out of the ROM image, not RAM): `rom_name` is the build stamp.
-pub const ROM_POINTERS: &[(&str, u32)] = &[
-    ("rom_name", 0x5C4637B9),
-];
+pub const ROM_POINTERS: &[(&str, u32)] = &[("rom_name", 0x5C4637B9)];
 
 /// Build the table from a ROM's manifest (name hash -> TMS34010 bit
 /// address). Err names the first entry the ROM does not carry.

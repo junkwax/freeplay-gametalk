@@ -354,7 +354,15 @@ pub fn draw_modal(
     )?;
     y += 22.0;
     let (lx, ly) = scale.point(content_x, y);
-    fonts.draw(canvas, FpFont::SairaMedium, scale.font_px(15.0), label, lx, ly, Color::RGB(0x9a, 0x9a, 0xa2))?;
+    fonts.draw(
+        canvas,
+        FpFont::SairaMedium,
+        scale.font_px(15.0),
+        label,
+        lx,
+        ly,
+        Color::RGB(0x9a, 0x9a, 0xa2),
+    )?;
     y += 24.0;
 
     // Caret blink: visible for the first half of each 1s cycle, matching
@@ -390,10 +398,23 @@ pub fn draw_modal(
                     cx + CELL_W / 2.0 - (cw as f32 / scale.s) / 2.0,
                     y + CELL_H / 2.0 - (ch as f32 / scale.s) / 2.0,
                 );
-                fonts.draw(canvas, FpFont::ChakraPetchSemiBold, px, &s, tx, ty, theme::TEXT)?;
+                fonts.draw(
+                    canvas,
+                    FpFont::ChakraPetchSemiBold,
+                    px,
+                    &s,
+                    tx,
+                    ty,
+                    theme::TEXT,
+                )?;
             } else if is_caret_cell && caret_on {
                 canvas.set_draw_color(theme::ACCENT);
-                canvas.fill_rect(Some(scale.rect(cx + CELL_W / 2.0 - 1.5, y + CELL_H / 2.0 - 17.0, 3.0, 34.0)))?;
+                canvas.fill_rect(Some(scale.rect(
+                    cx + CELL_W / 2.0 - 1.5,
+                    y + CELL_H / 2.0 - 17.0,
+                    3.0,
+                    34.0,
+                )))?;
             }
         }
     } else {
@@ -408,12 +429,31 @@ pub fn draw_modal(
         let text_y = y + input_h / 2.0 - (vh as f32 / scale.s).max(24.0) / 2.0;
         let (vx, vy) = scale.point(content_x + 14.0, text_y);
         if !value.is_empty() {
-            fonts.draw(canvas, FpFont::ChakraPetchSemiBold, px, value, vx, vy, theme::TEXT)?;
+            fonts.draw(
+                canvas,
+                FpFont::ChakraPetchSemiBold,
+                px,
+                value,
+                vx,
+                vy,
+                theme::TEXT,
+            )?;
         }
         if caret_on {
-            let caret_x = content_x + 14.0 + if value.is_empty() { 0.0 } else { vw as f32 / scale.s + 4.0 };
+            let caret_x = content_x
+                + 14.0
+                + if value.is_empty() {
+                    0.0
+                } else {
+                    vw as f32 / scale.s + 4.0
+                };
             canvas.set_draw_color(theme::ACCENT);
-            canvas.fill_rect(Some(scale.rect(caret_x, y + input_h / 2.0 - 13.0, 3.0, 26.0)))?;
+            canvas.fill_rect(Some(scale.rect(
+                caret_x,
+                y + input_h / 2.0 - 13.0,
+                3.0,
+                26.0,
+            )))?;
         }
         let _ = vy;
     }
@@ -496,15 +536,38 @@ pub fn draw_modal(
     let cancel_sel = cursor == (layout.button_row(), 0);
     let confirm_sel = cursor == (layout.button_row(), 1);
     canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
-    canvas.set_draw_color(if cancel_sel { Color::RGBA(255, 255, 255, 20) } else { Color::RGBA(0, 0, 0, 0) });
+    canvas.set_draw_color(if cancel_sel {
+        Color::RGBA(255, 255, 255, 20)
+    } else {
+        Color::RGBA(0, 0, 0, 0)
+    });
     if cancel_sel {
         canvas.fill_rect(Some(scale.rect(content_x, y, btn_w, BTN_H)))?;
     }
-    canvas.set_draw_color(if cancel_sel { Color::RGBA(255, 255, 255, 128) } else { Color::RGBA(255, 255, 255, 36) });
+    canvas.set_draw_color(if cancel_sel {
+        Color::RGBA(255, 255, 255, 128)
+    } else {
+        Color::RGBA(255, 255, 255, 36)
+    });
     canvas.draw_rect(scale.rect(content_x, y, btn_w, BTN_H))?;
     let (cw, chh) = fonts.text_size(FpFont::SairaCondensedBold, scale.font_px(17.0), "CANCEL");
-    let (ctx, cty) = scale.point(content_x + btn_w / 2.0 - (cw as f32 / scale.s) / 2.0, y + BTN_H / 2.0 - (chh as f32 / scale.s) / 2.0);
-    fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(17.0), "CANCEL", ctx, cty, if cancel_sel { theme::TEXT } else { Color::RGB(0x9a, 0x9a, 0xa2) })?;
+    let (ctx, cty) = scale.point(
+        content_x + btn_w / 2.0 - (cw as f32 / scale.s) / 2.0,
+        y + BTN_H / 2.0 - (chh as f32 / scale.s) / 2.0,
+    );
+    fonts.draw(
+        canvas,
+        FpFont::SairaCondensedBold,
+        scale.font_px(17.0),
+        "CANCEL",
+        ctx,
+        cty,
+        if cancel_sel {
+            theme::TEXT
+        } else {
+            Color::RGB(0x9a, 0x9a, 0xa2)
+        },
+    )?;
 
     let confirm_x = content_x + btn_w + 14.0;
     canvas.set_draw_color(if confirm_sel {
@@ -517,7 +580,10 @@ pub fn draw_modal(
     }
     canvas.draw_rect(scale.rect(confirm_x, y, btn_w, BTN_H))?;
     let (fw, fh) = fonts.text_size(FpFont::SairaCondensedBold, scale.font_px(17.0), "CONFIRM");
-    let (ftx, fty) = scale.point(confirm_x + btn_w / 2.0 - (fw as f32 / scale.s) / 2.0, y + BTN_H / 2.0 - (fh as f32 / scale.s) / 2.0);
+    let (ftx, fty) = scale.point(
+        confirm_x + btn_w / 2.0 - (fw as f32 / scale.s) / 2.0,
+        y + BTN_H / 2.0 - (fh as f32 / scale.s) / 2.0,
+    );
     fonts.draw(
         canvas,
         FpFont::SairaCondensedBold,
@@ -525,7 +591,11 @@ pub fn draw_modal(
         "CONFIRM",
         ftx,
         fty,
-        if confirm_sel { Color::RGB(255, 255, 255) } else { Color::RGBA(255, 255, 255, 200) },
+        if confirm_sel {
+            Color::RGB(255, 255, 255)
+        } else {
+            Color::RGBA(255, 255, 255, 200)
+        },
     )?;
     y += BTN_H + 16.0;
 
@@ -539,7 +609,15 @@ pub fn draw_modal(
     let hint_px = scale.font_px(11.0);
     let (hw, _) = fonts.text_size(FpFont::ChakraPetchMedium, hint_px, hint);
     let (hx, hy) = scale.point(card_x + CARD_W / 2.0 - (hw as f32 / scale.s) / 2.0, y);
-    fonts.draw(canvas, FpFont::ChakraPetchMedium, hint_px, hint, hx, hy, Color::RGB(0x3a, 0x3a, 0x42))?;
+    fonts.draw(
+        canvas,
+        FpFont::ChakraPetchMedium,
+        hint_px,
+        hint,
+        hx,
+        hy,
+        Color::RGB(0x3a, 0x3a, 0x42),
+    )?;
     Ok(())
 }
 
@@ -573,7 +651,10 @@ fn draw_key(
     canvas.draw_rect(scale.rect(x, y, w, h))?;
     let fpx = scale.font_px(px);
     let (tw, th) = fonts.text_size(font, fpx, label);
-    let (tx, ty) = scale.point(x + w / 2.0 - (tw as f32 / scale.s) / 2.0, y + h / 2.0 - (th as f32 / scale.s) / 2.0);
+    let (tx, ty) = scale.point(
+        x + w / 2.0 - (tw as f32 / scale.s) / 2.0,
+        y + h / 2.0 - (th as f32 / scale.s) / 2.0,
+    );
     let color = if selected {
         Color::RGB(255, 255, 255)
     } else if allowed {
@@ -599,7 +680,11 @@ mod tests {
     }
 
     /// Drive the grid the way a player would and report what got typed.
-    fn type_with(field: &EditField, presses: &[Button], start_shift: bool) -> (String, (usize, usize), bool) {
+    fn type_with(
+        field: &EditField,
+        presses: &[Button],
+        start_shift: bool,
+    ) -> (String, (usize, usize), bool) {
         let mut cursor = (0, 0);
         let mut shift = start_shift;
         let mut out = String::new();
@@ -691,12 +776,23 @@ mod tests {
     fn a_cursor_from_a_wider_layout_is_clamped() {
         let alpha = layout_for(&EditField::Username);
         // Last control cell of the alpha grid (BACKSPACE).
-        let mut cursor = (alpha.control_row(), alpha.cols_in_row(alpha.control_row()) - 1);
+        let mut cursor = (
+            alpha.control_row(),
+            alpha.cols_in_row(alpha.control_row()) - 1,
+        );
         let mut shift = true;
         // Same cursor, now interpreted against the number pad.
-        let action = apply(&press(Button::A), &mut cursor, &mut shift, &EditField::TestConnAddress);
+        let action = apply(
+            &press(Button::A),
+            &mut cursor,
+            &mut shift,
+            &EditField::TestConnAddress,
+        );
         let pad = layout_for(&EditField::TestConnAddress);
-        assert!(cursor.1 < pad.cols_in_row(cursor.0), "cursor left out of range");
+        assert!(
+            cursor.1 < pad.cols_in_row(cursor.0),
+            "cursor left out of range"
+        );
         // The pad's only control cell is BACKSPACE.
         assert!(matches!(action, OskAction::Backspace));
     }
@@ -707,7 +803,9 @@ mod tests {
         let field = EditField::TestConnAddress;
         let pad = layout_for(&field);
         let mut typed = String::new();
-        for (r, c) in (0..pad.char_rows()).flat_map(|r| (0..pad.cols_in_row(r)).map(move |c| (r, c))) {
+        for (r, c) in
+            (0..pad.char_rows()).flat_map(|r| (0..pad.cols_in_row(r)).map(move |c| (r, c)))
+        {
             typed.push(pad.char_at(r, c, true));
         }
         for needed in "0123456789.:".chars() {

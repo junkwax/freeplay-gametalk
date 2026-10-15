@@ -83,12 +83,28 @@ pub fn audio_probe_frames() -> Option<usize> {
     Some(args.get(i + 1).and_then(|n| n.parse().ok()).unwrap_or(3600))
 }
 
+/// `--score-probe [frames]` - headless two-player run that prints what the
+/// score tracker reads, to check a game's score addresses on a real ROM.
+pub fn score_probe_frames() -> Option<usize> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let i = args.iter().position(|a| a == "--score-probe")?;
+    Some(
+        args.get(i + 1)
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(60_000),
+    )
+}
+
 fn addr_probe_requested_from(args: &[String]) -> bool {
     args.iter().any(|arg| arg == "--addr-probe")
 }
 
 pub fn sync_probe_requested() -> bool {
     std::env::args().skip(1).any(|arg| arg == "--sync-probe")
+}
+
+pub fn perf_probe_requested() -> bool {
+    std::env::args().skip(1).any(|arg| arg == "--perf-probe")
 }
 
 /// `--rom <path>` / `--rom=<path>`: the ROM zip to boot instead of the one
@@ -169,8 +185,15 @@ fn parse_net_mode_from(args: &[String]) -> NetMode {
             "--addr-probe" => {
                 i += 1;
             }
-            "--sync-probe" => {
+            "--sync-probe" | "--perf-probe" => {
                 i += 1;
+            }
+            "--score-probe" => {
+                i += if args.get(i + 1).is_some_and(|n| n.parse::<usize>().is_ok()) {
+                    2
+                } else {
+                    1
+                };
             }
             "--rom" => {
                 i += 2;
@@ -282,7 +305,13 @@ mod tests {
 
     #[test]
     fn diagnostic_flag_helpers_detect_their_flags() {
-        let a = args(&["--render-probe", "--core-probe", "--pad-probe", "--addr-probe", "--doctor"]);
+        let a = args(&[
+            "--render-probe",
+            "--core-probe",
+            "--pad-probe",
+            "--addr-probe",
+            "--doctor",
+        ]);
         assert!(render_probe_requested_from(&a));
         assert!(core_probe_requested_from(&a));
         assert!(pad_probe_requested_from(&a));

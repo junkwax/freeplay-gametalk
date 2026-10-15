@@ -26,10 +26,26 @@ use std::time::{Duration, Instant};
 /// session bleeding into the match (and broke peer determinism).
 static CLEAN_BOOT_STATE: Mutex<Option<Vec<u8>>> = Mutex::new(None);
 
+/// 64-bit hash of `CLEAN_BOOT_STATE` with FBNeo's wall-clock word masked out,
+/// swapped with the peer right after the hole punch (`matchmaking::
+/// measure_rtt`). Two peers can only stay in sync if they start from the same
+/// state, so a mismatch names the cause before the match instead of as a
+/// GGRS desync during it. 0 = not captured yet.
+static CLEAN_BOOT_HASH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 pub fn set_clean_boot_state(state: Vec<u8>) {
+    // The RTC word is found now, while the state's clock is still within
+    // `detect_rtc_offset`'s window of the real one; at handshake time the
+    // state may be hours old.
+    let hash = cksum_with_mask(&state, detect_rtc_offset(&state)) as u64;
+    CLEAN_BOOT_HASH.store(hash.max(1), std::sync::atomic::Ordering::Relaxed);
     if let Ok(mut g) = CLEAN_BOOT_STATE.lock() {
         *g = Some(state);
     }
+}
+
+pub fn clean_boot_hash() -> u64 {
+    CLEAN_BOOT_HASH.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 pub fn clean_boot_state() -> Option<Vec<u8>> {
@@ -75,9 +91,9 @@ pub struct NetRuntime {
     state_pool: Vec<std::sync::Arc<Vec<u8>>>,
 }
 
-/// Upper bound on pooled savestate buffers. ggrs's ring holds at most the
-/// prediction window (8) plus bookkeeping copies; 16 gives comfortable slack.
-const STATE_POOL_MAX: usize = 16;
+/// Upper bound on pooled savestate buffers. ggrs's ring holds the prediction
+/// window plus one, plus bookkeeping copies; 8 on top is comfortable slack.
+const STATE_POOL_MAX: usize = netplay::MAX_PREDICTION_WINDOW + 1 + 8;
 
 /// Local input must be unchanged this many ticks (~146 ms) before a
 /// time-sync skip is spent.
@@ -183,6 +199,11 @@ impl NetRuntime {
 /// some other variable, and corrupting that is worse than the coin gate it
 /// would have lifted. `mk2_addr_check` already knows the answer.
 pub fn set_netplay_flag(core: &retro::Core, active: bool) {
+    // The flag is an MK2-ROM variable; on any other game the address is
+    // something else entirely.
+    if !crate::game::current().mk2_tooling {
+        return;
+    }
     if let crate::mk2_addr_check::Pairing::Mismatch { expected, found } =
         crate::mk2_addr_check::check()
     {
@@ -213,8 +234,12 @@ pub fn reset_for_netplay(
     ghost_recording: &mut Option<ghost::Recording>,
 ) {
     use memory::{poke_u16, Endian};
-    for addr in mk2_addrs::a().zero_targets() {
-        poke_u16(core, addr, 0x0000, Endian::Little);
+    // MK2's trainer flags. Another game has no trainer, and these addresses
+    // would be its own live variables.
+    if crate::game::current().mk2_tooling {
+        for addr in mk2_addrs::a().zero_targets() {
+            poke_u16(core, addr, 0x0000, Endian::Little);
+        }
     }
     // After the ZERO_TARGETS wipe so ordering can never clear it, and after
     // the caller has reloaded the clean boot savestate so the reload cannot
@@ -684,11 +709,16 @@ pub fn step_netplay_frame(
                         Some(ram) => cksum_with_mask(&ram, None),
                         None => cksum_with_mask(&blob, runtime.rtc_mask_offset),
                     };
-                    if let Some(sync) = memory::peek_u16(
-                        core,
-                        mk2_addrs::a().NETPLAY_SYNC_ADDR,
-                        memory::Endian::Little,
-                    ) {
+                    let sync = if crate::game::current().mk2_tooling {
+                        memory::peek_u16(
+                            core,
+                            mk2_addrs::a().NETPLAY_SYNC_ADDR,
+                            memory::Endian::Little,
+                        )
+                    } else {
+                        None
+                    };
+                    if let Some(sync) = sync {
                         cksum ^= u128::from(sync) << 112;
                     }
                     checksum_time += checksum_started.elapsed();
@@ -797,8 +827,10 @@ pub fn step_netplay_frame(
     // input (the remote port keeps its last ggrs-applied input, i.e. the
     // same prediction ggrs itself would make), presents only its VIDEO,
     // then restores canonical. It never enters ggrs state or the desync
-    // checksum path, so it cannot cause desyncs — it only deepens the
-    // displayed prediction by one frame. Audio stays canonical: presenting
+    // checksum path, so it cannot cause desyncs - `--net-probe` under
+    // latency confirms it (the "desyncs" once blamed on it were GGRS's stale
+    // checksum, fixed by ggrs 0.11+). It only deepens the displayed
+    // prediction by one frame. Audio stays canonical: presenting
     // speculative audio would enqueue duplicate samples every tick.
     if speculate && advance_count > 0 && !peer_disconnected_this_frame {
         if core.save_state_into(&mut runtime.spec_scratch) {
@@ -846,7 +878,9 @@ mod tests {
     fn wait_skip_spends_one_frame_at_a_time_when_idle() {
         let mut rt = NetRuntime::default();
         rt.note_wait_recommendation(3);
-        let skips: Vec<bool> = (0..SKIP_IDLE_TICKS + 6).map(|_| rt.take_wait_skip(0)).collect();
+        let skips: Vec<bool> = (0..SKIP_IDLE_TICKS + 6)
+            .map(|_| rt.take_wait_skip(0))
+            .collect();
         let idle = SKIP_IDLE_TICKS as usize;
         assert!(skips[..idle].iter().all(|s| !s));
         assert_eq!(&skips[idle..], &[true, false, true, false, true, false]);

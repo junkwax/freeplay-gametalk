@@ -64,7 +64,10 @@ pub enum Pairing {
     NoRom,
     /// No manifest, but the zip is the one the compiled table came from.
     Matches,
-    Mismatch { expected: String, found: String },
+    Mismatch {
+        expected: String,
+        found: String,
+    },
 }
 
 /// Re-read the ROM if it changed and say whether the table in use fits it.

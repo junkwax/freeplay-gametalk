@@ -59,7 +59,10 @@ pub const ITEMS: [(&str, &str); 4] = [
     ("PLAY", "Start a local freeplay match"),
     ("ONLINE", "Find, host or join a netplay match"),
     ("RANKINGS", "National top 100 \u{b7} season ladder"),
-    ("SETTINGS", "Controls \u{b7} video \u{b7} audio \u{b7} netcode"),
+    (
+        "SETTINGS",
+        "Controls \u{b7} video \u{b7} audio \u{b7} netcode",
+    ),
 ];
 
 pub fn draw(
@@ -103,8 +106,22 @@ pub fn draw(
         draw_row(canvas, fonts, scale, i, label, sub, i == cursor, disabled)?;
     }
 
-    draw_last_match_card(canvas, fonts, scale, ITEMS.len() as f32, profile, cursor == ITEMS.len() + 1)?;
-    draw_your_stats_panel(canvas, fonts, scale, username, profile, cursor == ITEMS.len())?;
+    draw_last_match_card(
+        canvas,
+        fonts,
+        scale,
+        ITEMS.len() as f32,
+        profile,
+        cursor == ITEMS.len() + 1,
+    )?;
+    draw_your_stats_panel(
+        canvas,
+        fonts,
+        scale,
+        username,
+        profile,
+        cursor == ITEMS.len(),
+    )?;
     // The wire ticker is disabled for now along with the Network News row it
     // quotes — see `draw_ticker`'s doc comment.
 
@@ -138,7 +155,16 @@ fn draw_row(
     if selected {
         let tint = Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 36); // ~86% transparent
         let clear = Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 0);
-        geometry::fill_horizontal_gradient_rect(canvas, scale, LIST_X, y, 730.0 * 0.62, ROW_H, tint, clear);
+        geometry::fill_horizontal_gradient_rect(
+            canvas,
+            scale,
+            LIST_X,
+            y,
+            730.0 * 0.62,
+            ROW_H,
+            tint,
+            clear,
+        );
     }
 
     let bar_color = if selected {
@@ -148,7 +174,11 @@ fn draw_row(
     };
     geometry::fill_skewed_rect(canvas, scale, LIST_X, y, BAR_W, ROW_H, SKEW_DEG, bar_color);
 
-    let num_color = if selected { theme::ACCENT } else { Color::RGB(0x34, 0x34, 0x3a) };
+    let num_color = if selected {
+        theme::ACCENT
+    } else {
+        Color::RGB(0x34, 0x34, 0x3a)
+    };
     let num = format!("{:02}", index + 1);
     let num_px = scale.font_px(16.0);
     // True visible-glyph centering (`visible_span`), not a hand-tuned
@@ -157,8 +187,19 @@ fn draw_row(
     // instead of independently guessed.
     let (num_inset, num_vis_h) = fonts.visible_span(FpFont::ChakraPetchSemiBold, num_px, &num);
     let num_top = y + ROW_H / 2.0 - (num_vis_h as f32 / scale.s) / 2.0;
-    let (nx, ny) = scale.point(LIST_X + BAR_W + LABEL_GAP, num_top - num_inset as f32 / scale.s);
-    fonts.draw(canvas, FpFont::ChakraPetchSemiBold, num_px, &num, nx, ny, num_color)?;
+    let (nx, ny) = scale.point(
+        LIST_X + BAR_W + LABEL_GAP,
+        num_top - num_inset as f32 / scale.s,
+    );
+    fonts.draw(
+        canvas,
+        FpFont::ChakraPetchSemiBold,
+        num_px,
+        &num,
+        nx,
+        ny,
+        num_color,
+    )?;
 
     let label_size = if selected { 52.0 } else { 42.0 };
     let label_color = if disabled {
@@ -168,9 +209,17 @@ fn draw_row(
     } else {
         Color::RGB(0x6a, 0x6a, 0x72)
     };
-    let label_font = if selected { FpFont::SairaCondensedBlack } else { FpFont::SairaCondensedBold };
+    let label_font = if selected {
+        FpFont::SairaCondensedBlack
+    } else {
+        FpFont::SairaCondensedBold
+    };
     let label_text = label.to_uppercase();
-    let sub_text = if disabled { "NO ROM FOUND".to_string() } else { sub.to_uppercase() };
+    let sub_text = if disabled {
+        "NO ROM FOUND".to_string()
+    } else {
+        sub.to_uppercase()
+    };
     let label_x = LIST_X + BAR_W + LABEL_GAP + 30.0 + LABEL_GAP;
     let label_px = scale.font_px(label_size);
     let sub_px = scale.font_px(15.0);
@@ -191,16 +240,36 @@ fn draw_row(
         (0, 0)
     };
     let sub_vis_h_l = sub_vis_h as f32 / scale.s;
-    let block_h = if selected || disabled { label_vis_h_l + gap + sub_vis_h_l } else { label_vis_h_l };
+    let block_h = if selected || disabled {
+        label_vis_h_l + gap + sub_vis_h_l
+    } else {
+        label_vis_h_l
+    };
     let block_top = y + (ROW_H - block_h) / 2.0;
 
     let (lx, ly) = scale.point(label_x, block_top - label_inset as f32 / scale.s);
-    fonts.draw_italic(canvas, label_font, label_px, &label_text, lx, ly, label_color)?;
+    fonts.draw_italic(
+        canvas,
+        label_font,
+        label_px,
+        &label_text,
+        lx,
+        ly,
+        label_color,
+    )?;
 
     if disabled {
         let sub_visual_top = block_top + label_vis_h_l + gap;
         let (sx, sy) = scale.point(label_x, sub_visual_top - sub_inset as f32 / scale.s);
-        fonts.draw(canvas, FpFont::SairaSemiBold, sub_px, &sub_text, sx, sy, Color::RGB(0x5a, 0x2a, 0x2a))?;
+        fonts.draw(
+            canvas,
+            FpFont::SairaSemiBold,
+            sub_px,
+            &sub_text,
+            sx,
+            sy,
+            Color::RGB(0x5a, 0x2a, 0x2a),
+        )?;
     }
 
     if selected {
@@ -264,11 +333,29 @@ fn draw_last_match_card(
     });
     canvas.draw_rect(scale.rect(LIST_X, y, w, h))?;
 
-    geometry::fill_skewed_rect(canvas, scale, LIST_X + 18.0, y + 16.0, 9.0, h - 32.0, SKEW_DEG - 2.0, theme::ACCENT);
+    geometry::fill_skewed_rect(
+        canvas,
+        scale,
+        LIST_X + 18.0,
+        y + 16.0,
+        9.0,
+        h - 32.0,
+        SKEW_DEG - 2.0,
+        theme::ACCENT,
+    );
 
     let text_x = LIST_X + 18.0 + 9.0 + LABEL_GAP;
     let (lx, ly) = scale.point(text_x, y + 14.0);
-    fonts.draw_tracked(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(11.0), "LAST MATCH", lx, ly, theme::MUTE, scale.len(4.0).round() as i32)?;
+    fonts.draw_tracked(
+        canvas,
+        FpFont::ChakraPetchSemiBold,
+        scale.font_px(11.0),
+        "LAST MATCH",
+        lx,
+        ly,
+        theme::MUTE,
+        scale.len(4.0).round() as i32,
+    )?;
 
     let (main_text, sub_text) = last_match_text(profile);
     let main_px = scale.font_px(20.0);
@@ -294,12 +381,22 @@ fn draw_last_match_card(
         // digits at the end of the line actually sit, which is what the
         // date needs to align with.
         let sub_px = scale.font_px(15.0);
-        let (main_inset, main_vis_h) = fonts.visible_span(FpFont::SairaCondensedBold, main_px, "0123456789");
+        let (main_inset, main_vis_h) =
+            fonts.visible_span(FpFont::SairaCondensedBold, main_px, "0123456789");
         let main_bottom = y + 32.0 + (main_inset + main_vis_h) as f32 / scale.s;
-        let (sub_inset, sub_vis_h) = fonts.visible_span(FpFont::ChakraPetchMedium, sub_px, &sub_text);
+        let (sub_inset, sub_vis_h) =
+            fonts.visible_span(FpFont::ChakraPetchMedium, sub_px, &sub_text);
         let sub_top = main_bottom - (sub_inset + sub_vis_h) as f32 / scale.s;
         let (sx, sy) = scale.point(text_x + (main_w as f32 / scale.s) + 10.0, sub_top);
-        fonts.draw(canvas, FpFont::ChakraPetchMedium, sub_px, &sub_text, sx, sy, Color::RGB(0x5e, 0x5e, 0x66))?;
+        fonts.draw(
+            canvas,
+            FpFont::ChakraPetchMedium,
+            sub_px,
+            &sub_text,
+            sx,
+            sy,
+            Color::RGB(0x5e, 0x5e, 0x66),
+        )?;
     }
     Ok(())
 }
@@ -310,7 +407,10 @@ fn draw_last_match_card(
 fn last_match_text(profile: &ProfileScreenState) -> (String, String) {
     match profile {
         ProfileScreenState::Loaded { history, .. } => match history.first() {
-            Some(row) => (format_result_line(row), format!("\u{b7} {}", short_date(&row.played_at))),
+            Some(row) => (
+                format_result_line(row),
+                format!("\u{b7} {}", short_date(&row.played_at)),
+            ),
             None => ("NO MATCHES RECORDED YET".to_string(), String::new()),
         },
         ProfileScreenState::Empty { .. } => ("NO MATCHES RECORDED YET".to_string(), String::new()),
@@ -321,7 +421,11 @@ fn last_match_text(profile: &ProfileScreenState) -> (String, String) {
 }
 
 fn format_result_line(row: &HistoryRow) -> String {
-    let verb = if row.result == "won" { "DEFEATED" } else { "LOST TO" };
+    let verb = if row.result == "won" {
+        "DEFEATED"
+    } else {
+        "LOST TO"
+    };
     format!(
         "{verb} {} {}-{}",
         row.opponent_username.to_uppercase(),
@@ -357,7 +461,10 @@ pub(super) fn short_date(iso: &str) -> String {
 fn compute_streak(history: &[HistoryRow]) -> Option<(u32, bool)> {
     let first = history.first()?;
     let is_win = first.result == "won";
-    let count = history.iter().take_while(|r| (r.result == "won") == is_win).count() as u32;
+    let count = history
+        .iter()
+        .take_while(|r| (r.result == "won") == is_win)
+        .count() as u32;
     Some((count, is_win))
 }
 
@@ -398,7 +505,16 @@ fn draw_your_stats_panel(
     canvas.set_draw_color(theme::ACCENT);
     canvas.fill_rect(Some(scale.rect(x + 26.0, y + 28.0, 30.0, 3.0)))?;
     let (hx, hy) = scale.point(x + 26.0 + 30.0 + 13.0, y + 20.0);
-    fonts.draw_tracked(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(13.0), "YOUR STATS", hx, hy, theme::ACCENT, scale.len(6.0).round() as i32)?;
+    fonts.draw_tracked(
+        canvas,
+        FpFont::ChakraPetchSemiBold,
+        scale.font_px(13.0),
+        "YOUR STATS",
+        hx,
+        hy,
+        theme::ACCENT,
+        scale.len(6.0).round() as i32,
+    )?;
     canvas.set_draw_color(Color::RGBA(255, 255, 255, 18));
     canvas.fill_rect(Some(scale.rect(x, y + header_h, w, 1.0)))?;
 
@@ -408,13 +524,26 @@ fn draw_your_stats_panel(
     let avatar_y = y + header_h + (identity_h - avatar_d) / 2.0;
     canvas.set_draw_color(Color::RGB(0x5a, 0x12, 0x17));
     canvas.fill_rect(Some(scale.rect(avatar_x, avatar_y, avatar_d, avatar_d)))?;
-    let initial = username.chars().next().unwrap_or('?').to_uppercase().to_string();
+    let initial = username
+        .chars()
+        .next()
+        .unwrap_or('?')
+        .to_uppercase()
+        .to_string();
     let (iw, ih) = fonts.text_size(FpFont::SairaCondensedBlack, scale.font_px(36.0), &initial);
     let (ix, iy) = scale.point(
         avatar_x + avatar_d / 2.0 - (iw as f32 / scale.s) / 2.0,
         avatar_y + avatar_d / 2.0 - (ih as f32 / scale.s) / 2.0,
     );
-    fonts.draw(canvas, FpFont::SairaCondensedBlack, scale.font_px(36.0), &initial, ix, iy, Color::RGB(255, 255, 255))?;
+    fonts.draw(
+        canvas,
+        FpFont::SairaCondensedBlack,
+        scale.font_px(36.0),
+        &initial,
+        ix,
+        iy,
+        Color::RGB(255, 255, 255),
+    )?;
 
     // Name + subtitle centered as a block against the avatar's height, using
     // real rendered pixel spans rather than `size_of`'s full line height —
@@ -424,7 +553,8 @@ fn draw_your_stats_panel(
     let sub_px = scale.font_px(13.0);
     let username_text = username.to_uppercase();
     let sub_text = identity_subtitle(profile);
-    let (name_inset, name_vis_h) = fonts.visible_span(FpFont::SairaCondensedBlack, name_px, &username_text);
+    let (name_inset, name_vis_h) =
+        fonts.visible_span(FpFont::SairaCondensedBlack, name_px, &username_text);
     let (sub_inset, sub_vis_h) = fonts.visible_span(FpFont::ChakraPetchMedium, sub_px, &sub_text);
     let name_vis_h_l = name_vis_h as f32 / scale.s;
     let sub_vis_h_l = sub_vis_h as f32 / scale.s;
@@ -433,10 +563,26 @@ fn draw_your_stats_panel(
     let block_top = avatar_y + (avatar_d - block_h) / 2.0;
 
     let (nx, ny) = scale.point(name_x, block_top - name_inset as f32 / scale.s);
-    fonts.draw(canvas, FpFont::SairaCondensedBlack, name_px, &username_text, nx, ny, Color::RGB(0xf4, 0xf4, 0xf0))?;
+    fonts.draw(
+        canvas,
+        FpFont::SairaCondensedBlack,
+        name_px,
+        &username_text,
+        nx,
+        ny,
+        Color::RGB(0xf4, 0xf4, 0xf0),
+    )?;
     let sub_top = block_top + name_vis_h_l + gap;
     let (sx, sy) = scale.point(name_x, sub_top - sub_inset as f32 / scale.s);
-    fonts.draw(canvas, FpFont::ChakraPetchMedium, sub_px, &sub_text, sx, sy, Color::RGB(0x7a, 0x7a, 0x82))?;
+    fonts.draw(
+        canvas,
+        FpFont::ChakraPetchMedium,
+        sub_px,
+        &sub_text,
+        sx,
+        sy,
+        Color::RGB(0x7a, 0x7a, 0x82),
+    )?;
 
     // Stats row: WINS / LOSSES / STREAK, three equal columns.
     let stats_y = y + header_h + identity_h;
@@ -444,13 +590,40 @@ fn draw_your_stats_panel(
     canvas.fill_rect(Some(scale.rect(x, stats_y, w, 1.0)))?;
     let col_w = w / 3.0;
     let (wins, losses, streak) = stat_values(profile);
-    draw_stat_col(canvas, fonts, scale, x, stats_y, "WINS", &wins, Color::RGB(0x36, 0xd3, 0x99))?;
+    draw_stat_col(
+        canvas,
+        fonts,
+        scale,
+        x,
+        stats_y,
+        "WINS",
+        &wins,
+        Color::RGB(0x36, 0xd3, 0x99),
+    )?;
     canvas.set_draw_color(Color::RGBA(255, 255, 255, 18));
     canvas.fill_rect(Some(scale.rect(x + col_w, stats_y, 1.0, stats_h)))?;
-    draw_stat_col(canvas, fonts, scale, x + col_w, stats_y, "LOSSES", &losses, Color::RGB(0xf2, 0xf2, 0xee))?;
+    draw_stat_col(
+        canvas,
+        fonts,
+        scale,
+        x + col_w,
+        stats_y,
+        "LOSSES",
+        &losses,
+        Color::RGB(0xf2, 0xf2, 0xee),
+    )?;
     canvas.set_draw_color(Color::RGBA(255, 255, 255, 18));
     canvas.fill_rect(Some(scale.rect(x + col_w * 2.0, stats_y, 1.0, stats_h)))?;
-    draw_stat_col(canvas, fonts, scale, x + col_w * 2.0, stats_y, "STREAK", &streak, theme::ACCENT)?;
+    draw_stat_col(
+        canvas,
+        fonts,
+        scale,
+        x + col_w * 2.0,
+        stats_y,
+        "STREAK",
+        &streak,
+        theme::ACCENT,
+    )?;
 
     Ok(())
 }
@@ -468,16 +641,36 @@ fn draw_stat_col(
 ) -> Result<(), String> {
     let pad = 26.0;
     let (lx, ly) = scale.point(x + pad, y + 18.0);
-    fonts.draw_tracked(canvas, FpFont::ChakraPetchMedium, scale.font_px(11.0), label, lx, ly, Color::RGB(0x62, 0x62, 0x6c), scale.len(3.0).round() as i32)?;
+    fonts.draw_tracked(
+        canvas,
+        FpFont::ChakraPetchMedium,
+        scale.font_px(11.0),
+        label,
+        lx,
+        ly,
+        Color::RGB(0x62, 0x62, 0x6c),
+        scale.len(3.0).round() as i32,
+    )?;
     let (vx, vy) = scale.point(x + pad, y + 36.0);
-    fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(34.0), value, vx, vy, value_color)?;
+    fonts.draw(
+        canvas,
+        FpFont::ChakraPetchSemiBold,
+        scale.font_px(34.0),
+        value,
+        vx,
+        vy,
+        value_color,
+    )?;
     Ok(())
 }
 
 fn identity_subtitle(profile: &ProfileScreenState) -> String {
     match profile {
         ProfileScreenState::Loaded { profile, .. } => {
-            format!("RATING {} \u{b7} {} PLAYED", profile.rating, profile.matches_played)
+            format!(
+                "RATING {} \u{b7} {} PLAYED",
+                profile.rating, profile.matches_played
+            )
         }
         ProfileScreenState::Empty { .. } => "NO RANKED MATCHES YET".to_string(),
         ProfileScreenState::Loading => "LOADING\u{2026}".to_string(),
@@ -488,7 +681,9 @@ fn identity_subtitle(profile: &ProfileScreenState) -> String {
 
 fn stat_values(profile: &ProfileScreenState) -> (String, String, String) {
     match profile {
-        ProfileScreenState::Loaded { profile, history, .. } => {
+        ProfileScreenState::Loaded {
+            profile, history, ..
+        } => {
             let streak = match compute_streak(history) {
                 Some((n, true)) => format!("W{n}"),
                 Some((n, false)) => format!("L{n}"),
@@ -496,8 +691,14 @@ fn stat_values(profile: &ProfileScreenState) -> (String, String, String) {
             };
             (profile.wins.to_string(), profile.losses.to_string(), streak)
         }
-        ProfileScreenState::Empty { .. } => ("0".to_string(), "0".to_string(), "\u{2014}".to_string()),
-        _ => ("\u{2014}".to_string(), "\u{2014}".to_string(), "\u{2014}".to_string()),
+        ProfileScreenState::Empty { .. } => {
+            ("0".to_string(), "0".to_string(), "\u{2014}".to_string())
+        }
+        _ => (
+            "\u{2014}".to_string(),
+            "\u{2014}".to_string(),
+            "\u{2014}".to_string(),
+        ),
     }
 }
 
@@ -510,39 +711,116 @@ fn stat_values(profile: &ProfileScreenState) -> (String, String, String) {
 /// doesn't exist in the current mockup; that box has been replaced by the
 /// real "LAST MATCH" card (`draw_last_match_card`), which is what actually
 /// sits below the item list in this version of the markup.
-fn draw_cabinet_title(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scale: &Scale, rom_present: bool) -> Result<(), String> {
+fn draw_cabinet_title(
+    canvas: &mut Canvas<Window>,
+    fonts: &mut FpFontCache,
+    scale: &Scale,
+    rom_present: bool,
+) -> Result<(), String> {
     let bottom = theme::VH - chrome::FOOTER_H - 96.0;
     // No ROM found: don't claim MK2 is loaded and ready to play — real
     // data only, same reasoning as the "?" watermark next to this.
-    let title = if rom_present { "MORTAL KOMBAT II" } else { "NO ROM FOUND" };
+    let title = if rom_present {
+        crate::game::current().title
+    } else {
+        "NO ROM FOUND"
+    };
     let title_track = scale.len(11.0).round() as i32;
-    let (tw, th) = fonts.text_size_tracked(FpFont::SairaCondensedBold, scale.font_px(32.0), title, title_track);
-    let (tx, ty) = scale.point(theme::VW - 96.0 - (tw as f32 / scale.s), bottom - (th as f32 / scale.s));
-    fonts.draw_tracked(canvas, FpFont::SairaCondensedBold, scale.font_px(32.0), title, tx, ty, Color::RGB(0xde, 0xde, 0xd8), title_track)?;
+    let (tw, th) = fonts.text_size_tracked(
+        FpFont::SairaCondensedBold,
+        scale.font_px(32.0),
+        title,
+        title_track,
+    );
+    let (tx, ty) = scale.point(
+        theme::VW - 96.0 - (tw as f32 / scale.s),
+        bottom - (th as f32 / scale.s),
+    );
+    fonts.draw_tracked(
+        canvas,
+        FpFont::SairaCondensedBold,
+        scale.font_px(32.0),
+        title,
+        tx,
+        ty,
+        Color::RGB(0xde, 0xde, 0xd8),
+        title_track,
+    )?;
 
     let sub = if rom_present {
-        "ARCADE \u{b7} 1993 \u{b7} NETPLAY FREEPLAY"
+        crate::game::current().caption
     } else {
         "IN THE roms\\ FOLDER"
     };
     let sub_track = scale.len(6.0).round() as i32;
-    let (sw, _) = fonts.text_size_tracked(FpFont::ChakraPetchMedium, scale.font_px(14.0), sub, sub_track);
+    let (sw, _) = fonts.text_size_tracked(
+        FpFont::ChakraPetchMedium,
+        scale.font_px(14.0),
+        sub,
+        sub_track,
+    );
     let (sx, sy) = scale.point(theme::VW - 96.0 - (sw as f32 / scale.s), bottom + 8.0);
-    fonts.draw_tracked(canvas, FpFont::ChakraPetchMedium, scale.font_px(14.0), sub, sx, sy, Color::RGB(0x5e, 0x5e, 0x66), sub_track)?;
+    fonts.draw_tracked(
+        canvas,
+        FpFont::ChakraPetchMedium,
+        scale.font_px(14.0),
+        sub,
+        sx,
+        sy,
+        Color::RGB(0x5e, 0x5e, 0x66),
+        sub_track,
+    )?;
 
     // Which ROM build is loaded, read out of the ROM itself (its `rom_name`
     // stamp, via the address manifest) so testers can say what they played.
     // Only shown when the ROM carries one - an older ROM gets no line rather
     // than a guess.
-    if rom_present {
+    // Another ROM installed: say how to get to it. LB/RB is the Main
+    // Menu's only free pair, and it reads as "cycle" on every other screen.
+    if let Some(next) = crate::rom::neighbouring_rom(1) {
+        let hint = format!("LB / RB \u{b7} SWITCH TO {}", crate::rom::rom_label(&next));
+        let (hw, _) = fonts.text_size_tracked(
+            FpFont::ChakraPetchMedium,
+            scale.font_px(13.0),
+            &hint,
+            sub_track,
+        );
+        let (hx, hy) = scale.point(theme::VW - 96.0 - (hw as f32 / scale.s), bottom + 56.0);
+        fonts.draw_tracked(
+            canvas,
+            FpFont::ChakraPetchMedium,
+            scale.font_px(13.0),
+            &hint,
+            hx,
+            hy,
+            theme::MUTE,
+            sub_track,
+        )?;
+    }
+
+    if rom_present && crate::game::current().mk2_tooling {
         if let Some(stamp) = crate::rom_manifest::build_stamp() {
             let mut label = crate::rom_manifest::build_label(&stamp);
             if crate::rom_manifest::wolf_unit() {
                 label.push_str(" · WOLF UNIT");
             }
-            let (bw, _) = fonts.text_size_tracked(FpFont::ChakraPetchMedium, scale.font_px(13.0), &label, sub_track);
+            let (bw, _) = fonts.text_size_tracked(
+                FpFont::ChakraPetchMedium,
+                scale.font_px(13.0),
+                &label,
+                sub_track,
+            );
             let (bx, by) = scale.point(theme::VW - 96.0 - (bw as f32 / scale.s), bottom + 32.0);
-            fonts.draw_tracked(canvas, FpFont::ChakraPetchMedium, scale.font_px(13.0), &label, bx, by, theme::ACCENT, sub_track)?;
+            fonts.draw_tracked(
+                canvas,
+                FpFont::ChakraPetchMedium,
+                scale.font_px(13.0),
+                &label,
+                bx,
+                by,
+                theme::ACCENT,
+                sub_track,
+            )?;
         }
     }
 
@@ -555,7 +833,11 @@ fn draw_cabinet_title(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scal
 
 #[allow(dead_code)]
 fn rom_identity_line() -> String {
-    format!("ROM {} \u{b7} CORE {}", crate::matchmaking::rom_fnv_hash(), crate::retro::core_compat_tag())
+    format!(
+        "ROM {} \u{b7} CORE {}",
+        crate::matchmaking::rom_fnv_hash(),
+        crate::retro::core_compat_tag()
+    )
 }
 
 /// Bottom wire ticker, directly above the footer. Not called right now —
@@ -568,7 +850,11 @@ fn rom_identity_line() -> String {
 /// its `FpScreen` state, not wall-clock time), so this renders one static
 /// line instead of a scrolling one — same text, no motion.
 #[allow(dead_code)]
-fn draw_ticker(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scale: &Scale) -> Result<(), String> {
+fn draw_ticker(
+    canvas: &mut Canvas<Window>,
+    fonts: &mut FpFontCache,
+    scale: &Scale,
+) -> Result<(), String> {
     let h = 46.0;
     let y = theme::VH - chrome::FOOTER_H - h;
     canvas.set_draw_color(Color::RGBA(6, 6, 8, 217));
@@ -579,10 +865,26 @@ fn draw_ticker(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scale: &Sca
 
     let text_y = y + h / 2.0 - 9.0;
     let (px, py) = scale.point(LIST_X, text_y);
-    let (prefix_w, _) = fonts.draw(canvas, FpFont::ChakraPetchMedium, scale.font_px(15.0), "WIRE //", px, py, theme::ACCENT)?;
+    let (prefix_w, _) = fonts.draw(
+        canvas,
+        FpFont::ChakraPetchMedium,
+        scale.font_px(15.0),
+        "WIRE //",
+        px,
+        py,
+        theme::ACCENT,
+    )?;
     let rest = super::bandwidth::TICKER_TEXT.trim_start_matches("WIRE //");
     let (rx, ry) = scale.point(LIST_X + (prefix_w as f32 / scale.s), text_y);
-    fonts.draw(canvas, FpFont::ChakraPetchMedium, scale.font_px(15.0), rest, rx, ry, Color::RGB(0x7a, 0x7a, 0x82))?;
+    fonts.draw(
+        canvas,
+        FpFont::ChakraPetchMedium,
+        scale.font_px(15.0),
+        rest,
+        rx,
+        ry,
+        Color::RGB(0x7a, 0x7a, 0x82),
+    )?;
     Ok(())
 }
 
@@ -594,13 +896,23 @@ fn draw_ticker(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scale: &Sca
 /// the same glyph in accent color at several small offsets behind the
 /// near-black fill — a cheap poor-man's outline, not a true vector stroke,
 /// but it reads as a colored rim at this glyph's size.
-fn draw_ghost_watermark(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scale: &Scale, rom_present: bool) -> Result<(), String> {
+fn draw_ghost_watermark(
+    canvas: &mut Canvas<Window>,
+    fonts: &mut FpFontCache,
+    scale: &Scale,
+    rom_present: bool,
+) -> Result<(), String> {
     // No ROM found: "?" instead of the "II" mark, matching legacy's own
     // "hard-fail rather than pretend the game is there" stance — this
     // screen otherwise implies MK2 is loaded and ready (the "II" mark, the
     // "MORTAL KOMBAT" caption below it) when it may not actually be.
-    let text = if rom_present { "II" } else { "?" };
-    let px = scale.font_px(720.0);
+    let text = if rom_present {
+        crate::game::current().watermark
+    } else {
+        "?"
+    };
+    // Sized for two glyphs; a longer mark shrinks so it stays off the rows.
+    let px = scale.font_px(720.0 * (2.0 / text.chars().count().max(2) as f32));
     let (w, h) = fonts.text_size(FpFont::SairaCondensedBlack, px, text);
     let (x, y) = scale.point(
         theme::VW + 30.0 - (w as f32 / scale.s),
@@ -608,9 +920,34 @@ fn draw_ghost_watermark(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, sc
     );
     let stroke_color = Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 82);
     let r = scale.len(1.0).round().max(1.0) as i32;
-    for (dx, dy) in [(-r, -r), (0, -r), (r, -r), (-r, 0), (r, 0), (-r, r), (0, r), (r, r)] {
-        fonts.draw_italic(canvas, FpFont::SairaCondensedBlack, px, text, x + dx, y + dy, stroke_color)?;
+    for (dx, dy) in [
+        (-r, -r),
+        (0, -r),
+        (r, -r),
+        (-r, 0),
+        (r, 0),
+        (-r, r),
+        (0, r),
+        (r, r),
+    ] {
+        fonts.draw_italic(
+            canvas,
+            FpFont::SairaCondensedBlack,
+            px,
+            text,
+            x + dx,
+            y + dy,
+            stroke_color,
+        )?;
     }
-    fonts.draw_italic(canvas, FpFont::SairaCondensedBlack, px, text, x, y, Color::RGB(0x0c, 0x0c, 0x11))?;
+    fonts.draw_italic(
+        canvas,
+        FpFont::SairaCondensedBlack,
+        px,
+        text,
+        x,
+        y,
+        Color::RGB(0x0c, 0x0c, 0x11),
+    )?;
     Ok(())
 }

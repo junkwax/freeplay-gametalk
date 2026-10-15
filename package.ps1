@@ -253,6 +253,15 @@ if (Test-Path "assets\fonts") {
     Write-Host "  ❌ assets\fonts not found; the new UI (new_ui = true) cannot render without it" -ForegroundColor Red
     exit 1
 }
+# Community controller mappings (SDL_GameControllerDB, zlib license, which
+# ships beside it). Without it, arcade sticks and off-brand pads SDL doesn't
+# know fall back to a guessed button layout.
+if (Test-Path "assets\gamecontrollerdb.txt") {
+    Copy-Item "assets\gamecontrollerdb.txt", "assets\gamecontrollerdb.LICENSE.txt" "$OUT_DIR\assets\" -Force
+    Write-Host "  ✓ Copied assets\gamecontrollerdb.txt"
+} else {
+    Write-Host "  ⚠ assets\gamecontrollerdb.txt not found — unknown pads get a guessed layout" -ForegroundColor Yellow
+}
 if (Test-Path "assets\logo\wordmark.png") {
     New-Item -ItemType Directory -Force -Path "$OUT_DIR\assets\logo" | Out-Null
     Copy-Item "assets\logo\wordmark.png" "$OUT_DIR\assets\logo\" -Force

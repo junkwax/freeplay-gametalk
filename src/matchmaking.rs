@@ -225,6 +225,34 @@ const GAME_PORT: u16 = 7000;
 const PUNCH_PAYLOAD: &[u8] = b"MK2PUNCH";
 const RTT_PING_MAGIC: &[u8; 4] = b"FPRP";
 const RTT_PONG_MAGIC: &[u8; 4] = b"FPRA";
+/// Sent alongside each ping: magic + the sender's `netcore::clean_boot_hash`
+/// (u64 LE). Older clients drop it like any unknown packet, so it needs no
+/// protocol version.
+const BOOT_HASH_MAGIC: &[u8; 4] = b"FPBH";
+
+/// What the last post-punch exchange learned about the two start states.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BootCheck {
+    /// No exchange yet, or a relay match (no direct socket to swap on).
+    Unknown,
+    /// The peer's build doesn't send a boot hash.
+    PeerSilent,
+    Match,
+    /// Different start states: the match will desync. Logged at session
+    /// start with both hashes.
+    Mismatch { mine: u64, theirs: u64 },
+}
+
+static LAST_BOOT_CHECK: Mutex<BootCheck> = Mutex::new(BootCheck::Unknown);
+
+/// Takes the result: a match that never ran the exchange (direct IP) must
+/// not report the previous match's.
+pub fn last_boot_check() -> BootCheck {
+    LAST_BOOT_CHECK
+        .lock()
+        .map(|mut g| std::mem::replace(&mut *g, BootCheck::Unknown))
+        .unwrap_or(BootCheck::Unknown)
+}
 /// Long enough for ~20 samples, short enough not to be felt between
 /// "connecting" and the match.
 const RTT_WINDOW: Duration = Duration::from_millis(600);
@@ -1031,10 +1059,7 @@ fn write_cached_token(token: &str) {
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt;
-                    let _ = std::fs::set_permissions(
-                        &path,
-                        std::fs::Permissions::from_mode(0o600),
-                    );
+                    let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
                 }
                 println!("[mm] Discord token cached to {}", path.display());
             }
@@ -1259,13 +1284,28 @@ pub(crate) fn fnv_of(bytes: &[u8]) -> String {
 /// genuinely compatible; a profile that really does change the wire meaning
 /// gets its own pool, which is the one case where splitting is correct.
 fn rom_short_hash() -> String {
-    let base = format!("{}@{}", rom_fnv_hash(), crate::retro::core_compat_tag());
-    let actions = crate::input::action_set_fingerprint();
-    if actions == crate::input::LEGACY_ACTION_SET {
-        base
-    } else {
-        format!("{base}#{actions}")
+    rom_key(
+        crate::game::current().key,
+        &rom_fnv_hash(),
+        &crate::retro::core_compat_tag(),
+        &crate::input::action_set_fingerprint(),
+    )
+}
+
+/// `[game:]fnv@core[#actions]`. Every part that can split players only
+/// appears when it isn't MK2's, so an MK2 client produces exactly the key
+/// every release before multi-game support did and keeps pairing with them.
+/// The game prefix is what freeplay-stats reads to pick the rating pool;
+/// the signaling server forwards this string to it untouched.
+fn rom_key(game: &str, fnv: &str, core: &str, actions: &str) -> String {
+    let mut key = format!("{fnv}@{core}");
+    if game != crate::game::MK2.key {
+        key = format!("{game}:{key}");
     }
+    if actions != crate::input::LEGACY_ACTION_SET {
+        key = format!("{key}#{actions}");
+    }
+    key
 }
 
 pub(crate) fn sha256_hex(input: &[u8]) -> String {
@@ -1965,8 +2005,9 @@ pub fn fetch_profile(
             let _ = tx.send(ProfileUpdate::Error("stats_url not configured".into()));
             return;
         }
-        let profile_url = format!("{stats_url}/player/{discord_id}");
-        let history_url = format!("{stats_url}/player/{discord_id}/history?limit=10");
+        let game = crate::game::current().key;
+        let profile_url = format!("{stats_url}/player/{discord_id}?game={game}");
+        let history_url = format!("{stats_url}/player/{discord_id}/history?limit=10&game={game}");
 
         let profile = match http_get_no_auth(&profile_url) {
             Ok(body) => match parse_profile(&body) {
@@ -2295,7 +2336,10 @@ pub fn fetch_leaderboard(stats_url: String, tx: Sender<LeaderboardUpdate>) {
             return;
         }
 
-        let url = format!("{stats_url}/leaderboard?limit=20");
+        let url = format!(
+            "{stats_url}/leaderboard?limit=20&game={}",
+            crate::game::current().key
+        );
         match http_get_no_auth(&url) {
             Ok(body) => match parse_leaderboard(&body) {
                 Some(rows) => {
@@ -2549,8 +2593,8 @@ fn run_lobby_match(tx: &Sender<Update>, lobby_id: &str) -> Result<(), String> {
         .ok_or("lobby match: no session assigned yet (try again)")?;
     let peer_endpoint = json_nested_str(&resp, "your_match", "peer_endpoint")
         .ok_or("lobby match: missing peer_endpoint")?;
-    let punch_at_ms =
-        json_nested_i64(&resp, "your_match", "punch_at_ms").ok_or("lobby match: missing punch_at_ms")?;
+    let punch_at_ms = json_nested_i64(&resp, "your_match", "punch_at_ms")
+        .ok_or("lobby match: missing punch_at_ms")?;
     let role = json_nested_str(&resp, "your_match", "role").ok_or("lobby match: missing role")?;
     let room_id = json_nested_str(&resp, "your_match", "room_id");
     let peer_username = json_nested_str(&resp, "your_match", "username");
@@ -3220,7 +3264,9 @@ pub(crate) fn http_get_bytes(url: &str) -> Result<Vec<u8>, String> {
 fn read_chunked_body<R: std::io::BufRead>(reader: &mut R, out: &mut Vec<u8>) -> Result<(), String> {
     loop {
         let mut size_line = String::new();
-        reader.read_line(&mut size_line).map_err(|e| e.to_string())?;
+        reader
+            .read_line(&mut size_line)
+            .map_err(|e| e.to_string())?;
         let size_hex = size_line.trim().split(';').next().unwrap_or("").trim();
         if size_hex.is_empty() {
             return Err("malformed chunk size".into());
@@ -3346,8 +3392,16 @@ fn measure_rtt(sock: &UdpSocket, peer: SocketAddr) -> Option<u32> {
     let mut peer_median: Option<u32> = None;
     let mut last_ping = start - RTT_PING_EVERY;
     let mut buf = [0u8; 64];
+    let my_boot = crate::netcore::clean_boot_hash();
+    let mut peer_boot: Option<u64> = None;
 
     while start.elapsed() < RTT_WINDOW {
+        if last_ping.elapsed() >= RTT_PING_EVERY && sent_at.len() < u16::MAX as usize && my_boot != 0 {
+            let mut bh = [0u8; 12];
+            bh[..4].copy_from_slice(BOOT_HASH_MAGIC);
+            bh[4..].copy_from_slice(&my_boot.to_le_bytes());
+            sock.send_to(&bh, peer).ok();
+        }
         if last_ping.elapsed() >= RTT_PING_EVERY && sent_at.len() < u16::MAX as usize {
             let seq = sent_at.len() as u16;
             let median = median_ms(&samples).unwrap_or(0).min(u16::MAX as u32) as u16;
@@ -3381,7 +3435,21 @@ fn measure_rtt(sock: &UdpSocket, peer: SocketAddr) -> Option<u32> {
             if let Some(t) = sent_at.get(seq) {
                 samples.push(t.elapsed().as_millis() as u32);
             }
+        } else if n == 12 && &pkt[..4] == BOOT_HASH_MAGIC {
+            let mut h = [0u8; 8];
+            h.copy_from_slice(&pkt[4..12]);
+            peer_boot = Some(u64::from_le_bytes(h));
         }
+    }
+
+    let check = match (my_boot, peer_boot) {
+        (0, _) => BootCheck::Unknown,
+        (_, None) => BootCheck::PeerSilent,
+        (mine, Some(theirs)) if mine == theirs => BootCheck::Match,
+        (mine, Some(theirs)) => BootCheck::Mismatch { mine, theirs },
+    };
+    if let Ok(mut g) = LAST_BOOT_CHECK.lock() {
+        *g = check;
     }
 
     // Fewer than this and one slow sample decides the delay for the match.
@@ -3573,7 +3641,8 @@ mod tests {
     fn json_str_does_not_match_key_text_inside_string_values() {
         // A chat message trying to smuggle a field. On the wire its quotes
         // are escaped, so the scanner must not treat it as a real key.
-        let j = r#"{"message":"ha \"peer_endpoint\": \"6.6.6.6:1\"","peer_endpoint":"1.2.3.4:7000"}"#;
+        let j =
+            r#"{"message":"ha \"peer_endpoint\": \"6.6.6.6:1\"","peer_endpoint":"1.2.3.4:7000"}"#;
         assert_eq!(
             json_str(j, "peer_endpoint").as_deref(),
             Some("1.2.3.4:7000")
@@ -3614,7 +3683,8 @@ mod tests {
     fn read_chunked_body_reassembles_chunks() {
         // "Wiki" + "pedia" + " in\r\n\r\nchunks." classic example, plus an
         // empty terminating chunk with a trailer line.
-        let raw = b"4\r\nWiki\r\n5\r\npedia\r\nE\r\n in\r\n\r\nchunks.\r\n0\r\nX-Trailer: 1\r\n\r\n";
+        let raw =
+            b"4\r\nWiki\r\n5\r\npedia\r\nE\r\n in\r\n\r\nchunks.\r\n0\r\nX-Trailer: 1\r\n\r\n";
         let mut out = Vec::new();
         let mut reader = std::io::BufReader::new(&raw[..]);
         read_chunked_body(&mut reader, &mut out).unwrap();
@@ -3788,5 +3858,16 @@ mod tests {
         assert_eq!(lobbies[1].format, LobbyMatchFormat::UnrankedVs);
         assert_eq!(lobbies[1].players, 1);
         assert!(lobbies[1].private);
+    }
+
+    #[test]
+    fn rom_key_is_unchanged_for_mk2_and_prefixed_for_other_games() {
+        use super::rom_key;
+        let legacy = crate::input::LEGACY_ACTION_SET;
+        assert_eq!(rom_key("mk2", "1a2b", "cf53523", legacy), "1a2b@cf53523");
+        assert_eq!(
+            rom_key("nbajam", "1a2b", "cf53523", "9f8e7d6c"),
+            "nbajam:1a2b@cf53523#9f8e7d6c"
+        );
     }
 }

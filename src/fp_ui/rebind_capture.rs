@@ -56,9 +56,21 @@ pub fn draw_modal(
     )?;
     y += 26.0;
 
-    let title = format!("{} \u{2014} {}", action.label().to_uppercase(), player.label());
+    let title = format!(
+        "{} \u{2014} {}",
+        action.label().to_uppercase(),
+        player.label()
+    );
     let (tx, ty) = scale.point(content_x, y);
-    fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(38.0), &title, tx, ty, theme::TEXT)?;
+    fonts.draw(
+        canvas,
+        FpFont::SairaCondensedBold,
+        scale.font_px(38.0),
+        &title,
+        tx,
+        ty,
+        theme::TEXT,
+    )?;
     y += 62.0;
 
     // The mockup's `fp-blink 0.8s step-end`: full for the first half of

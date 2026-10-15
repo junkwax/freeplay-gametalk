@@ -836,7 +836,9 @@ impl<'ttf, 'tc> FpFontCache<'ttf, 'tc> {
         if self.ensure_font(font, px, false).is_err() {
             return (0, 0);
         }
-        self.fonts[&(font, px, false)].size_of(text).unwrap_or((0, 0))
+        self.fonts[&(font, px, false)]
+            .size_of(text)
+            .unwrap_or((0, 0))
     }
 
     /// Measure `text` as `draw_tracked` would render it, without drawing —
@@ -845,7 +847,13 @@ impl<'ttf, 'tc> FpFontCache<'ttf, 'tc> {
     /// natural (untracked) width already accounts for kerning across the
     /// whole string, so this just adds the extra tracking gaps on top
     /// rather than re-deriving per-character advances.
-    pub fn text_size_tracked(&mut self, font: FpFont, px: u16, text: &str, tracking_px: i32) -> (u32, u32) {
+    pub fn text_size_tracked(
+        &mut self,
+        font: FpFont,
+        px: u16,
+        text: &str,
+        tracking_px: i32,
+    ) -> (u32, u32) {
         let (w, h) = self.text_size(font, px, text);
         let n = text.chars().count() as i32;
         let tracked_w = w as i32 + tracking_px * (n - 1).max(0);
@@ -921,11 +929,19 @@ impl<'ttf, 'tc> FpFontCache<'ttf, 'tc> {
     /// Returns the drawn width in pixels on success so callers can lay out
     /// adjacent elements (e.g. the build tag) after it; `None` if the asset
     /// isn't available, so the caller can fall back to text.
-    pub fn draw_logo(&mut self, canvas: &mut Canvas<Window>, x: i32, y: i32, target_h: u32) -> Option<u32> {
+    pub fn draw_logo(
+        &mut self,
+        canvas: &mut Canvas<Window>,
+        x: i32,
+        y: i32,
+        target_h: u32,
+    ) -> Option<u32> {
         self.ensure_logo();
         let (tex, w, h) = self.logo.as_ref()?;
         let draw_w = (*w as u64 * target_h as u64 / *h as u64) as u32;
-        canvas.copy(tex, None, Rect::new(x, y, draw_w, target_h)).ok()?;
+        canvas
+            .copy(tex, None, Rect::new(x, y, draw_w, target_h))
+            .ok()?;
         Some(draw_w)
     }
 }
@@ -954,7 +970,12 @@ fn opaque_row_span(surf: &sdl2::surface::Surface) -> (u32, u32) {
                 if off + 4 > bytes.len() {
                     break;
                 }
-                let px_val = u32::from_le_bytes([bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3]]);
+                let px_val = u32::from_le_bytes([
+                    bytes[off],
+                    bytes[off + 1],
+                    bytes[off + 2],
+                    bytes[off + 3],
+                ]);
                 if Color::from_u32(&pf, px_val).a != 0 {
                     first = first.min(y);
                     last = y + 1;

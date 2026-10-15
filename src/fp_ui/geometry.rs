@@ -73,7 +73,14 @@ fn fill_triangles(canvas: &mut Canvas<Window>, verts: &[SdlVertex]) {
 const CIRCLE_SEGMENTS: usize = 64;
 
 /// Fill a solid circle (logical center/radius) as a triangle fan.
-pub fn fill_circle(canvas: &mut Canvas<Window>, scale: &Scale, cx: f32, cy: f32, r: f32, color: Color) {
+pub fn fill_circle(
+    canvas: &mut Canvas<Window>,
+    scale: &Scale,
+    cx: f32,
+    cy: f32,
+    r: f32,
+    color: Color,
+) {
     canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
     let center = scale.point(cx, cy);
     let center_v = vertex(center.0 as f32, center.1 as f32, color);
@@ -185,7 +192,12 @@ pub fn fill_skewed_rect(
 /// same as everything else in this design (`skewX(-9deg)`); simplest to
 /// just hand the caller pre-skewed points rather than adding a whole
 /// second skew parameter here.
-pub fn fill_triangle(canvas: &mut Canvas<Window>, scale: &Scale, points: [(f32, f32); 3], color: Color) {
+pub fn fill_triangle(
+    canvas: &mut Canvas<Window>,
+    scale: &Scale,
+    points: [(f32, f32); 3],
+    color: Color,
+) {
     canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
     let verts: Vec<SdlVertex> = points
         .iter()
@@ -317,7 +329,12 @@ pub fn fill_skewed_rect_vgradient(
 /// angles. Each stop pair renders as a wide quad perpendicular to the
 /// gradient direction, long enough on the perpendicular axis to fully cover
 /// the box regardless of rotation.
-pub fn fill_linear_gradient_box(canvas: &mut Canvas<Window>, scale: &Scale, angle_deg: f32, stops: &[(f32, Color)]) {
+pub fn fill_linear_gradient_box(
+    canvas: &mut Canvas<Window>,
+    scale: &Scale,
+    angle_deg: f32,
+    stops: &[(f32, Color)],
+) {
     canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
     let a = angle_deg.to_radians();
     let (dx, dy) = (a.sin(), -a.cos());

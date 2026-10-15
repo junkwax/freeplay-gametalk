@@ -35,6 +35,16 @@ pub fn signaling_url() -> Option<String> {
 pub struct Config {
     #[serde(default)]
     pub bindings: Bindings,
+    /// Which game to boot when more than one ROM is installed: a
+    /// `game::Profile::key` ("mk2", "nbajam"). Empty or unknown means the
+    /// default search order, which puts MK2 first.
+    #[serde(default)]
+    pub game: String,
+    /// Which ROM zip to boot, by file name ("umk3.zip"), as last picked
+    /// with the main menu's LB/RB switcher. Takes priority over `game`
+    /// while that file is installed; empty means let `game` decide.
+    #[serde(default)]
+    pub rom: String,
     /// Public signaling/matchmaking service URL.
     #[serde(default)]
     pub signaling_url: String,
@@ -72,10 +82,21 @@ pub struct Config {
     /// the speculative frame never enters ggrs — but it deepens the visual
     /// prediction by one frame, so rollback corrections are one frame
     /// larger, and it costs an extra core run + save/load per tick in the
-    /// most timing-critical path. Off by default; feel-focused players on
-    /// decent hardware can enable it.
-    #[serde(default)]
+    /// most timing-critical path. On by default, as Fightcade runs its own
+    /// run-ahead online; `freeplay --net-probe --runahead`-style lagged runs
+    /// stay in sync with it (the earlier "desyncs" were a ggrs 0.10
+    /// false positive, fixed by the move to ggrs 0.13). Turn it off on hardware
+    /// whose frame pacing suffers.
+    #[serde(default = "default_true")]
     pub runahead_online: bool,
+    /// One-time migrations already applied to this config, as bits. Every
+    /// save writes every field, so a new default can't reach an old config
+    /// on its own; a bit here records that it was moved once, so a later
+    /// choice sticks. `MIGRATED_RUNAHEAD_ONLINE`: see `migrate_runahead_online`.
+    /// A fresh config starts with every migration done: it already has the
+    /// new defaults.
+    #[serde(default = "default_migrations_done")]
+    pub migrations_done: u32,
     /// Keep running when a plugged-in laptop's lid is closed, for playing
     /// docked to a monitor. Changes the OS lid policy only while Freeplay is
     /// open — see `lid.rs`.
@@ -445,6 +466,7 @@ pub fn load() -> Config {
                 println!("Loaded config from {}", path().display());
                 migrate_username_confirmation(&s, &mut cfg);
                 migrate_input_delay_auto(&s, &mut cfg);
+                migrate_runahead_online(&s, &mut cfg);
                 cfg
             }
             Err(e) => {
@@ -474,6 +496,11 @@ pub fn load() -> Config {
         cfg.guest_device_id = generate_device_id();
         needs_save = true;
     }
+    if cfg.bindings.fill_missing_defaults() {
+        needs_save = true;
+    }
+    crate::rom::set_preferred_game(crate::game::by_key(&cfg.game).map(|g| g.id));
+    crate::rom::set_preferred_rom(&cfg.rom);
     if needs_save {
         save(&cfg);
     }
@@ -678,6 +705,30 @@ fn migrate_input_delay_auto(raw_config: &str, cfg: &mut Config) {
     }
 }
 
+pub const MIGRATED_RUNAHEAD_ONLINE: u32 = 1 << 0;
+
+fn default_migrations_done() -> u32 {
+    MIGRATED_RUNAHEAD_ONLINE
+}
+
+/// Online run-ahead went from default off to default on. Until now nothing
+/// but the old default could have written `runahead_online = false` (the
+/// toggle only shipped behind `new_ui`), so an old config - one written
+/// before `migrations_done` existed - is flipped once; the bit, saved with
+/// the next write, keeps a player's later OFF from being undone.
+fn migrate_runahead_online(raw_config: &str, cfg: &mut Config) {
+    let Ok(value) = toml::from_str::<toml::Value>(raw_config) else {
+        return;
+    };
+    if value.get("migrations_done").is_none() {
+        cfg.migrations_done = 0;
+    }
+    if cfg.migrations_done & MIGRATED_RUNAHEAD_ONLINE == 0 {
+        cfg.runahead_online = true;
+        cfg.migrations_done |= MIGRATED_RUNAHEAD_ONLINE;
+    }
+}
+
 pub fn default_username() -> String {
     let raw = std::env::var("FREEPLAY_USERNAME")
         .ok()
@@ -869,6 +920,33 @@ mod tests {
     }
 
     #[test]
+    fn runahead_online_migration_flips_old_default_once() {
+        let load = |raw: &str| {
+            let mut cfg: Config = toml::from_str(raw).unwrap();
+            migrate_runahead_online(raw, &mut cfg);
+            (cfg.runahead_online, cfg.migrations_done & MIGRATED_RUNAHEAD_ONLINE != 0)
+        };
+        assert_eq!(load(""), (true, true), "fresh install: on");
+        assert_eq!(load("runahead_online = false
+"), (true, true), "old saved default flips");
+        assert_eq!(
+            load("runahead_online = false
+migrations_done = 1
+"),
+            (false, true),
+            "an OFF chosen after the migration is kept"
+        );
+        assert_eq!(load("runahead_online = true
+migrations_done = 1
+"), (true, true));
+        // A config saved from a fresh install already carries the bit, so a
+        // player who turns it off before ever reloading keeps it off.
+        let fresh = toml::to_string(&Config::default()).unwrap();
+        let off = fresh.replace("runahead_online = true", "runahead_online = false");
+        assert_eq!(load(&off), (false, true));
+    }
+
+    #[test]
     fn old_default_audio_buffer_moves_to_new_default() {
         let load = |raw: &str| {
             let mut cfg: Config = toml::from_str(raw).unwrap();
@@ -983,7 +1061,9 @@ mod tests {
         ] {
             assert_eq!(digest.len(), 64, "not a sha256 digest: {digest}");
             assert!(
-                digest.chars().all(|c| c.is_ascii_hexdigit() && !c.is_uppercase()),
+                digest
+                    .chars()
+                    .all(|c| c.is_ascii_hexdigit() && !c.is_uppercase()),
                 "not lowercase hex: {digest}"
             );
         }

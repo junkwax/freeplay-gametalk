@@ -16,6 +16,7 @@ mod drone;
 mod font;
 mod fp_ui;
 mod frame_timer;
+mod game;
 mod ghost;
 mod gl_crt;
 mod incident;
@@ -34,6 +35,7 @@ mod mk2_addr_check;
 mod mk2_addrs;
 mod mk2_perf;
 mod native_titlebar_drag;
+mod net_probe;
 mod net_set;
 mod net_stats_ui;
 mod netcore;
@@ -43,12 +45,12 @@ mod protocol;
 mod relay_socket;
 mod render;
 mod replay;
-mod runahead;
 mod replay_upload;
 mod retro;
 mod rom;
 mod rom_manifest;
 mod rpc;
+mod runahead;
 mod score;
 mod session;
 mod version;
@@ -307,11 +309,7 @@ fn send_chat_draft(
 /// (white), 8 anchor points and ground line. Bit 16, every multipart piece,
 /// costs enough frame time to change how a fight plays, so the Lab never sets
 /// it. F2 steps through these, then off.
-const HITBOX_VIEWS: [(u16, &str); 3] = [
-    (5, "HIT+HURT"),
-    (7, "HIT+HURT+BODY"),
-    (15, "ALL"),
-];
+const HITBOX_VIEWS: [(u16, &str); 3] = [(5, "HIT+HURT"), (7, "HIT+HURT+BODY"), (15, "ALL")];
 
 fn hitbox_view_label(trainer: &memory::PokeList) -> &'static str {
     if !trainer.is_enabled("hitboxes") {
@@ -400,7 +398,11 @@ fn lab_autostart_pulses(frame: u32) -> (bool, bool) {
 /// `matchmaking::check_username_available` without duplicating that logic
 /// per transition.
 fn set_username_screen(state: &mut AppState, value: String, status: String, checking: bool) {
-    *state = AppState::FpUi(fp_ui::FpScreen::ClaimUsername { value, status, checking });
+    *state = AppState::FpUi(fp_ui::FpScreen::ClaimUsername {
+        value,
+        status,
+        checking,
+    });
 }
 
 /// The matchmaking search screen for challenges/spar-rooms/lobby match
@@ -414,7 +416,10 @@ fn is_matchmaking_screen(state: &AppState) -> bool {
     matches!(
         state,
         AppState::FpUi(fp_ui::FpScreen::Matchmaking { .. })
-            | AppState::FpUi(fp_ui::FpScreen::Lobby { quick_match_status: Some(_), .. })
+            | AppState::FpUi(fp_ui::FpScreen::Lobby {
+                quick_match_status: Some(_),
+                ..
+            })
             | AppState::FpUi(fp_ui::FpScreen::DiscordConnect { .. })
     )
 }
@@ -475,12 +480,17 @@ fn fp_native_overlay(state: &AppState) -> bool {
 /// than losing the search entirely.
 fn set_quick_match_searching(state: &mut AppState, status: String) {
     match state {
-        AppState::FpUi(fp_ui::FpScreen::Lobby { quick_match_status, .. }) => {
+        AppState::FpUi(fp_ui::FpScreen::Lobby {
+            quick_match_status, ..
+        }) => {
             *quick_match_status = Some(status);
         }
         _ => {
             let mut lobby = fp_ui::FpScreen::lobby();
-            if let fp_ui::FpScreen::Lobby { quick_match_status, .. } = &mut lobby {
+            if let fp_ui::FpScreen::Lobby {
+                quick_match_status, ..
+            } = &mut lobby
+            {
                 *quick_match_status = Some(status);
             }
             *state = AppState::FpUi(lobby);
@@ -586,7 +596,11 @@ fn start_replay_takeover(
             frames_left: TAKEOVER_ACTIVE_FRAMES,
         });
         *paused = true;
-        let side = if human == input::Player::P1 { "P1" } else { "P2" };
+        let side = if human == input::Player::P1 {
+            "P1"
+        } else {
+            "P2"
+        };
         *toast = Some((
             format!("Taking over {side}"),
             Instant::now() + Duration::from_millis(1400),
@@ -784,21 +798,38 @@ fn scan_local_ghost_entries() -> Vec<menu::GhostEntry> {
             .collect();
         // Sort by timestamp descending (latest first)
         fn extract_ts(name: &str) -> u64 {
-            let base = if name.ends_with(".ncgh") { &name[..name.len() - 5] } else { name };
-            base.rsplit('_').next().and_then(|s| s.parse().ok()).unwrap_or(0)
+            let base = if name.ends_with(".ncgh") {
+                &name[..name.len() - 5]
+            } else {
+                name
+            };
+            base.rsplit('_')
+                .next()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0)
         }
         files.sort_by(|a, b| extract_ts(&b.0).cmp(&extract_ts(&a.0)));
         entries = files
             .into_iter()
             .map(|(name, path)| {
-                let frame_count = ghost::read_ncgh_frame_count(std::path::Path::new(&path)).unwrap_or(0);
-                menu::GhostEntry::Local { filename: name, path, frame_count }
+                let frame_count =
+                    ghost::read_ncgh_frame_count(std::path::Path::new(&path)).unwrap_or(0);
+                menu::GhostEntry::Local {
+                    filename: name,
+                    path,
+                    frame_count,
+                }
             })
             .collect();
     }
     if std::path::Path::new("ghost.bin").exists() {
-        let frame_count = ghost::read_ncgh_frame_count(std::path::Path::new("ghost.bin")).unwrap_or(0);
-        entries.push(menu::GhostEntry::Local { filename: "ghost.bin".into(), path: "ghost.bin".into(), frame_count });
+        let frame_count =
+            ghost::read_ncgh_frame_count(std::path::Path::new("ghost.bin")).unwrap_or(0);
+        entries.push(menu::GhostEntry::Local {
+            filename: "ghost.bin".into(),
+            path: "ghost.bin".into(),
+            frame_count,
+        });
     }
     entries
 }
@@ -1143,14 +1174,20 @@ fn scan_local_replay_entries() -> Vec<menu::ReplayEntry> {
 /// to return to — the screen is reconstructed instead.
 fn replay_select_exit_state(status: impl Into<String>) -> AppState {
     let status = Some(status.into());
-    AppState::FpUi(fp_ui::FpScreen::ReplaySelect { cursor: 0, entries: Vec::new(), status })
+    AppState::FpUi(fp_ui::FpScreen::ReplaySelect {
+        cursor: 0,
+        entries: Vec::new(),
+        status,
+    })
 }
 
 fn refresh_replay_select(state: &mut AppState, status: Option<String>) {
     let cursor_entries_status = match state {
-        AppState::FpUi(fp_ui::FpScreen::ReplaySelect { cursor, entries, status: screen_status }) => {
-            Some((cursor, entries, screen_status))
-        }
+        AppState::FpUi(fp_ui::FpScreen::ReplaySelect {
+            cursor,
+            entries,
+            status: screen_status,
+        }) => Some((cursor, entries, screen_status)),
         _ => None,
     };
     if let Some((cursor, entries, screen_status)) = cursor_entries_status {
@@ -1185,19 +1222,30 @@ fn is_fp_test_conn_editing(state: &AppState) -> bool {
 
 fn set_replay_select_status(state: &mut AppState, status: impl Into<String>) {
     let status = status.into();
-    if let AppState::FpUi(fp_ui::FpScreen::ReplaySelect { status: screen_status, .. }) = state {
+    if let AppState::FpUi(fp_ui::FpScreen::ReplaySelect {
+        status: screen_status,
+        ..
+    }) = state
+    {
         *screen_status = Some(status.clone());
     }
 }
 
 fn set_ghost_select_status(state: &mut AppState, status: impl Into<String>) {
-    if let AppState::FpUi(fp_ui::FpScreen::GhostSelect { status: screen_status, .. }) = state {
+    if let AppState::FpUi(fp_ui::FpScreen::GhostSelect {
+        status: screen_status,
+        ..
+    }) = state
+    {
         *screen_status = Some(status.into());
     }
 }
 
 fn selected_replay_entry(state: &AppState) -> Option<menu::ReplayEntry> {
-    if let AppState::FpUi(fp_ui::FpScreen::ReplaySelect { cursor, entries, .. }) = state {
+    if let AppState::FpUi(fp_ui::FpScreen::ReplaySelect {
+        cursor, entries, ..
+    }) = state
+    {
         entries.get(*cursor).cloned()
     } else {
         None
@@ -1457,14 +1505,16 @@ fn install_native_crash_handler() {
         fn SetUnhandledExceptionFilter(
             filter: unsafe extern "system" fn(*mut ExceptionPointers) -> i32,
         ) -> *mut c_void;
-        fn GetModuleHandleExW(flags: u32, module_name: *const u16, module: *mut *mut c_void) -> i32;
+        fn GetModuleHandleExW(flags: u32, module_name: *const u16, module: *mut *mut c_void)
+            -> i32;
         fn GetModuleFileNameW(module: *mut c_void, filename: *mut u16, size: u32) -> u32;
     }
 
     fn module_at(addr: *mut c_void) -> String {
         unsafe {
             let mut handle: *mut c_void = std::ptr::null_mut();
-            let flags = GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT | GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS;
+            let flags = GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT
+                | GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS;
             if GetModuleHandleExW(flags, addr as *const u16, &mut handle) == 0 || handle.is_null() {
                 return "<unknown module>".to_string();
             }
@@ -1679,12 +1729,166 @@ fn run_addr_probe() -> Result<(), Box<dyn std::error::Error>> {
                     None => println!("  {name:<16} 0x{addr:05X} = <unreadable>"),
                 }
             }
-
         }
         Ok(())
     })();
     retro::set_silent(false);
     out?;
+    Ok(())
+}
+
+/// Coin, start, then mash through select into a fight, with P2 moving too so
+/// both players' input paths are exercised. Shared by the headless probes.
+fn probe_script(frame: usize) -> [[bool; 16]; 2] {
+    let mut pads = [[false; 16]; 2];
+    let tap = |at: usize| frame >= at && frame < at + 6;
+    pads[0][input::Action::Coin.retro_id()] = tap(400) || tap(430);
+    pads[0][input::Action::Start.retro_id()] = tap(520) || tap(900) || tap(1100);
+    if frame > 1400 {
+        let beat = frame / 7;
+        let set = input::actions();
+        pads[0][set[beat % set.len().min(9)].retro_id()] = true;
+        pads[1][set[(beat * 3 + 1) % set.len().min(9)].retro_id()] = frame % 11 < 5;
+    }
+    pads
+}
+
+/// `--perf-probe`: what does each core operation a netplay tick can do cost
+/// on this machine, mid-fight? Times frame runs in every `AvMode`, savestate
+/// save and load, then adds them up into per-tick budgets — how deep a
+/// rollback still fits in one 18.28 ms frame, with and without online
+/// runahead. Headless; run on the machines you care about.
+fn run_perf_probe() -> Result<(), Box<dyn std::error::Error>> {
+    use std::time::Instant;
+    log::init("perf_probe");
+    let rom_path = rom::find_rom_zip_string()
+        .ok_or_else(|| "ROM zip not found next to the executable or in roms\\".to_string())?;
+    let core_path = render::fbneo_core_path()
+        .ok_or_else(|| "FBNeo core not found next to the executable or in cores\\".to_string())?;
+    println!("[perf-probe] rom={rom_path}");
+    retro::set_silent(true);
+    let core = unsafe { retro::load(&core_path, &rom_path)? };
+
+    const ANCHOR: usize = 2400;
+    const SAMPLES: usize = 1200;
+    for f in 0..ANCHOR {
+        retro::set_input_all(probe_script(f));
+        unsafe { (core.run)() };
+    }
+    let anchor = core.save_state().ok_or("save_state failed")?;
+
+    // Percentiles in µs over one pass of SAMPLES mid-fight frames.
+    struct Dist {
+        name: &'static str,
+        us: Vec<f64>,
+    }
+    impl Dist {
+        fn pct(&self, p: f64) -> f64 {
+            let mut v = self.us.clone();
+            v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            v[((v.len() - 1) as f64 * p) as usize]
+        }
+        fn mean(&self) -> f64 {
+            self.us.iter().sum::<f64>() / self.us.len() as f64
+        }
+    }
+    let time_runs = |name: &'static str, mode: retro::AvMode| -> Result<Dist, String> {
+        if !core.load_state(&anchor) {
+            return Err("load_state failed".into());
+        }
+        retro::set_av_mode(mode);
+        let mut us = Vec::with_capacity(SAMPLES);
+        for f in ANCHOR..ANCHOR + SAMPLES {
+            retro::set_input_all(probe_script(f));
+            let t = Instant::now();
+            unsafe { (core.run)() };
+            us.push(t.elapsed().as_secs_f64() * 1e6);
+            retro::clear_audio_buffer();
+        }
+        retro::set_av_mode(retro::AvMode::Silent);
+        Ok(Dist { name, us })
+    };
+
+    let normal = time_runs("run, video+audio (Normal)", retro::AvMode::Normal)?;
+    let silent = time_runs("run, nothing drawn (Silent)", retro::AvMode::Silent)?;
+    let video = time_runs("run, video only (VideoOnly)", retro::AvMode::VideoOnly)?;
+
+    if !core.load_state(&anchor) {
+        return Err("load_state failed".into());
+    }
+    let (mut save, mut load) = (Vec::with_capacity(SAMPLES), Vec::with_capacity(SAMPLES));
+    let mut buf = Vec::new();
+    for f in ANCHOR..ANCHOR + SAMPLES {
+        let t = Instant::now();
+        if !core.save_state_into(&mut buf) {
+            return Err("save_state failed".into());
+        }
+        save.push(t.elapsed().as_secs_f64() * 1e6);
+        let t = Instant::now();
+        if !core.load_state(&buf) {
+            return Err("load_state failed".into());
+        }
+        load.push(t.elapsed().as_secs_f64() * 1e6);
+        retro::set_input_all(probe_script(f));
+        unsafe { (core.run)() };
+    }
+    let save = Dist {
+        name: "savestate save",
+        us: save,
+    };
+    let load = Dist {
+        name: "savestate load",
+        us: load,
+    };
+    retro::set_silent(false);
+
+    println!(
+        "[perf-probe] savestate {} bytes, {SAMPLES} mid-fight frames each",
+        buf.len()
+    );
+    println!(
+        "[perf-probe] {:<30} {:>8} {:>8} {:>8} {:>8}",
+        "operation (µs)", "mean", "p50", "p99", "max"
+    );
+    for d in [&normal, &silent, &video, &save, &load] {
+        println!(
+            "[perf-probe] {:<30} {:>8.0} {:>8.0} {:>8.0} {:>8.0}",
+            d.name,
+            d.mean(),
+            d.pct(0.5),
+            d.pct(0.99),
+            d.pct(1.0)
+        );
+    }
+
+    // Budgets at p99: a tick that is slow 1% of the time is a visible hitch
+    // every two seconds.
+    const FRAME_US: f64 = 18_281.0;
+    let (n, s, v, sv, ld) = (
+        normal.pct(0.99),
+        silent.pct(0.99),
+        video.pct(0.99),
+        save.pct(0.99),
+        load.pct(0.99),
+    );
+    let base = n + sv;
+    let runahead = sv + v + ld;
+    let per_rollback_frame = s + sv;
+    println!("[perf-probe] -- per-tick budget at p99 (frame = {FRAME_US:.0} µs, before render/present) --");
+    for (label, extra) in [
+        ("no runahead", 0.0),
+        ("online runahead 1", runahead),
+        ("online runahead 2", runahead + s),
+    ] {
+        let fixed = base + extra;
+        let spare = FRAME_US - fixed - ld;
+        let depth = (spare / per_rollback_frame).floor().max(0.0);
+        println!(
+            "[perf-probe] {label:<18} steady tick {:>6.0} µs ({:>4.1}% of frame), rollback fits up to {depth:.0} frames",
+            fixed,
+            fixed / FRAME_US * 100.0
+        );
+    }
     Ok(())
 }
 
@@ -1705,22 +1909,12 @@ fn run_sync_probe() -> Result<(), Box<dyn std::error::Error>> {
     retro::set_silent(true);
     let core = unsafe { retro::load(&core_path, &rom_path)? };
 
-    // Coin, start, then mash through select into a fight, with P2 moving too
-    // so both players' input paths are in the hashed state.
-    let script = |frame: usize| -> [[bool; 16]; 2] {
-        let mut pads = [[false; 16]; 2];
-        let tap = |at: usize| frame >= at && frame < at + 6;
-        pads[0][input::Action::Coin.retro_id()] = tap(400) || tap(430);
-        pads[0][input::Action::Start.retro_id()] = tap(520) || tap(900) || tap(1100);
-        if frame > 1400 {
-            let beat = frame / 7;
-            pads[0][input::Action::ALL[beat % input::Action::ALL.len().min(9)].retro_id()] = true;
-            pads[1][input::Action::ALL[(beat * 3 + 1) % 9].retro_id()] = frame % 11 < 5;
-        }
-        pads
-    };
+    let script = probe_script;
     let ram_hash = |core: &retro::Core| -> u64 {
-        let ram: &[u8] = core.memory(retro::RETRO_MEMORY_SYSTEM_RAM).map(|r| &*r).unwrap_or(&[]);
+        let ram: &[u8] = core
+            .memory(retro::RETRO_MEMORY_SYSTEM_RAM)
+            .map(|r| &*r)
+            .unwrap_or(&[]);
         let mut h: u64 = 0xcbf29ce484222325;
         for b in ram {
             h ^= *b as u64;
@@ -1767,6 +1961,81 @@ fn run_sync_probe() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// `--score-probe [frames]`: are this game's score addresses right? Boots
+/// headless, joins both players, mashes pseudo-random input for both, and
+/// prints every score change, clock expiry and `ScoreEvent` the tracker sees.
+/// Right addresses show both sides' points climbing and quarters ending;
+/// wrong ones show nothing, or noise.
+fn run_score_probe(frames: usize) -> Result<(), Box<dyn std::error::Error>> {
+    log::init("score_probe");
+    let rom_path = rom::find_rom_zip_string()
+        .ok_or_else(|| "ROM zip not found next to the executable or in roms\\".to_string())?;
+    let core_path = render::fbneo_core_path()
+        .ok_or_else(|| "FBNeo core not found next to the executable or in cores\\".to_string())?;
+    retro::set_silent(true);
+    let core = unsafe { retro::load(&core_path, &rom_path)? };
+    println!(
+        "[score-probe] rom={rom_path} game={} driver={} supported={}",
+        game::current().key,
+        game::loaded_driver(),
+        score::supported()
+    );
+
+    let mut rng: u32 = 0x1234_5678;
+    // The mash, held for a 6-frame beat so the game sees real presses.
+    let mut held = [[false; 16]; 2];
+    let mut tracker = score::ScoreTracker::new();
+    let mut last = score::Score::default();
+    let set = input::actions();
+    for f in 0..frames {
+        let mut pads = [[false; 16]; 2];
+        let tap = |period: usize, at: usize| f % period >= at && f % period < at + 4;
+        for (p, pad) in pads.iter_mut().enumerate() {
+            pad[input::Action::Coin.retro_id()] = f < 2000 && tap(300, 10 + p * 20);
+            // Start keeps both players joined and skips attract/prompts.
+            pad[input::Action::Start.retro_id()] = tap(240, 100 + p * 40);
+            if f > 1500 && f % 6 == 0 {
+                rng = rng.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                for (i, a) in set.iter().enumerate() {
+                    if !matches!(a, input::Action::Start | input::Action::Coin) {
+                        held[p][a.retro_id()] = (rng >> (i + 3)) & 1 == 1;
+                    }
+                }
+            }
+            for (i, on) in held[p].iter().enumerate() {
+                pad[i] |= *on;
+            }
+        }
+        retro::set_input_all(pads);
+        unsafe { (core.run)() };
+        retro::clear_audio_buffer();
+
+        let now = score::Score::read(&core);
+        let expired = last.clock != 0 && now.clock == 0;
+        if now.p1_match_wins != last.p1_match_wins
+            || now.p2_match_wins != last.p2_match_wins
+            || expired
+        {
+            println!(
+                "[score-probe] f={f:6} score {:3}-{:<3} clock {:06x}{}",
+                now.p1_match_wins,
+                now.p2_match_wins,
+                now.clock,
+                if expired { " (clock ran out)" } else { "" }
+            );
+        }
+        if f % 3000 == 0 {
+            println!("[score-probe] f={f:6} tick clock {:06x}", now.clock);
+        }
+        for ev in tracker.step(now) {
+            println!("[score-probe] f={f:6} EVENT {ev:?}");
+        }
+        last = now;
+    }
+    retro::set_silent(false);
+    Ok(())
+}
+
 thread_local! {
     static ADDR_PROBE_FRAME: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -1802,11 +2071,22 @@ fn run_audio_probe(frames: usize) -> Result<(), Box<dyn std::error::Error>> {
         .collect();
     steps.sort_unstable_by(|a, b| b.0.cmp(&a.0));
     let peak = all.iter().map(|s| (*s as i32).abs()).max().unwrap_or(0);
-    let clipped = all.iter().filter(|s| **s == i16::MAX || **s == i16::MIN).count();
-    println!("[audio-probe] wrote {} ({} frames, {} Hz)", path.display(), all.len() / 2, rate);
+    let clipped = all
+        .iter()
+        .filter(|s| **s == i16::MAX || **s == i16::MIN)
+        .count();
+    println!(
+        "[audio-probe] wrote {} ({} frames, {} Hz)",
+        path.display(),
+        all.len() / 2,
+        rate
+    );
     println!("[audio-probe] samples/frame {min_n}..{max_n}, peak {peak}, clipped {clipped}");
     for (d, at) in steps.iter().take(8) {
-        println!("[audio-probe] step {d:6} at {:.3}s", *at as f64 / rate as f64);
+        println!(
+            "[audio-probe] step {d:6} at {:.3}s",
+            *at as f64 / rate as f64
+        );
     }
     Ok(())
 }
@@ -1827,8 +2107,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return run_sync_probe();
     }
 
+    if let Some(handle) = net_probe::peer_requested() {
+        return net_probe::run_peer(handle);
+    }
+    if net_probe::pair_requested() {
+        return net_probe::run_pair();
+    }
+
+    if cli::perf_probe_requested() {
+        return run_perf_probe();
+    }
+
     if let Some(frames) = cli::audio_probe_frames() {
         return run_audio_probe(frames);
+    }
+
+    if let Some(frames) = cli::score_probe_frames() {
+        return run_score_probe(frames);
     }
 
     if cli::core_probe_requested() {
@@ -1863,18 +2158,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     dlog!("boot", "net_mode={net_mode:?}");
     println!("Net mode: {net_mode:?}");
 
-    // Say once, at boot, whether this build's address table matches the ROM
-    // on disk. Cheap, and it puts the answer in the debug log that ships with
-    // every incident report.
-    {
-        let pairing = mk2_addr_check::check();
-        let line = pairing.log_line();
-        dlog!("boot", "{line}");
-        if matches!(pairing, mk2_addr_check::Pairing::Mismatch { .. }) {
-            println!("{line}");
-        }
-    }
-
     protocol::register_uri_scheme();
 
     let mut startup_replay_url: Option<String> = None;
@@ -1904,12 +2187,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let sdl_context = sdl2::init()?;
     let video_subsystem = sdl_context.video()?;
+    // After video (which starts SDL's event loop), before any pad opens.
+    controllers::ignore_unknown_event_types();
     let audio_subsystem = sdl_context.audio()?;
     let controller_subsystem = sdl_context.game_controller()?;
     let joystick_subsystem = sdl_context.joystick()?;
     controllers::load_mapping_db(&controller_subsystem);
     let mut pads: Pads = open_initial_controllers(&controller_subsystem, &joystick_subsystem);
     let mut cfg = config::load();
+    // Settle the game before any screen draws: menus, matchmaking keys and
+    // the leaderboard all ask `game::current()`. The core load re-derives it
+    // from the ROM it actually boots, which will be this same file.
+    if let Some(rom) = rom::find_rom_zip() {
+        game::set_current(game::detect(&rom));
+    }
+    println!("[game] {}", game::current().key);
+    if let Some(rom) = rom::find_rom_zip() {
+        // Scoring is per ROM revision; say up front when this one has none,
+        // so "no stats after my match" has an answer in the log.
+        game::note_loaded_rom(&rom.to_string_lossy());
+        if !score::supported() {
+            println!(
+                "[game] no score map for {} - matches play online but post no results",
+                game::loaded_driver()
+            );
+        }
+    }
+
+    // Say once, at boot, whether this build's address table matches the ROM
+    // on disk. Cheap, and it puts the answer in the debug log that ships with
+    // every incident report.
+    if game::current().mk2_tooling {
+        let pairing = mk2_addr_check::check();
+        let line = pairing.log_line();
+        dlog!("boot", "{line}");
+        if matches!(pairing, mk2_addr_check::Pairing::Mismatch { .. }) {
+            println!("{line}");
+        }
+    }
 
     let main_window_title = app_window_title();
     let mut window_builder = video_subsystem.window(&main_window_title, 1200, 762);
@@ -2215,11 +2530,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .clone()
             .or_else(matchmaking::discord_id_from_cached_token)
             .or_else(|| {
-                matchmaking::guest_player_id(&cfg.player_username, &cfg.stats_email, &cfg.guest_device_id)
+                matchmaking::guest_player_id(
+                    &cfg.player_username,
+                    &cfg.stats_email,
+                    &cfg.guest_device_id,
+                )
             });
         match profile_id {
             Some(did) if !cfg.stats_url.is_empty() => {
-                let display_name = discord_user.clone().unwrap_or_else(|| cfg.player_username.clone());
+                let display_name = discord_user
+                    .clone()
+                    .unwrap_or_else(|| cfg.player_username.clone());
                 let (tx, rx) = std::sync::mpsc::channel();
                 main_profile_rx = Some(rx);
                 matchmaking::fetch_profile(cfg.stats_url.clone(), did, display_name, tx);
@@ -2248,7 +2569,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut lobby_next_refresh = Instant::now();
     let mut lobby_list_rx: Option<std::sync::mpsc::Receiver<matchmaking::LobbyListUpdate>> = None;
     let mut lobby_list_next_refresh = Instant::now();
-    let mut challenge_rx: Option<std::sync::mpsc::Receiver<matchmaking::ChallengeListUpdate>> = None;
+    let mut challenge_rx: Option<std::sync::mpsc::Receiver<matchmaking::ChallengeListUpdate>> =
+        None;
     let mut challenge_next_refresh = Instant::now();
     let mut lobby_view_rx: Option<std::sync::mpsc::Receiver<matchmaking::LobbyViewUpdate>> = None;
     let mut lobby_view_next_refresh = Instant::now();
@@ -2702,9 +3024,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         // matchmaking trigger's cancel does. A Discord
                         // connect similarly returns to the Settings→Account
                         // row it started from, not the main menu.
-                        if let AppState::FpUi(fp_ui::FpScreen::Lobby { quick_match_status, .. }) = &mut state {
+                        if let AppState::FpUi(fp_ui::FpScreen::Lobby {
+                            quick_match_status, ..
+                        }) = &mut state
+                        {
                             *quick_match_status = None;
-                        } else if matches!(state, AppState::FpUi(fp_ui::FpScreen::DiscordConnect { .. })) {
+                        } else if matches!(
+                            state,
+                            AppState::FpUi(fp_ui::FpScreen::DiscordConnect { .. })
+                        ) {
                             state = AppState::FpUi(fp_ui::FpScreen::settings_account(&cfg));
                         } else {
                             state = menu::main_menu_state();
@@ -2795,8 +3123,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     state = AppState::Menu(MenuScreen::LabMenu { cursor });
                                 }
                                 fp_ui::FpResult::ExitGame => break 'running,
+                                fp_ui::FpResult::SwitchRom(rom) => {
+                                    let next = game::by_id(game::detect(&rom));
+                                    cfg.game = next.key.to_string();
+                                    cfg.rom = rom
+                                        .file_name()
+                                        .map(|n| n.to_string_lossy().into_owned())
+                                        .unwrap_or_default();
+                                    config::save(&cfg);
+                                    match game::relaunch_with_game(next) {
+                                        Ok(()) => break 'running,
+                                        Err(e) => {
+                                            println!("[game] relaunch failed: {e}");
+                                            toast = Some((
+                                                format!(
+                                                    "Couldn't switch to {}: {e}",
+                                                    rom::rom_label(&rom)
+                                                ),
+                                                Instant::now() + Duration::from_millis(3000),
+                                            ));
+                                        }
+                                    }
+                                }
                                 fp_ui::FpResult::SettingsChanged => {
-                                    if let AppState::FpUi(fp_ui::FpScreen::Settings { fields, .. }) = &state {
+                                    if let AppState::FpUi(fp_ui::FpScreen::Settings {
+                                        fields,
+                                        ..
+                                    }) = &state
+                                    {
                                         if cfg.fullscreen != fields.fullscreen {
                                             let mode = if fields.fullscreen {
                                                 FullscreenType::Desktop
@@ -2818,7 +3172,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         cfg.runahead = fields.runahead;
                                         cfg.runahead_online = fields.runahead_online;
                                         cfg.discord_rpc_enabled = fields.discord_rpc_enabled;
-                                        cfg.keep_running_lid_closed = fields.keep_running_lid_closed;
+                                        cfg.keep_running_lid_closed =
+                                            fields.keep_running_lid_closed;
                                         if let Some(message) =
                                             lid_guard.set_enabled(cfg.keep_running_lid_closed)
                                         {
@@ -2922,15 +3277,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     });
                                 }
                                 fp_ui::FpResult::WatchLastMatchReplay => {
-                                    let row = if let menu::ProfileScreenState::Loaded { history, .. } = &main_profile {
+                                    let row = if let menu::ProfileScreenState::Loaded {
+                                        history,
+                                        ..
+                                    } = &main_profile
+                                    {
                                         history.first().cloned()
                                     } else {
                                         None
                                     };
-                                    let path = row.as_ref().and_then(match_replay::find_matching_local_replay);
+                                    let path = row
+                                        .as_ref()
+                                        .and_then(match_replay::find_matching_local_replay);
                                     match path {
                                         Some(path) => {
-                                            ensure_core_loaded(&mut core, &mut audio_queue, &audio_subsystem)?;
+                                            ensure_core_loaded(
+                                                &mut core,
+                                                &mut audio_queue,
+                                                &audio_subsystem,
+                                            )?;
                                             if let Some(c) = &core {
                                                 match prepare_replay_review(c, &path) {
                                                     Ok(pb) => enter_replay_review(
@@ -2954,7 +3319,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                         println!("[replay] Last-match replay load failed: {e}");
                                                         toast = Some((
                                                             format!("Replay unavailable: {e}"),
-                                                            Instant::now() + Duration::from_millis(3200),
+                                                            Instant::now()
+                                                                + Duration::from_millis(3200),
                                                         ));
                                                     }
                                                 }
@@ -2972,7 +3338,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     Instant::now() + Duration::from_millis(2000),
                                                 ));
                                                 let (tx, rx) = std::sync::mpsc::channel();
-                                                matchmaking::fetch_public_replays(cfg.stats_url.clone(), tx);
+                                                matchmaking::fetch_public_replays(
+                                                    cfg.stats_url.clone(),
+                                                    tx,
+                                                );
                                                 last_match_remote_rx = Some((row, rx));
                                             } else {
                                                 toast = Some((
@@ -3002,7 +3371,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 owner_id,
                                                 tx,
                                             );
-                                            set_username_screen(&mut state, username, "Checking username".into(), true);
+                                            set_username_screen(
+                                                &mut state,
+                                                username,
+                                                "Checking username".into(),
+                                                true,
+                                            );
                                         }
                                         None => {
                                             set_username_screen(
@@ -3068,7 +3442,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         target_id,
                                         format.wire().to_string(),
                                     );
-                                    set_matchmaking_screen(&mut state, "Challenging player...".into());
+                                    set_matchmaking_screen(
+                                        &mut state,
+                                        "Challenging player...".into(),
+                                    );
                                 }
                                 fp_ui::FpResult::AcceptChallenge(challenge_id) => {
                                     // Mirrors legacy's NavResult::AcceptChallenge exactly.
@@ -3081,7 +3458,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     let (tx, rx) = std::sync::mpsc::channel();
                                     mm_rx = Some(rx);
                                     matchmaking::start_accept_challenge(tx, challenge_id);
-                                    set_matchmaking_screen(&mut state, "Accepting challenge...".into());
+                                    set_matchmaking_screen(
+                                        &mut state,
+                                        "Accepting challenge...".into(),
+                                    );
                                 }
                                 fp_ui::FpResult::DeclineChallenge(challenge_id) => {
                                     matchmaking::decline_challenge(challenge_id);
@@ -3100,13 +3480,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 version::VERSION,
                                                 rom_hash_u64,
                                             );
-                                            let lines = format_probe_result(peer, rom_hash_u64, &report);
+                                            let lines =
+                                                format_probe_result(peer, rom_hash_u64, &report);
                                             for l in &lines {
                                                 println!("[probe] {}", l);
                                             }
                                             lines
                                         }
-                                        None => vec!["FAIL Invalid address \u{2014} use IP or IP:PORT".into()],
+                                        None => {
+                                            vec!["FAIL Invalid address \u{2014} use IP or IP:PORT"
+                                                .into()]
+                                        }
                                     };
                                     if let AppState::FpUi(fp_ui::FpScreen::Settings {
                                         ref mut test_conn_lines,
@@ -3119,7 +3503,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 fp_ui::FpResult::WatchEndedReplay(path) => {
                                     // Same playback pipeline as WatchLastMatchReplay above,
                                     // just fed an explicit path instead of looking one up.
-                                    ensure_core_loaded(&mut core, &mut audio_queue, &audio_subsystem)?;
+                                    ensure_core_loaded(
+                                        &mut core,
+                                        &mut audio_queue,
+                                        &audio_subsystem,
+                                    )?;
                                     if let Some(c) = &core {
                                         match prepare_replay_review(c, &path) {
                                             Ok(pb) => enter_replay_review(
@@ -3140,7 +3528,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 &mut state,
                                             ),
                                             Err(e) => {
-                                                println!("[replay] Session-end replay load failed: {e}");
+                                                println!(
+                                                    "[replay] Session-end replay load failed: {e}"
+                                                );
                                                 toast = Some((
                                                     format!("Replay unavailable: {e}"),
                                                     Instant::now() + Duration::from_millis(3200),
@@ -3235,7 +3625,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             "Discord disconnected".into(),
                                             Instant::now() + Duration::from_millis(2200),
                                         ));
-                                        state = AppState::FpUi(fp_ui::FpScreen::settings_account(&cfg));
+                                        state =
+                                            AppState::FpUi(fp_ui::FpScreen::settings_account(&cfg));
                                     } else {
                                         let (tx, rx) = std::sync::mpsc::channel();
                                         mm_rx = Some(rx);
@@ -3252,7 +3643,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     let (tx, rx) = std::sync::mpsc::channel();
                                     ghost_list_rx = Some(rx);
                                     if let AppState::FpUi(fp_ui::FpScreen::GhostSelect {
-                                        ref mut status, ..
+                                        ref mut status,
+                                        ..
                                     }) = state
                                     {
                                         *status = if cfg.stats_url.trim().is_empty() {
@@ -3263,11 +3655,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     }
                                     let rh = rom_fingerprint().1;
                                     let rom_hash = format!("{:016x}", rh);
-                                    matchmaking::fetch_ghost_list(cfg.stats_url.clone(), rom_hash, tx);
+                                    matchmaking::fetch_ghost_list(
+                                        cfg.stats_url.clone(),
+                                        rom_hash,
+                                        tx,
+                                    );
                                 }
                                 fp_ui::FpResult::LoadGhost(path) => {
                                     // Mirrors legacy's NavResult::LoadGhost(path) exactly.
-                                    ensure_core_loaded(&mut core, &mut audio_queue, &audio_subsystem)?;
+                                    ensure_core_loaded(
+                                        &mut core,
+                                        &mut audio_queue,
+                                        &audio_subsystem,
+                                    )?;
                                     if let Some(c) = &core {
                                         match ghost::Playback::load(&path) {
                                             Ok(pb) => {
@@ -3293,7 +3693,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     // captured on a different ROM/core build than
                                                     // the one now running — every ROM rebuild
                                                     // orphans previously recorded drones.
-                                                    println!("[ghost] Anchor state rejected by core.");
+                                                    println!(
+                                                        "[ghost] Anchor state rejected by core."
+                                                    );
                                                     set_ghost_select_status(
                                                         &mut state,
                                                         "Drone rejected: recorded on a different ROM/core build",
@@ -3321,25 +3723,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     let (tx, rx) = std::sync::mpsc::channel();
                                     ghost_download_rx = Some(rx);
                                     if let AppState::FpUi(fp_ui::FpScreen::GhostSelect {
-                                        ref mut status, ..
+                                        ref mut status,
+                                        ..
                                     }) = state
                                     {
                                         *status = Some(format!("Downloading {ghost_id}..."));
                                     }
-                                    matchmaking::download_ghost(cfg.stats_url.clone(), ghost_id, local_path, tx);
+                                    matchmaking::download_ghost(
+                                        cfg.stats_url.clone(),
+                                        ghost_id,
+                                        local_path,
+                                        tx,
+                                    );
                                 }
                                 fp_ui::FpResult::OpenReplaySelect => {
                                     // Mirrors legacy's NavResult::OpenReplaySelect exactly;
                                     // `refresh_replay_select` already branches on either
                                     // screen shape (see its own definition).
-                                    refresh_replay_select(&mut state, Some("Loading public replays...".into()));
+                                    refresh_replay_select(
+                                        &mut state,
+                                        Some("Loading public replays...".into()),
+                                    );
                                     let (tx, rx) = std::sync::mpsc::channel();
                                     public_replay_rx = Some(rx);
                                     matchmaking::fetch_public_replays(cfg.stats_url.clone(), tx);
                                 }
                                 fp_ui::FpResult::LoadReplay(path) => {
                                     // Mirrors legacy's NavResult::LoadReplay(path) exactly.
-                                    ensure_core_loaded(&mut core, &mut audio_queue, &audio_subsystem)?;
+                                    ensure_core_loaded(
+                                        &mut core,
+                                        &mut audio_queue,
+                                        &audio_subsystem,
+                                    )?;
                                     if let Some(c) = &core {
                                         match prepare_replay_review(c, &path) {
                                             Ok(pb) => enter_replay_review(
@@ -3361,21 +3776,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             ),
                                             Err(e) => {
                                                 println!("[replay] Load failed: {e}");
-                                                refresh_replay_select(&mut state, Some(format!("Error: {e}")));
+                                                refresh_replay_select(
+                                                    &mut state,
+                                                    Some(format!("Error: {e}")),
+                                                );
                                             }
                                         }
                                     }
                                 }
                                 fp_ui::FpResult::LoadRemoteReplay(url) => {
                                     // Mirrors legacy's NavResult::LoadRemoteReplay(url).
-                                    set_replay_select_status(&mut state, "Downloading public replay...");
+                                    set_replay_select_status(
+                                        &mut state,
+                                        "Downloading public replay...",
+                                    );
                                     match download_remote_replay(&url) {
                                         Ok(path) => {
                                             // The URL came from the selected entry, whose
                                             // index metadata carries the score the bare
                                             // .ncrp file doesn't.
                                             if let Some(entry) = selected_replay_entry(&state)
-                                                .filter(|e| e.remote_url.as_deref() == Some(url.as_str()))
+                                                .filter(|e| {
+                                                    e.remote_url.as_deref() == Some(url.as_str())
+                                                })
                                             {
                                                 write_downloaded_replay_summary(
                                                     &path,
@@ -3386,7 +3809,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     entry.frame_count,
                                                 );
                                             }
-                                            ensure_core_loaded(&mut core, &mut audio_queue, &audio_subsystem)?;
+                                            ensure_core_loaded(
+                                                &mut core,
+                                                &mut audio_queue,
+                                                &audio_subsystem,
+                                            )?;
                                             if let Some(c) = &core {
                                                 match prepare_replay_review(c, &path) {
                                                     Ok(pb) => enter_replay_review(
@@ -3408,14 +3835,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     ),
                                                     Err(e) => {
                                                         println!("[replay] Load failed: {e}");
-                                                        set_replay_select_status(&mut state, format!("Error: {e}"));
+                                                        set_replay_select_status(
+                                                            &mut state,
+                                                            format!("Error: {e}"),
+                                                        );
                                                     }
                                                 }
                                             }
                                         }
                                         Err(e) => {
                                             println!("[replay] Remote download failed: {e}");
-                                            set_replay_select_status(&mut state, format!("Download failed: {e}"));
+                                            set_replay_select_status(
+                                                &mut state,
+                                                format!("Download failed: {e}"),
+                                            );
                                         }
                                     }
                                 }
@@ -3605,7 +4038,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                         peer_name.as_deref(),
                                                     );
                                                     match_replay_recording =
-                                                        Some(match_replay::Recording::new(p1, p2));
+                                                        game::current().mk2_tooling.then(|| {
+                                                            match_replay::Recording::new(p1, p2)
+                                                        });
                                                     net_log = open_net_log();
                                                 }
                                                 Err(e) => {
@@ -3617,14 +4052,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     }
                                 }
                                 NavResult::OpenSettings => {
-                                    state = AppState::FpUi(fp_ui::FpScreen::settings_from_cfg(&cfg));
+                                    state =
+                                        AppState::FpUi(fp_ui::FpScreen::settings_from_cfg(&cfg));
                                 }
                                 NavResult::CommitText(field, value, came_from) => match field {
                                     menu::EditField::JoinCode => {
                                         let code = value.trim().to_uppercase();
                                         if code.is_empty() {
-                                            state =
-                                                menu::main_menu_state();
+                                            state = menu::main_menu_state();
                                         } else {
                                             matchmaking::set_guest_profile(
                                                 cfg.player_username.clone(),
@@ -3683,8 +4118,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             match sanitized {
                                                 Some(name) => {
                                                     *screen_value = name;
-                                                    *status =
-                                                        "Enter to claim this callsign".into();
+                                                    *status = "Enter to claim this callsign".into();
                                                 }
                                                 // Reject rather than silently
                                                 // keeping the old name, so an
@@ -4496,10 +4930,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             };
                             toast = Some((message, Instant::now() + Duration::from_millis(2200)));
                         } else if let Some(c) = &core {
-                            let gstate = memory::peek_u16(c, mk2_addrs::a().GSTATE_ADDR, memory::Endian::Little)
-                                .unwrap_or(0);
-                            let p1_hp = memory::peek_u16(c, mk2_addrs::a().P1_HP_ADDR, memory::Endian::Little)
-                                .unwrap_or(0);
+                            let gstate = memory::peek_u16(
+                                c,
+                                mk2_addrs::a().GSTATE_ADDR,
+                                memory::Endian::Little,
+                            )
+                            .unwrap_or(0);
+                            let p1_hp = memory::peek_u16(
+                                c,
+                                mk2_addrs::a().P1_HP_ADDR,
+                                memory::Endian::Little,
+                            )
+                            .unwrap_or(0);
                             let fight_loaded = matches!(gstate, GS_FIGHTING | 0x03) && p1_hp > 0;
                             if fight_loaded {
                                 punish_trainer.reset_stats();
@@ -4571,10 +5013,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         && keymod.intersects(Mod::LCTRLMOD | Mod::RCTRLMOD) =>
                     {
                         if let Some(c) = &core {
-                            let gstate = memory::peek_u16(c, mk2_addrs::a().GSTATE_ADDR, memory::Endian::Little)
-                                .unwrap_or(0);
-                            let p1_hp = memory::peek_u16(c, mk2_addrs::a().P1_HP_ADDR, memory::Endian::Little)
-                                .unwrap_or(0);
+                            let gstate = memory::peek_u16(
+                                c,
+                                mk2_addrs::a().GSTATE_ADDR,
+                                memory::Endian::Little,
+                            )
+                            .unwrap_or(0);
+                            let p1_hp = memory::peek_u16(
+                                c,
+                                mk2_addrs::a().P1_HP_ADDR,
+                                memory::Endian::Little,
+                            )
+                            .unwrap_or(0);
                             let fight_loaded = matches!(gstate, GS_FIGHTING | 0x03) && p1_hp > 0;
                             if fight_loaded {
                                 let preset = lab_position_preset;
@@ -4879,10 +5329,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } if match_replay_playback.is_some() && replay_takeover.is_none() => {
                         let _ = k;
                     }
-                    Event::KeyUp { .. } if match_replay_playback.is_some() && replay_takeover.is_none() => {}
-                    Event::ControllerButtonDown { .. } if match_replay_playback.is_some() && replay_takeover.is_none() => {}
-                    Event::ControllerButtonUp { .. } if match_replay_playback.is_some() && replay_takeover.is_none() => {}
-                    Event::ControllerAxisMotion { .. } if match_replay_playback.is_some() && replay_takeover.is_none() => {}
+                    Event::KeyUp { .. }
+                        if match_replay_playback.is_some() && replay_takeover.is_none() => {}
+                    Event::ControllerButtonDown { .. }
+                        if match_replay_playback.is_some() && replay_takeover.is_none() => {}
+                    Event::ControllerButtonUp { .. }
+                        if match_replay_playback.is_some() && replay_takeover.is_none() => {}
+                    Event::ControllerAxisMotion { .. }
+                        if match_replay_playback.is_some() && replay_takeover.is_none() => {}
                     Event::KeyDown {
                         keycode: Some(k),
                         repeat: false,
@@ -4989,8 +5443,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             AppState::Playing => {
                 if let Some(c) = &core {
                     if let Some(sess) = net_session.as_mut() {
-                        let gstate =
-                            memory::peek_u16(c, mk2_addrs::a().GSTATE_ADDR, memory::Endian::Little).unwrap_or(0);
+                        // MK2's game state drives the gameover fallback below,
+                        // which infers a result from round counters. Other games
+                        // have neither, and their RAM at this address is
+                        // unrelated, so they never enter that path.
+                        let gstate = if game::current().mk2_tooling {
+                            memory::peek_u16(c, mk2_addrs::a().GSTATE_ADDR, memory::Endian::Little)
+                                .unwrap_or(0)
+                        } else {
+                            0
+                        };
                         let mut reached_gameover_this_frame = false;
                         if gstate == GS_FIGHTING {
                             net_in_fight = true;
@@ -5037,9 +5499,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 && net_set_complete_pending_frame.is_some()
                                 && net_teardown_reason.is_none()
                             {
-                                net_teardown_reason = Some(format!(
-                                    "game limit reached ({net_match_limit} games)"
-                                ));
+                                net_teardown_reason =
+                                    Some(format!("game limit reached ({net_match_limit} games)"));
                             }
                             handle_score_event(
                                 ev,
@@ -5127,8 +5588,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         // compression + upload happen off-thread.
                         if let Some(lobby_id) = lobby_return.as_ref() {
                             if Instant::now() >= lobby_thumb_next_push {
-                                lobby_thumb_next_push =
-                                    Instant::now() + Duration::from_secs(25);
+                                lobby_thumb_next_push = Instant::now() + Duration::from_secs(25);
                                 if let Some(rgba) = render::capture_frame_thumbnail() {
                                     matchmaking::push_lobby_thumbnail(lobby_id.clone(), rgba);
                                 }
@@ -5207,17 +5667,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let remote_handle = 1 - local_handle;
                             if let Ok(stats) = sess.network_stats(remote_handle) {
                                 net_stats.ping_ms = Some(stats.ping as i32);
-                                net_stats.kbps_sent = Some(stats.kbps_sent.to_string());
+                                net_stats.send_queue = Some(stats.send_queue_len.to_string());
                                 net_stats.local_frames_behind =
                                     Some(stats.local_frames_behind.to_string());
                                 net_stats.remote_frames_behind =
                                     Some(stats.remote_frames_behind.to_string());
                                 let line = format!(
-                                    "[net/diag] frame={} confirmed={} ping={}ms kbps_sent={} local_frames_ahead={} remote_frames_ahead={}",
+                                    "[net/diag] frame={} confirmed={} ping={}ms send_queue={} local_frames_ahead={} remote_frames_ahead={}",
                                     net_frame_counter,
                                     sess.confirmed_frame(),
                                     stats.ping,
-                                    stats.kbps_sent,
+                                    stats.send_queue_len,
                                     stats.local_frames_behind,
                                     stats.remote_frames_behind,
                                 );
@@ -5312,33 +5772,58 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         input::commit_live_to_state();
                         input_history.step(input::snapshot_player(Player::P1));
                         if local_play_mode.is_lab() && ghost_playback.is_none() {
-                            let gstate = memory::peek_u16(c, mk2_addrs::a().GSTATE_ADDR, memory::Endian::Little)
-                                .unwrap_or(0);
-                            let p1_hp = memory::peek_u16(c, mk2_addrs::a().P1_HP_ADDR, memory::Endian::Little)
-                                .unwrap_or(0);
+                            let gstate = memory::peek_u16(
+                                c,
+                                mk2_addrs::a().GSTATE_ADDR,
+                                memory::Endian::Little,
+                            )
+                            .unwrap_or(0);
+                            let p1_hp = memory::peek_u16(
+                                c,
+                                mk2_addrs::a().P1_HP_ADDR,
+                                memory::Endian::Little,
+                            )
+                            .unwrap_or(0);
                             let fight_loaded = matches!(gstate, GS_FIGHTING | 0x03) && p1_hp > 0;
                             // A failed peek reads as 0 (a real fighter id), so
                             // the phase degrades to PreFight — the old
                             // join-mash behavior — rather than stranding the
                             // select screen waiting on a mirror that can't
                             // happen.
-                            let p1_char =
-                                memory::peek_u16(c, mk2_addrs::a().P1_CHAR_ADDR, memory::Endian::Little)
-                                    .unwrap_or(0);
-                            let p2_char =
-                                memory::peek_u16(c, mk2_addrs::a().P2_CHAR_ADDR, memory::Endian::Little)
-                                    .unwrap_or(0);
+                            let p1_char = memory::peek_u16(
+                                c,
+                                mk2_addrs::a().P1_CHAR_ADDR,
+                                memory::Endian::Little,
+                            )
+                            .unwrap_or(0);
+                            let p2_char = memory::peek_u16(
+                                c,
+                                mk2_addrs::a().P2_CHAR_ADDR,
+                                memory::Endian::Little,
+                            )
+                            .unwrap_or(0);
                             let phase = lab::phase_from_ram(fight_loaded, p1_char, p2_char);
-                            let p1_x = memory::peek_u16(c, mk2_addrs::a().P1_X_ADDR, memory::Endian::Little)
-                                .unwrap_or(0);
-                            let p2_x = memory::peek_u16(c, mk2_addrs::a().P2_X_ADDR, memory::Endian::Little)
-                                .unwrap_or(u16::MAX);
+                            let p1_x = memory::peek_u16(
+                                c,
+                                mk2_addrs::a().P1_X_ADDR,
+                                memory::Endian::Little,
+                            )
+                            .unwrap_or(0);
+                            let p2_x = memory::peek_u16(
+                                c,
+                                mk2_addrs::a().P2_X_ADDR,
+                                memory::Endian::Little,
+                            )
+                            .unwrap_or(u16::MAX);
                             let p2_right_of_p1 = p2_x >= p1_x;
                             let live_p1_bits = input::snapshot_player(Player::P1);
                             let live_p2_bits = input::snapshot_player(Player::P2);
-                            if let Some(bits) =
-                                lab_dummy.next_bits(phase, p2_right_of_p1, live_p1_bits, live_p2_bits)
-                            {
+                            if let Some(bits) = lab_dummy.next_bits(
+                                phase,
+                                p2_right_of_p1,
+                                live_p1_bits,
+                                live_p2_bits,
+                            ) {
                                 input::apply_snapshot(Player::P2, bits);
                             }
                             // One-shot hint the moment select hands P2's
@@ -5357,7 +5842,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     "Your controls now move P2 - pick the dummy's fighter".into(),
                                     Instant::now() + Duration::from_millis(2600),
                                 ));
-                            } else if !mirroring && lab_select_hint_shown && phase != lab::LabPhase::Fight
+                            } else if !mirroring
+                                && lab_select_hint_shown
+                                && phase != lab::LabPhase::Fight
                             {
                                 lab_select_hint_shown = false;
                             }
@@ -5373,8 +5860,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         // starts with P1 and P2 joined together instead of
                         // P2 trickling in during select.
                         if local_play_mode.is_lab() && !auto_start_done {
-                            let gstate = memory::peek_u16(c, mk2_addrs::a().GSTATE_ADDR, memory::Endian::Little)
-                                .unwrap_or(0);
+                            let gstate = memory::peek_u16(
+                                c,
+                                mk2_addrs::a().GSTATE_ADDR,
+                                memory::Endian::Little,
+                            )
+                            .unwrap_or(0);
                             if gstate == GS_AMODE {
                                 let (coin, pulse) = lab_autostart_pulses(auto_start_frame);
                                 retro::set_input(0, RETRO_DEVICE_ID_JOYPAD_SELECT as usize, coin);
@@ -5390,11 +5881,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         if let Some(pb) = ghost_playback.as_mut() {
                             if let Some(drone) = drone_runner.as_mut() {
-                                let gstate =
-                                    memory::peek_u16(c, mk2_addrs::a().GSTATE_ADDR, memory::Endian::Little)
-                                        .unwrap_or(0);
-                                let p1_hp = memory::peek_u16(c, mk2_addrs::a().P1_HP_ADDR, memory::Endian::Little)
-                                    .unwrap_or(0);
+                                let gstate = memory::peek_u16(
+                                    c,
+                                    mk2_addrs::a().GSTATE_ADDR,
+                                    memory::Endian::Little,
+                                )
+                                .unwrap_or(0);
+                                let p1_hp = memory::peek_u16(
+                                    c,
+                                    mk2_addrs::a().P1_HP_ADDR,
+                                    memory::Endian::Little,
+                                )
+                                .unwrap_or(0);
                                 let fight_loaded =
                                     matches!(gstate, GS_FIGHTING | 0x03) && p1_hp > 0;
                                 if fight_loaded {
@@ -5476,13 +5974,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             && ghost_playback.is_none()
                             && local_play_mode.is_lab()
                         {
-                            let gstate = memory::peek_u16(c, mk2_addrs::a().GSTATE_ADDR, memory::Endian::Little)
-                                .unwrap_or(0);
-                            let p1_hp = memory::peek_u16(c, mk2_addrs::a().P1_HP_ADDR, memory::Endian::Little)
-                                .unwrap_or(0);
+                            let gstate = memory::peek_u16(
+                                c,
+                                mk2_addrs::a().GSTATE_ADDR,
+                                memory::Endian::Little,
+                            )
+                            .unwrap_or(0);
+                            let p1_hp = memory::peek_u16(
+                                c,
+                                mk2_addrs::a().P1_HP_ADDR,
+                                memory::Endian::Little,
+                            )
+                            .unwrap_or(0);
                             let fight_loaded = matches!(gstate, GS_FIGHTING | 0x03) && p1_hp > 0;
-                            let p2_hp = memory::peek_u16(c, mk2_addrs::a().P2_HP_ADDR, memory::Endian::Little)
-                                .unwrap_or(0);
+                            let p2_hp = memory::peek_u16(
+                                c,
+                                mk2_addrs::a().P2_HP_ADDR,
+                                memory::Endian::Little,
+                            )
+                            .unwrap_or(0);
                             damage_tracker.observe(fight_loaded, p2_hp);
                             let p1_bits = input::snapshot_player(Player::P1);
                             if let Some(event) = punish_trainer.observe(p2_hp, p1_bits) {
@@ -5497,16 +6007,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         // Drone match vs detection: track fight start/end for webhook
                         if ghost_playback.is_some() && ghost_port_mask == 0b10 {
-                            let gstate = memory::peek_u16(c, mk2_addrs::a().GSTATE_ADDR, memory::Endian::Little)
-                                .unwrap_or(0);
+                            let gstate = memory::peek_u16(
+                                c,
+                                mk2_addrs::a().GSTATE_ADDR,
+                                memory::Endian::Little,
+                            )
+                            .unwrap_or(0);
                             if !ghost_in_fight && gstate == GS_FIGHTING {
                                 ghost_in_fight = true;
                             } else if ghost_in_fight && gstate == GS_GAMEOVER {
                                 ghost_in_fight = false;
-                                let p1_hp = memory::peek_u16(c, mk2_addrs::a().P1_HP_ADDR, memory::Endian::Little)
-                                    .unwrap_or(0);
-                                let p2_hp = memory::peek_u16(c, mk2_addrs::a().P2_HP_ADDR, memory::Endian::Little)
-                                    .unwrap_or(0);
+                                let p1_hp = memory::peek_u16(
+                                    c,
+                                    mk2_addrs::a().P1_HP_ADDR,
+                                    memory::Endian::Little,
+                                )
+                                .unwrap_or(0);
+                                let p2_hp = memory::peek_u16(
+                                    c,
+                                    mk2_addrs::a().P2_HP_ADDR,
+                                    memory::Endian::Little,
+                                )
+                                .unwrap_or(0);
                                 let outcome = if p1_hp > p2_hp { "won" } else { "lost" };
                                 let msg = format!(
                                     "Drone Match Result - Player {} (P1 HP: 0x{p1_hp:04X} | P2 HP: 0x{p2_hp:04X})",
@@ -5816,13 +6338,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )?;
                 // Fight overlays wait for spawned fighters so they do not cover
                 // the VS portrait/loading screen.
+                // The score bar is MK2's round pips. NBA Jam draws its own
+                // scoreboard, and its points would overflow the pips.
                 let overlay_screen = core
                     .as_ref()
+                    .filter(|_| game::current().mk2_tooling)
                     .map(|c| {
                         let gstate =
-                            memory::peek_u16(c, mk2_addrs::a().GSTATE_ADDR, memory::Endian::Little).unwrap_or(0);
+                            memory::peek_u16(c, mk2_addrs::a().GSTATE_ADDR, memory::Endian::Little)
+                                .unwrap_or(0);
                         let p1_hp =
-                            memory::peek_u16(c, mk2_addrs::a().P1_HP_ADDR, memory::Endian::Little).unwrap_or(0);
+                            memory::peek_u16(c, mk2_addrs::a().P1_HP_ADDR, memory::Endian::Little)
+                                .unwrap_or(0);
                         let s = score::Score::read(c);
                         let match_decided = s.p1_match_wins >= MATCH_WIN_TARGET
                             || s.p2_match_wins >= MATCH_WIN_TARGET;
@@ -5841,7 +6368,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Some(c) = core.as_ref() {
                         let gstate =
                             memory::peek_u16(c, mk2_addrs::a().GSTATE_ADDR, memory::Endian::Little);
-                        let p1_hp = memory::peek_u16(c, mk2_addrs::a().P1_HP_ADDR, memory::Endian::Little);
+                        let p1_hp =
+                            memory::peek_u16(c, mk2_addrs::a().P1_HP_ADDR, memory::Endian::Little);
                         let sram = c
                             .memory(retro::RETRO_MEMORY_SYSTEM_RAM)
                             .map(|r| r.len())
@@ -6090,16 +6618,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 canvas.present();
             }
             AppState::FpUi(fp_ui::FpScreen::Matchmaking { .. })
-            | AppState::FpUi(fp_ui::FpScreen::Lobby { quick_match_status: Some(_), .. })
+            | AppState::FpUi(fp_ui::FpScreen::Lobby {
+                quick_match_status: Some(_),
+                ..
+            })
             | AppState::FpUi(fp_ui::FpScreen::DiscordConnect { .. }) => {
                 if let Some(rx) = &mm_rx {
                     loop {
                         match rx.try_recv() {
                             Ok(matchmaking::Update::Status(s)) => {
                                 match &mut state {
-                                    AppState::FpUi(fp_ui::FpScreen::Matchmaking { status }) => *status = s,
-                                    AppState::FpUi(fp_ui::FpScreen::DiscordConnect { status }) => *status = s,
-                                    AppState::FpUi(fp_ui::FpScreen::Lobby { quick_match_status, .. }) => {
+                                    AppState::FpUi(fp_ui::FpScreen::Matchmaking { status }) => {
+                                        *status = s
+                                    }
+                                    AppState::FpUi(fp_ui::FpScreen::DiscordConnect { status }) => {
+                                        *status = s
+                                    }
+                                    AppState::FpUi(fp_ui::FpScreen::Lobby {
+                                        quick_match_status,
+                                        ..
+                                    }) => {
                                         *quick_match_status = Some(s);
                                     }
                                     _ => {}
@@ -6254,7 +6792,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             )
                                             .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
                                         }
-                                        matchmaking::MatchTransport::Direct { peer_addr, rtt_ms } => {
+                                        matchmaking::MatchTransport::Direct {
+                                            peer_addr,
+                                            rtt_ms,
+                                        } => {
                                             // ── DIRECT UDP PATH ──
                                             relay_chat = None;
                                             let input_delay = netplay::session_input_delay(
@@ -6273,6 +6814,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 let _ = writeln!(f, "{delay_line}");
                                             }
                                             lines.push(delay_line);
+                                            let boot_line = match matchmaking::last_boot_check() {
+                                                matchmaking::BootCheck::Match => {
+                                                    "[session] boot state matches peer".to_string()
+                                                }
+                                                matchmaking::BootCheck::Mismatch { mine, theirs } => format!(
+                                                    "[session] WARNING boot state DIFFERS from peer \
+                                                     (mine {mine:016x}, theirs {theirs:016x}): \
+                                                     this match will desync - core options, NVRAM \
+                                                     or core build differ"
+                                                ),
+                                                matchmaking::BootCheck::PeerSilent => {
+                                                    "[session] boot state unchecked (peer build sends no hash)".to_string()
+                                                }
+                                                matchmaking::BootCheck::Unknown => {
+                                                    "[session] boot state unchecked".to_string()
+                                                }
+                                            };
+                                            println!("[net] {boot_line}");
+                                            if let Some(f) = log.as_mut() {
+                                                use std::io::Write;
+                                                let _ = writeln!(f, "{boot_line}");
+                                            }
+                                            lines.push(boot_line);
                                             let log_ref = &mut log;
                                             let lines_ref = &mut lines;
                                             netplay::start_session_verbose(
@@ -6310,8 +6874,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             discord_user.as_deref(),
                                             peer_name.as_deref(),
                                         );
-                                        match_replay_recording =
-                                            Some(match_replay::Recording::new(p1, p2));
+                                        // .ncrp files carry no game tag yet and
+                                        // `replays/` is MK2's library.
+                                        match_replay_recording = game::current()
+                                            .mk2_tooling
+                                            .then(|| match_replay::Recording::new(p1, p2));
                                         net_log = log;
                                         net_stats.reset();
                                         audio_tail_sample = None;
@@ -6504,24 +7071,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             checking: false,
                             ..
                         })
-                ) || is_fp_test_conn_editing(&state) {
+                ) || is_fp_test_conn_editing(&state)
+                {
                     video_subsystem.text_input().start();
                 } else {
                     video_subsystem.text_input().stop();
                 }
 
                 if let Some(rx) = &username_check_rx {
-                    let waiting_for_username = matches!(
-                        state,
-                        AppState::FpUi(fp_ui::FpScreen::ClaimUsername { .. })
-                    ) || (username_check_silent && is_matchmaking_screen(&state));
+                    let waiting_for_username =
+                        matches!(state, AppState::FpUi(fp_ui::FpScreen::ClaimUsername { .. }))
+                            || (username_check_silent && is_matchmaking_screen(&state));
                     if waiting_for_username {
                         let timed_out = username_check_started_at
                             .map(|started| started.elapsed() >= Duration::from_secs(12))
                             .unwrap_or(false);
                         if timed_out {
                             let value = match &state {
-                                AppState::FpUi(fp_ui::FpScreen::ClaimUsername { value, .. }) => value.clone(),
+                                AppState::FpUi(fp_ui::FpScreen::ClaimUsername {
+                                    value, ..
+                                }) => value.clone(),
                                 _ => cfg.player_username.clone(),
                             };
                             set_username_screen(
@@ -6566,7 +7135,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                                 Ok(matchmaking::UsernameCheckUpdate::Error(message)) => {
                                     let value = match &state {
-                                        AppState::FpUi(fp_ui::FpScreen::ClaimUsername { value, .. }) => value.clone(),
+                                        AppState::FpUi(fp_ui::FpScreen::ClaimUsername {
+                                            value,
+                                            ..
+                                        }) => value.clone(),
                                         _ => cfg.player_username.clone(),
                                     };
                                     set_username_screen(&mut state, value, message, false);
@@ -6595,10 +7167,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
 
-                if matches!(
-                    state,
-                    AppState::FpUi(fp_ui::FpScreen::Lobby { tab: 4, .. })
-                )
+                if matches!(state, AppState::FpUi(fp_ui::FpScreen::Lobby { tab: 4, .. }))
                     && live_matches_rx.is_none()
                     && Instant::now() >= live_matches_next_refresh
                 {
@@ -6612,10 +7181,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // need the online roster; this also registers our presence so
                 // others can challenge us). fp_ui's Chat tab (tab: 3) mirrors
                 // the same fetch rather than a second pipeline.
-                if matches!(
-                    state,
-                    AppState::FpUi(fp_ui::FpScreen::Lobby { tab: 3, .. })
-                ) && lobby_rx.is_none()
+                if matches!(state, AppState::FpUi(fp_ui::FpScreen::Lobby { tab: 3, .. }))
+                    && lobby_rx.is_none()
                     && Instant::now() >= lobby_next_refresh
                 {
                     let (tx, rx) = std::sync::mpsc::channel();
@@ -6685,10 +7252,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
 
-                if matches!(
-                    state,
-                    AppState::FpUi(fp_ui::FpScreen::Lobby { tab: 2, .. })
-                ) && lobby_list_rx.is_none()
+                if matches!(state, AppState::FpUi(fp_ui::FpScreen::Lobby { tab: 2, .. }))
+                    && lobby_list_rx.is_none()
                     && Instant::now() >= lobby_list_next_refresh
                 {
                     let (tx, rx) = std::sync::mpsc::channel();
@@ -6779,8 +7344,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 // King-of-the-hill lobby: poll state while the lobby room
                 // screen is up.
-                if let AppState::FpUi(fp_ui::FpScreen::LobbyRoom { id, .. }) = &state
-                {
+                if let AppState::FpUi(fp_ui::FpScreen::LobbyRoom { id, .. }) = &state {
                     if !id.is_empty()
                         && lobby_view_rx.is_none()
                         && Instant::now() >= lobby_view_next_refresh
@@ -6794,8 +7358,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(rx) = &lobby_view_rx {
                     match rx.try_recv() {
                         Ok(matchmaking::LobbyViewUpdate::Created(new_id)) => {
-                            if let AppState::FpUi(fp_ui::FpScreen::LobbyRoom { id, status, .. }) =
-                                &mut state
+                            if let AppState::FpUi(fp_ui::FpScreen::LobbyRoom {
+                                id, status, ..
+                            }) = &mut state
                             {
                                 *id = new_id;
                                 *status = "Loading lobby...".into();
@@ -6819,7 +7384,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 // First thumbnail a few seconds in (past the
                                 // round intro), then every ~25s.
                                 lobby_thumb_next_push = Instant::now() + Duration::from_secs(8);
-                                set_matchmaking_screen(&mut state, "Match starting — connecting...".into());
+                                set_matchmaking_screen(
+                                    &mut state,
+                                    "Match starting — connecting...".into(),
+                                );
                             } else if let AppState::FpUi(fp_ui::FpScreen::LobbyRoom {
                                 id,
                                 view,
@@ -6854,8 +7422,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 // King-of-the-hill: fetch the live match thumbnail while a match
                 // is in progress in the lobby we're viewing.
-                if let AppState::FpUi(fp_ui::FpScreen::LobbyRoom { id, view, .. }) = &state
-                {
+                if let AppState::FpUi(fp_ui::FpScreen::LobbyRoom { id, view, .. }) = &state {
                     let has_match = view.as_ref().map_or(false, |v| v.current.is_some());
                     if has_match
                         && !id.is_empty()
@@ -6874,14 +7441,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let expected =
                                 (render::LOBBY_THUMB_W * render::LOBBY_THUMB_H * 4) as usize;
                             if rgba.len() == expected {
-                                if let AppState::FpUi(fp_ui::FpScreen::LobbyRoom { thumb, .. }) =
-                                    &mut state
+                                if let AppState::FpUi(fp_ui::FpScreen::LobbyRoom {
+                                    thumb, ..
+                                }) = &mut state
                                 {
-                                    *thumb = Some((
-                                        rgba,
-                                        render::LOBBY_THUMB_W,
-                                        render::LOBBY_THUMB_H,
-                                    ));
+                                    *thumb =
+                                        Some((rgba, render::LOBBY_THUMB_W, render::LOBBY_THUMB_H));
                                 }
                             }
                             lobby_thumb_rx = None;
@@ -6903,7 +7468,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         *entries = scan_local_ghost_entries();
                     }
                 }
-
 
                 // Drain the leaderboard fetcher channel.
                 if let Some(rx) = &leaderboard_rx {
@@ -6956,7 +7520,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // matched) — search the public replay index for the same
                 // opponent/time-window match `find_matching_local_replay`
                 // looks for locally, and download+play it if found.
-                let mut remote_replay_loaded: Option<(matchmaking::HistoryRow, Vec<matchmaking::RemoteReplayMeta>)> = None;
+                let mut remote_replay_loaded: Option<(
+                    matchmaking::HistoryRow,
+                    Vec<matchmaking::RemoteReplayMeta>,
+                )> = None;
                 let mut remote_replay_error: Option<String> = None;
                 let mut remote_replay_disconnected = false;
                 if let Some((row, rx)) = &last_match_remote_rx {
@@ -6964,12 +7531,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Ok(matchmaking::PublicReplayUpdate::Loaded(replays)) => {
                             remote_replay_loaded = Some((row.clone(), replays));
                         }
-                        Ok(matchmaking::PublicReplayUpdate::Error(e)) => remote_replay_error = Some(e),
+                        Ok(matchmaking::PublicReplayUpdate::Error(e)) => {
+                            remote_replay_error = Some(e)
+                        }
                         Err(std::sync::mpsc::TryRecvError::Empty) => {}
-                        Err(std::sync::mpsc::TryRecvError::Disconnected) => remote_replay_disconnected = true,
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                            remote_replay_disconnected = true
+                        }
                     }
                 }
-                if remote_replay_loaded.is_some() || remote_replay_error.is_some() || remote_replay_disconnected {
+                if remote_replay_loaded.is_some()
+                    || remote_replay_error.is_some()
+                    || remote_replay_disconnected
+                {
                     last_match_remote_rx = None;
                 }
                 if let Some((row, replays)) = remote_replay_loaded {
@@ -7035,7 +7609,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Instant::now() + Duration::from_millis(3200),
                     ));
                 }
-
 
                 // Drain the spectator relay poller.
                 if let Some(rx) = &spectate_rx {
@@ -7115,9 +7688,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Drain the public replay index fetcher channel.
                 if let Some(rx) = &public_replay_rx {
                     let entries_status = match &mut state {
-                        AppState::FpUi(fp_ui::FpScreen::ReplaySelect { entries, status, .. }) => {
-                            Some((entries, status))
-                        }
+                        AppState::FpUi(fp_ui::FpScreen::ReplaySelect {
+                            entries, status, ..
+                        }) => Some((entries, status)),
                         _ => None,
                     };
                     if let Some((entries, status)) = entries_status {
@@ -7125,8 +7698,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             Ok(matchmaking::PublicReplayUpdate::Loaded(replays)) => {
                                 let mut loaded_count = 0;
                                 let mut existing = std::collections::HashSet::new();
-                                let mut local_by_filename =
-                                    std::collections::HashMap::new();
+                                let mut local_by_filename = std::collections::HashMap::new();
                                 for (i, entry) in entries.iter().enumerate() {
                                     if let Some(url) = &entry.remote_url {
                                         existing.insert(url.clone());
@@ -7147,9 +7719,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     // Either way list it once, as the local copy, and
                                     // backfill the score/winner a bare .ncrp has no
                                     // sidecar for, so it doesn't sit there as a "—" row.
-                                    if let Some(&i) = local_by_filename
-                                        .get(&meta.filename)
-                                        .or_else(|| {
+                                    if let Some(&i) =
+                                        local_by_filename.get(&meta.filename).or_else(|| {
                                             local_by_filename
                                                 .get(&remote_replay_filename(&meta.url))
                                         })
@@ -7227,9 +7798,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Drain the ghost-list fetcher channel.
                 if let Some(rx) = &ghost_list_rx {
                     let entries_status = match &mut state {
-                        AppState::FpUi(fp_ui::FpScreen::GhostSelect { entries, status, .. }) => {
-                            Some((entries, status))
-                        }
+                        AppState::FpUi(fp_ui::FpScreen::GhostSelect {
+                            entries, status, ..
+                        }) => Some((entries, status)),
                         _ => None,
                     };
                     if let Some((entries, download_status)) = entries_status {
@@ -7273,9 +7844,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Drain the ghost download channel.
                 if let Some(rx) = &ghost_download_rx {
                     let cursor_entries_status = match &mut state {
-                        AppState::FpUi(fp_ui::FpScreen::GhostSelect { cursor, entries, status, .. }) => {
-                            Some((cursor, entries, status))
-                        }
+                        AppState::FpUi(fp_ui::FpScreen::GhostSelect {
+                            cursor,
+                            entries,
+                            status,
+                            ..
+                        }) => Some((cursor, entries, status)),
                         _ => None,
                     };
                     if let Some((cursor, entries, download_status)) = cursor_entries_status {

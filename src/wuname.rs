@@ -79,40 +79,40 @@ const ADJECTIVES: &[&str] = &[
     // American Cream Team, Yellow Jacketz, GoldMinerz, Black Rose Kartel
     // and the rest). Only the modifier half of each name lands here -- the
     // agent half goes in NOUNS -- so the two-part shape holds.
-    "Almighty",   // Almighty God-Rule
-    "Arabian",    // Arabian Knight
-    "Babyface",   // Babyface Fensta
-    "Bigg",       // Bigg Cy
-    "Black",      // Black Jesus
-    "Blue",       // Blue Raspberry
-    "Born",       // Born U Majesty
-    "Bronze",     // Bronze Nazareth
-    "Brown",      // Pop Da Brown Hornet
-    "Cheesy",     // Cheesy Rat
-    "Dirty",      // Young Dirty Bastard
-    "Dreddy",     // Dreddy Kruger
-    "Eternal",    // Eternal
-    "Free",       // Free Murda
-    "Illah",      // Illah Dayz
-    "Killa",      // Killa Sin
-    "Kinetic",    // Kinetic 9
-    "Long",       // Long Axe
-    "Majik",      // Majik Sword
-    "Mega",       // Mega Soul
-    "Poetic",     // Poetic
-    "Polite",     // Polite
-    "Prodigal",   // Prodigal Sunn
-    "Rugged",     // Rugged Monk
-    "Shorty",     // Shorty Shitstain
-    "Stone",      // Stone Mecca
-    "Street",     // Street Life
-    "Suga",       // Suga Bang Bang
-    "Superb",     // Lord Superb
-    "Supreme",    // Supreme I-Self
-    "Trife",      // Trife Da God
-    "True",       // True Master
-    "Wise",       // Allah Wise
-    "Young",      // Young Dirty Bastard
+    "Almighty", // Almighty God-Rule
+    "Arabian",  // Arabian Knight
+    "Babyface", // Babyface Fensta
+    "Bigg",     // Bigg Cy
+    "Black",    // Black Jesus
+    "Blue",     // Blue Raspberry
+    "Born",     // Born U Majesty
+    "Bronze",   // Bronze Nazareth
+    "Brown",    // Pop Da Brown Hornet
+    "Cheesy",   // Cheesy Rat
+    "Dirty",    // Young Dirty Bastard
+    "Dreddy",   // Dreddy Kruger
+    "Eternal",  // Eternal
+    "Free",     // Free Murda
+    "Illah",    // Illah Dayz
+    "Killa",    // Killa Sin
+    "Kinetic",  // Kinetic 9
+    "Long",     // Long Axe
+    "Majik",    // Majik Sword
+    "Mega",     // Mega Soul
+    "Poetic",   // Poetic
+    "Polite",   // Polite
+    "Prodigal", // Prodigal Sunn
+    "Rugged",   // Rugged Monk
+    "Shorty",   // Shorty Shitstain
+    "Stone",    // Stone Mecca
+    "Street",   // Street Life
+    "Suga",     // Suga Bang Bang
+    "Superb",   // Lord Superb
+    "Supreme",  // Supreme I-Self
+    "Trife",    // Trife Da God
+    "True",     // True Master
+    "Wise",     // Allah Wise
+    "Young",    // Young Dirty Bastard
 ];
 
 const NOUNS: &[&str] = &[
@@ -366,7 +366,11 @@ mod tests {
         for (label, list) in [("adjective", ADJECTIVES), ("noun", NOUNS)] {
             let unique: std::collections::HashSet<String> =
                 list.iter().map(|w| w.to_ascii_lowercase()).collect();
-            assert_eq!(unique.len(), list.len(), "duplicate {label} in the word list");
+            assert_eq!(
+                unique.len(),
+                list.len(),
+                "duplicate {label} in the word list"
+            );
         }
     }
 
@@ -391,7 +395,8 @@ mod tests {
             let name = random_username();
             assert!((2..=24).contains(&name.len()), "bad length: {name}");
             assert!(
-                name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'),
+                name.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'),
                 "bad characters: {name}"
             );
             assert!(!name.starts_with('_') && !name.ends_with('_'), "{name}");

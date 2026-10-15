@@ -698,7 +698,13 @@ pub fn find_matching_remote_replay(
 /// no-`chrono`-dependency call).
 fn parse_iso8601_unix(s: &str) -> Option<i64> {
     let b = s.as_bytes();
-    if b.len() < 19 || b[4] != b'-' || b[7] != b'-' || b[10] != b'T' || b[13] != b':' || b[16] != b':' {
+    if b.len() < 19
+        || b[4] != b'-'
+        || b[7] != b'-'
+        || b[10] != b'T'
+        || b[13] != b':'
+        || b[16] != b':'
+    {
         return None;
     }
     let y: i64 = s.get(0..4)?.parse().ok()?;
@@ -1043,7 +1049,10 @@ mod tests {
     #[test]
     fn parse_iso8601_unix_matches_known_timestamp() {
         // 2026-06-13T14:32:00Z, cross-checked against `date -u -d ... +%s`.
-        assert_eq!(parse_iso8601_unix("2026-06-13T14:32:00Z"), Some(1_781_361_120));
+        assert_eq!(
+            parse_iso8601_unix("2026-06-13T14:32:00Z"),
+            Some(1_781_361_120)
+        );
         assert_eq!(parse_iso8601_unix("1970-01-01T00:00:00Z"), Some(0));
         assert_eq!(parse_iso8601_unix("not-a-date"), None);
         assert_eq!(parse_iso8601_unix("2026-13-40T00:00:00Z"), None);
@@ -1136,7 +1145,7 @@ mod tests {
         rec.record_input(10, 10, 0x0001, 0x0000);
         rec.record_input(10, 11, 0x0002, 0x0000); // predicted (wrong)
         rec.record_input(10, 12, 0x0004, 0x0000); // predicted (wrong)
-        // rollback: resim 11 and 12 with confirmed remote inputs
+                                                  // rollback: resim 11 and 12 with confirmed remote inputs
         rec.record_input(10, 11, 0x0002, 0x0100);
         rec.record_input(10, 12, 0x0004, 0x0200);
         rec.record_input(10, 13, 0x0008, 0x0400);

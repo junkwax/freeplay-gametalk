@@ -4,10 +4,7 @@
 //! ffmpeg to encode an MP4. If ffmpeg is missing, the raw capture is left on
 //! disk so the clip is not lost.
 
-use crate::retro::{
-    FrameState, RETRO_PIXEL_FORMAT_RGB565,
-    RETRO_PIXEL_FORMAT_XRGB8888,
-};
+use crate::retro::{FrameState, RETRO_PIXEL_FORMAT_RGB565, RETRO_PIXEL_FORMAT_XRGB8888};
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;

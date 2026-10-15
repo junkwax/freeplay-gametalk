@@ -40,7 +40,10 @@ const LABEL_GAP: f32 = 26.0;
 /// straight to the ROM with no fp_ui character-select step).
 const ITEMS: [(&str, &str); 4] = [
     ("ARCADE", "Local versus"),
-    ("LAB", "Training tools \u{b7} hitbox \u{b7} dummy \u{b7} punish trainer"),
+    (
+        "LAB",
+        "Training tools \u{b7} hitbox \u{b7} dummy \u{b7} punish trainer",
+    ),
     ("REPLAYS", "Watch and manage recorded match files"),
     ("DRONES", "Load ghost input streams to train against"),
 ];
@@ -71,7 +74,13 @@ pub fn draw(
         scale.len(7.0).round() as i32,
     )?;
 
+    let mk2_only = !crate::game::current().mk2_tooling;
     for (i, (label, sub)) in ITEMS.iter().enumerate() {
+        let sub = if mk2_only && i > 0 {
+            "Mortal Kombat II only"
+        } else {
+            sub
+        };
         draw_row(canvas, fonts, scale, i, label, sub, i == cursor)?;
     }
 
@@ -84,14 +93,46 @@ pub fn draw(
     let bottom = theme::VH - chrome::FOOTER_H - 96.0;
     let mk_size = 32.0;
     let mk_track = scale.len(11.0).round() as i32;
-    let (mkw, mkh) = fonts.text_size_tracked(FpFont::SairaCondensedBold, scale.font_px(mk_size), "MORTAL KOMBAT II", mk_track);
-    let (mkx, mky) = scale.point(theme::VW - 96.0 - (mkw as f32 / scale.s), bottom - (mkh as f32 / scale.s));
-    fonts.draw_tracked(canvas, FpFont::SairaCondensedBold, scale.font_px(mk_size), "MORTAL KOMBAT II", mkx, mky, Color::RGB(0xde, 0xde, 0xd8), mk_track)?;
+    let title = crate::game::current().title;
+    let (mkw, mkh) = fonts.text_size_tracked(
+        FpFont::SairaCondensedBold,
+        scale.font_px(mk_size),
+        title,
+        mk_track,
+    );
+    let (mkx, mky) = scale.point(
+        theme::VW - 96.0 - (mkw as f32 / scale.s),
+        bottom - (mkh as f32 / scale.s),
+    );
+    fonts.draw_tracked(
+        canvas,
+        FpFont::SairaCondensedBold,
+        scale.font_px(mk_size),
+        title,
+        mkx,
+        mky,
+        Color::RGB(0xde, 0xde, 0xd8),
+        mk_track,
+    )?;
     let sub = "ARCADE \u{b7} 1993 \u{b7} PLAY MODES";
     let sub_track = scale.len(6.0).round() as i32;
-    let (subw, _) = fonts.text_size_tracked(FpFont::ChakraPetchMedium, scale.font_px(14.0), sub, sub_track);
+    let (subw, _) = fonts.text_size_tracked(
+        FpFont::ChakraPetchMedium,
+        scale.font_px(14.0),
+        sub,
+        sub_track,
+    );
     let (subx, suby) = scale.point(theme::VW - 96.0 - (subw as f32 / scale.s), bottom + 8.0);
-    fonts.draw_tracked(canvas, FpFont::ChakraPetchMedium, scale.font_px(14.0), sub, subx, suby, Color::RGB(0x5e, 0x5e, 0x66), sub_track)?;
+    fonts.draw_tracked(
+        canvas,
+        FpFont::ChakraPetchMedium,
+        scale.font_px(14.0),
+        sub,
+        subx,
+        suby,
+        Color::RGB(0x5e, 0x5e, 0x66),
+        sub_track,
+    )?;
 
     // ROM identity line hidden for now, same as Main Menu's — see its
     // doc comment.
@@ -100,7 +141,11 @@ pub fn draw(
         canvas,
         fonts,
         scale,
-        &[chrome::PROMPT_NAVIGATE, chrome::PROMPT_SELECT, chrome::PROMPT_BACK],
+        &[
+            chrome::PROMPT_NAVIGATE,
+            chrome::PROMPT_SELECT,
+            chrome::PROMPT_BACK,
+        ],
         FooterRight::Menu,
     )?;
     Ok(())
@@ -121,7 +166,16 @@ fn draw_row(
     if selected {
         let tint = Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 36);
         let clear = Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 0);
-        geometry::fill_horizontal_gradient_rect(canvas, scale, LIST_X, y, 730.0 * 0.62, ROW_H, tint, clear);
+        geometry::fill_horizontal_gradient_rect(
+            canvas,
+            scale,
+            LIST_X,
+            y,
+            730.0 * 0.62,
+            ROW_H,
+            tint,
+            clear,
+        );
     }
 
     let bar_color = if selected {
@@ -131,7 +185,11 @@ fn draw_row(
     };
     geometry::fill_skewed_rect(canvas, scale, LIST_X, y, BAR_W, ROW_H, SKEW_DEG, bar_color);
 
-    let num_color = if selected { theme::ACCENT } else { Color::RGB(0x34, 0x34, 0x3a) };
+    let num_color = if selected {
+        theme::ACCENT
+    } else {
+        Color::RGB(0x34, 0x34, 0x3a)
+    };
     let num = format!("{:02}", index + 1);
     let num_px = scale.font_px(16.0);
     // True visible-glyph centering (`visible_span`), not a hand-tuned
@@ -140,8 +198,19 @@ fn draw_row(
     // instead of independently guessed.
     let (num_inset, num_vis_h) = fonts.visible_span(FpFont::ChakraPetchSemiBold, num_px, &num);
     let num_top = y + ROW_H / 2.0 - (num_vis_h as f32 / scale.s) / 2.0;
-    let (nx, ny) = scale.point(LIST_X + BAR_W + LABEL_GAP, num_top - num_inset as f32 / scale.s);
-    fonts.draw(canvas, FpFont::ChakraPetchSemiBold, num_px, &num, nx, ny, num_color)?;
+    let (nx, ny) = scale.point(
+        LIST_X + BAR_W + LABEL_GAP,
+        num_top - num_inset as f32 / scale.s,
+    );
+    fonts.draw(
+        canvas,
+        FpFont::ChakraPetchSemiBold,
+        num_px,
+        &num,
+        nx,
+        ny,
+        num_color,
+    )?;
 
     // Same label sizes/font/italic treatment and true visible-pixel
     // centering as `main_menu::draw_row` (see its doc comment on why
@@ -151,8 +220,16 @@ fn draw_row(
     // differently from the Main Menu row directly above it in the
     // navigation flow.
     let label_size = if selected { 52.0 } else { 42.0 };
-    let label_color = if selected { theme::TEXT } else { Color::RGB(0x6a, 0x6a, 0x72) };
-    let label_font = if selected { FpFont::SairaCondensedBlack } else { FpFont::SairaCondensedBold };
+    let label_color = if selected {
+        theme::TEXT
+    } else {
+        Color::RGB(0x6a, 0x6a, 0x72)
+    };
+    let label_font = if selected {
+        FpFont::SairaCondensedBlack
+    } else {
+        FpFont::SairaCondensedBold
+    };
     let label_text = label.to_uppercase();
     let sub_text = sub.to_uppercase();
     let label_x = LIST_X + BAR_W + LABEL_GAP + 30.0 + LABEL_GAP;
@@ -168,11 +245,23 @@ fn draw_row(
         (0, 0)
     };
     let sub_vis_h_l = sub_vis_h as f32 / scale.s;
-    let block_h = if selected { label_vis_h_l + gap + sub_vis_h_l } else { label_vis_h_l };
+    let block_h = if selected {
+        label_vis_h_l + gap + sub_vis_h_l
+    } else {
+        label_vis_h_l
+    };
     let block_top = y + (ROW_H - block_h) / 2.0;
 
     let (lx, ly) = scale.point(label_x, block_top - label_inset as f32 / scale.s);
-    fonts.draw_italic(canvas, label_font, label_px, &label_text, lx, ly, label_color)?;
+    fonts.draw_italic(
+        canvas,
+        label_font,
+        label_px,
+        &label_text,
+        lx,
+        ly,
+        label_color,
+    )?;
 
     if selected {
         let sub_visual_top = block_top + label_vis_h_l + gap;
@@ -215,7 +304,11 @@ fn draw_row(
 /// Same poor-man's-stroke treatment as `main_menu.rs`'s "II" watermark and
 /// `rankings.rs`'s "#1" — this one was missing it entirely (flat fill,
 /// no accent outline), the only one of the three ghost watermarks that was.
-fn draw_watermark(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scale: &Scale) -> Result<(), String> {
+fn draw_watermark(
+    canvas: &mut Canvas<Window>,
+    fonts: &mut FpFontCache,
+    scale: &Scale,
+) -> Result<(), String> {
     let px = scale.font_px(520.0);
     let (w, h) = fonts.text_size(FpFont::SairaCondensedBlack, px, "PLAY");
     let (x, y) = scale.point(
@@ -224,9 +317,34 @@ fn draw_watermark(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scale: &
     );
     let stroke_color = Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 82);
     let r = scale.len(1.0).round().max(1.0) as i32;
-    for (dx, dy) in [(-r, -r), (0, -r), (r, -r), (-r, 0), (r, 0), (-r, r), (0, r), (r, r)] {
-        fonts.draw_italic(canvas, FpFont::SairaCondensedBlack, px, "PLAY", x + dx, y + dy, stroke_color)?;
+    for (dx, dy) in [
+        (-r, -r),
+        (0, -r),
+        (r, -r),
+        (-r, 0),
+        (r, 0),
+        (-r, r),
+        (0, r),
+        (r, r),
+    ] {
+        fonts.draw_italic(
+            canvas,
+            FpFont::SairaCondensedBlack,
+            px,
+            "PLAY",
+            x + dx,
+            y + dy,
+            stroke_color,
+        )?;
     }
-    fonts.draw_italic(canvas, FpFont::SairaCondensedBlack, px, "PLAY", x, y, Color::RGB(0x0c, 0x0c, 0x11))?;
+    fonts.draw_italic(
+        canvas,
+        FpFont::SairaCondensedBlack,
+        px,
+        "PLAY",
+        x,
+        y,
+        Color::RGB(0x0c, 0x0c, 0x11),
+    )?;
     Ok(())
 }

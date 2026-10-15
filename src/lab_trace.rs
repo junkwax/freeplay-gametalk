@@ -29,8 +29,23 @@ const PROC_ACTION_OFF: usize = 0x3E;
 /// ft_* order from MAINEQU.ASM. A trace that does not say who was fighting is
 /// one somebody has to annotate by hand later, and nobody does.
 const CHAR_NAMES: [&str; 17] = [
-    "KungLao", "LiuKang", "Cage", "Baraka", "Kitana", "Mileena", "ShangTsung", "Raiden", "SubZero",
-    "Reptile", "Scorpion", "Jax", "Kintaro", "ShaoKahn", "Smoke", "Noob", "Jade",
+    "KungLao",
+    "LiuKang",
+    "Cage",
+    "Baraka",
+    "Kitana",
+    "Mileena",
+    "ShangTsung",
+    "Raiden",
+    "SubZero",
+    "Reptile",
+    "Scorpion",
+    "Jax",
+    "Kintaro",
+    "ShaoKahn",
+    "Smoke",
+    "Noob",
+    "Jade",
 ];
 
 fn char_name(id: u16) -> String {

@@ -10,12 +10,12 @@
 
 pub mod about;
 pub mod bandwidth;
-mod claim_username;
 pub mod chrome;
+mod claim_username;
 mod connection_failed;
 mod discord_connect;
-mod ghost_select;
 pub mod geometry;
+mod ghost_select;
 pub mod input;
 mod lab_menu;
 pub mod layout;
@@ -40,8 +40,8 @@ pub use input::{event_to_fp_nav, FpNav};
 pub use layout::Scale;
 pub use settings::SettingsFields;
 
-use crate::menu::{LobbyPreview, MAIN_SETTINGS_INDEX as LEGACY_SETTINGS_INDEX};
 use crate::font::FpFontCache;
+use crate::menu::{LobbyPreview, MAIN_SETTINGS_INDEX as LEGACY_SETTINGS_INDEX};
 use sdl2::render::Canvas;
 use sdl2::video::Window;
 
@@ -90,12 +90,17 @@ const PLAY_DRONES_INDEX: usize = 3;
 /// All fp_ui screens.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FpScreen {
-    Main { cursor: usize },
+    Main {
+        cursor: usize,
+    },
     /// Quit confirmation, rendered on top of the Main Menu rather than
     /// replacing it. `menu_cursor` is preserved so the dimmed menu behind
     /// the modal (and the screen underneath if Cancel is chosen) still
     /// shows the row the player quit from selected.
-    Quit { choice: usize, menu_cursor: usize },
+    Quit {
+        choice: usize,
+        menu_cursor: usize,
+    },
     /// Play's submenu: Arcade / Lab / Replays / Drones. Arcade boots the ROM
     /// directly (no character-select step — see `play_menu.rs`); Replays
     /// still delegates to its legacy screen (follow-up work). Lab and
@@ -103,10 +108,14 @@ pub enum FpScreen {
     /// `GhostSelect` below) — the actual in-game Lab trainer overlay and
     /// drone gameplay stay legacy, per explicit user direction: only the
     /// menu system needed updating, not the in-game UI.
-    PlayMenu { cursor: usize },
+    PlayMenu {
+        cursor: usize,
+    },
     /// Lab's own 2-item chooser (Start Lab / Load Drones) — native
     /// redesign of legacy's `MenuScreen::LabMenu`. See `lab_menu.rs`.
-    LabMenu { cursor: usize },
+    LabMenu {
+        cursor: usize,
+    },
     /// Load Drones — native redesign of legacy's `MenuScreen::GhostSelect`.
     /// `entries`/`status` are populated/drained by `main.rs` exactly like
     /// the legacy screen's own fields (`FpResult::OpenGhostSelect` kicks off
@@ -266,18 +275,24 @@ pub enum FpScreen {
     /// screen carries, updated by the same background-thread round trip in
     /// `main.rs` — see `matchmaking.rs` (the fp_ui module, not
     /// `crate::matchmaking`) for the radar-sweep animation.
-    Matchmaking { status: String },
+    Matchmaking {
+        status: String,
+    },
     /// Netplay failure report — native replacement for the legacy
     /// `MenuScreen::TestResult` screen's role when a matchmade session
     /// fails to start. `lines` is the exact same verdict list main.rs
     /// builds for the legacy screen — see `connection_failed.rs`.
-    ConnectionFailed { lines: Vec<String> },
+    ConnectionFailed {
+        lines: Vec<String>,
+    },
     /// Discord OAuth waiting screen — reached from Settings→Account's
     /// Connect row (`FpResult::ToggleDiscordConnect`). `status` is updated
     /// by the same `matchmaking::Update::Status` round trip the
     /// `Matchmaking` screen uses; cancel/completion handling lives in
     /// main.rs — see `discord_connect.rs`.
-    DiscordConnect { status: String },
+    DiscordConnect {
+        status: String,
+    },
 }
 
 /// The Settings category the player last had open, so reopening Settings
@@ -298,7 +313,9 @@ fn remember_settings_cat(cat: usize) {
 
 impl FpScreen {
     pub fn main() -> Self {
-        FpScreen::Main { cursor: MAIN_PLAY_INDEX }
+        FpScreen::Main {
+            cursor: MAIN_PLAY_INDEX,
+        }
     }
 
     pub fn settings_from_cfg(cfg: &crate::config::Config) -> Self {
@@ -382,6 +399,9 @@ pub enum FpResult {
     /// EXIT GAME confirmed on the Quit overlay. The caller breaks the main
     /// loop exactly like the legacy `NavResult::Quit`.
     ExitGame,
+    /// LB/RB on the Main Menu: save this ROM (and its game) as preferred
+    /// and restart the client on it (`game::relaunch_with_game`).
+    SwitchRom(std::path::PathBuf),
     /// A Settings row changed. The caller reads `FpScreen::Settings`'s
     /// current `fields` out of `state`, copies them into `Config`, applies
     /// any that need a live side effect (fullscreen), and calls
@@ -582,7 +602,13 @@ fn nav_inner(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult
                 *screen = FpScreen::Profile;
                 FpResult::Stay
             }
-            FpNav::Confirm if *cursor == MAIN_LAST_MATCH_INDEX => FpResult::WatchLastMatchReplay,
+            FpNav::Confirm if *cursor == MAIN_LAST_MATCH_INDEX => {
+                if crate::game::current().mk2_tooling {
+                    FpResult::WatchLastMatchReplay
+                } else {
+                    FpResult::Stay
+                }
+            }
             FpNav::Confirm => match *cursor {
                 c if c == MAIN_PLAY_INDEX => {
                     // Nothing under Play works without the ROM (Arcade/Lab/
@@ -613,12 +639,22 @@ fn nav_inner(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult
             // conventional "press Back at the top level to exit" pattern,
             // and it costs no new input plumbing.
             FpNav::Back => {
-                *screen = FpScreen::Quit { choice: 0, menu_cursor: *cursor };
+                *screen = FpScreen::Quit {
+                    choice: 0,
+                    menu_cursor: *cursor,
+                };
                 FpResult::Stay
             }
             FpNav::Info => {
                 *screen = FpScreen::About;
                 FpResult::Stay
+            }
+            FpNav::PrevTab | FpNav::NextTab => {
+                let step = if input == FpNav::NextTab { 1 } else { -1 };
+                match crate::rom::neighbouring_rom(step) {
+                    Some(rom) => FpResult::SwitchRom(rom),
+                    None => FpResult::Stay,
+                }
             }
             _ => FpResult::Stay,
         },
@@ -631,6 +667,13 @@ fn nav_inner(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult
                 *cursor = (*cursor + 1).min(PLAY_DRONES_INDEX);
                 FpResult::Stay
             }
+            // Lab, Replays and Drones run on MK2's RAM map and MK2-only
+            // file libraries; on another game the rows show as MK2-only.
+            FpNav::Confirm
+                if *cursor != PLAY_ARCADE_INDEX && !crate::game::current().mk2_tooling =>
+            {
+                FpResult::Stay
+            }
             FpNav::Confirm => match *cursor {
                 c if c == PLAY_ARCADE_INDEX => FpResult::ActivateMainItem(LEGACY_ARCADE_INDEX),
                 c if c == PLAY_LAB_INDEX => {
@@ -638,19 +681,30 @@ fn nav_inner(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult
                     FpResult::Stay
                 }
                 c if c == PLAY_REPLAYS_INDEX => {
-                    *screen = FpScreen::ReplaySelect { cursor: 0, entries: Vec::new(), status: None };
+                    *screen = FpScreen::ReplaySelect {
+                        cursor: 0,
+                        entries: Vec::new(),
+                        status: None,
+                    };
                     FpResult::OpenReplaySelect
                 }
                 _ => {
                     // Drones — jumps straight to the drone list, same shortcut
                     // legacy's own Play submenu gives this row (skipping the
                     // Lab chooser, since there's nothing to choose here).
-                    *screen = FpScreen::GhostSelect { cursor: 0, section: 0, entries: Vec::new(), status: None };
+                    *screen = FpScreen::GhostSelect {
+                        cursor: 0,
+                        section: 0,
+                        entries: Vec::new(),
+                        status: None,
+                    };
                     FpResult::OpenGhostSelect
                 }
             },
             FpNav::Back => {
-                *screen = FpScreen::Main { cursor: MAIN_PLAY_INDEX };
+                *screen = FpScreen::Main {
+                    cursor: MAIN_PLAY_INDEX,
+                };
                 FpResult::Stay
             }
             FpNav::Info => {
@@ -672,16 +726,28 @@ fn nav_inner(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult
             FpNav::Confirm => {
                 // Load Drones — same OpenGhostSelect side effect the Play
                 // submenu's Drones row triggers directly.
-                *screen = FpScreen::GhostSelect { cursor: 0, section: 0, entries: Vec::new(), status: None };
+                *screen = FpScreen::GhostSelect {
+                    cursor: 0,
+                    section: 0,
+                    entries: Vec::new(),
+                    status: None,
+                };
                 FpResult::OpenGhostSelect
             }
             FpNav::Back => {
-                *screen = FpScreen::PlayMenu { cursor: PLAY_LAB_INDEX };
+                *screen = FpScreen::PlayMenu {
+                    cursor: PLAY_LAB_INDEX,
+                };
                 FpResult::Stay
             }
             _ => FpResult::Stay,
         },
-        FpScreen::GhostSelect { cursor, section, entries, .. } => match input {
+        FpScreen::GhostSelect {
+            cursor,
+            section,
+            entries,
+            ..
+        } => match input {
             FpNav::Up => {
                 let idxs = ghost_section_indices(entries, *section);
                 if let Some(pos) = idxs.iter().position(|i| i == cursor) {
@@ -724,8 +790,12 @@ fn nav_inner(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult
             // entry while `section` hasn't caught up yet).
             FpNav::Confirm if ghost_section_indices(entries, *section).contains(cursor) => {
                 match entries.get(*cursor) {
-                    Some(crate::menu::GhostEntry::Local { path, .. }) => FpResult::LoadGhost(path.clone()),
-                    Some(crate::menu::GhostEntry::Remote(meta)) => FpResult::DownloadGhost(meta.ghost_id.clone()),
+                    Some(crate::menu::GhostEntry::Local { path, .. }) => {
+                        FpResult::LoadGhost(path.clone())
+                    }
+                    Some(crate::menu::GhostEntry::Remote(meta)) => {
+                        FpResult::DownloadGhost(meta.ghost_id.clone())
+                    }
                     None => FpResult::Stay,
                 }
             }
@@ -735,7 +805,9 @@ fn nav_inner(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult
             }
             _ => FpResult::Stay,
         },
-        FpScreen::ReplaySelect { cursor, entries, .. } => match input {
+        FpScreen::ReplaySelect {
+            cursor, entries, ..
+        } => match input {
             FpNav::Up => {
                 *cursor = cursor.saturating_sub(1);
                 FpResult::Stay
@@ -752,7 +824,9 @@ fn nav_inner(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult
                 None => FpResult::Stay,
             },
             FpNav::Back => {
-                *screen = FpScreen::PlayMenu { cursor: PLAY_REPLAYS_INDEX };
+                *screen = FpScreen::PlayMenu {
+                    cursor: PLAY_REPLAYS_INDEX,
+                };
                 FpResult::Stay
             }
             _ => FpResult::Stay,
@@ -774,7 +848,9 @@ fn nav_inner(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult
         },
         FpScreen::Rankings => match input {
             FpNav::Back => {
-                *screen = FpScreen::Main { cursor: MAIN_RANKINGS_INDEX };
+                *screen = FpScreen::Main {
+                    cursor: MAIN_RANKINGS_INDEX,
+                };
                 FpResult::Stay
             }
             FpNav::Info => {
@@ -797,7 +873,9 @@ fn nav_inner(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult
             // its own before.
             FpNav::Confirm => FpResult::BeginAccountEdit(crate::menu::EditField::Username),
             FpNav::Back => {
-                *screen = FpScreen::Main { cursor: MAIN_STATS_INDEX };
+                *screen = FpScreen::Main {
+                    cursor: MAIN_STATS_INDEX,
+                };
                 FpResult::Stay
             }
             FpNav::Info => {
@@ -806,7 +884,10 @@ fn nav_inner(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult
             }
             _ => FpResult::Stay,
         },
-        FpScreen::Quit { choice, menu_cursor } => match input {
+        FpScreen::Quit {
+            choice,
+            menu_cursor,
+        } => match input {
             FpNav::Left | FpNav::Right => {
                 *choice = 1 - *choice;
                 FpResult::Stay
@@ -815,17 +896,29 @@ fn nav_inner(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult
                 if *choice == 1 {
                     FpResult::ExitGame
                 } else {
-                    *screen = FpScreen::Main { cursor: *menu_cursor };
+                    *screen = FpScreen::Main {
+                        cursor: *menu_cursor,
+                    };
                     FpResult::Stay
                 }
             }
             FpNav::Back => {
-                *screen = FpScreen::Main { cursor: *menu_cursor };
+                *screen = FpScreen::Main {
+                    cursor: *menu_cursor,
+                };
                 FpResult::Stay
             }
             _ => FpResult::Stay,
         },
-        FpScreen::Settings { cat, row, fields, sidebar_focus, controls_player, test_conn_address, .. } => match input {
+        FpScreen::Settings {
+            cat,
+            row,
+            fields,
+            sidebar_focus,
+            controls_player,
+            test_conn_address,
+            ..
+        } => match input {
             FpNav::Up => {
                 if *sidebar_focus {
                     *cat = cat.saturating_sub(1);
@@ -854,8 +947,8 @@ fn nav_inner(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult
                 FpResult::Stay
             }
             FpNav::Confirm if *cat == settings::CONTROLS_CAT_INDEX => {
-                if *row < crate::input::Action::ALL.len() {
-                    FpResult::BeginRebind(crate::input::Action::ALL[*row], *controls_player)
+                if *row < crate::input::actions().len() {
+                    FpResult::BeginRebind(crate::input::actions()[*row], *controls_player)
                 } else {
                     FpResult::ClearAllBindings(*controls_player)
                 }
@@ -894,13 +987,17 @@ fn nav_inner(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult
             // toggle/cycle/slider value) — repurposed to switch which
             // player's bindings are shown/rebound instead (see
             // `FpScreen::Settings::controls_player`'s doc comment).
-            FpNav::Left | FpNav::Right if !*sidebar_focus && *cat == settings::CONTROLS_CAT_INDEX => {
+            FpNav::Left | FpNav::Right
+                if !*sidebar_focus && *cat == settings::CONTROLS_CAT_INDEX =>
+            {
                 *controls_player = controls_player.other();
                 FpResult::Stay
             }
             // Test Connection has nothing to cycle with Left/Right either —
             // its only input is the real-keyboard address field.
-            FpNav::Left | FpNav::Right if !*sidebar_focus && *cat == settings::TEST_CONN_CAT_INDEX => {
+            FpNav::Left | FpNav::Right
+                if !*sidebar_focus && *cat == settings::TEST_CONN_CAT_INDEX =>
+            {
                 FpResult::Stay
             }
             FpNav::Left if !*sidebar_focus => {
@@ -921,7 +1018,9 @@ fn nav_inner(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult
                 FpResult::Stay
             }
             FpNav::Back => {
-                *screen = FpScreen::Main { cursor: MAIN_SETTINGS_INDEX };
+                *screen = FpScreen::Main {
+                    cursor: MAIN_SETTINGS_INDEX,
+                };
                 FpResult::Stay
             }
             _ => FpResult::Stay,
@@ -943,8 +1042,12 @@ fn nav_inner(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult
             // respond to it while it's up.
             if incoming.is_some() {
                 return match input {
-                    FpNav::Confirm => FpResult::AcceptChallenge(incoming.take().unwrap().challenge_id),
-                    FpNav::Back => FpResult::DeclineChallenge(incoming.take().unwrap().challenge_id),
+                    FpNav::Confirm => {
+                        FpResult::AcceptChallenge(incoming.take().unwrap().challenge_id)
+                    }
+                    FpNav::Back => {
+                        FpResult::DeclineChallenge(incoming.take().unwrap().challenge_id)
+                    }
                     _ => FpResult::Stay,
                 };
             }
@@ -1035,7 +1138,8 @@ fn nav_inner(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult
                             None => {
                                 // Open the format chooser at the same default
                                 // (Ranked FT5) legacy's own Players tab does.
-                                *challenge_pick = Some(crate::menu::ChallengeFormat::RankedFt5.index());
+                                *challenge_pick =
+                                    Some(crate::menu::ChallengeFormat::RankedFt5.index());
                                 FpResult::Stay
                             }
                             Some(fmt_idx) => {
@@ -1057,13 +1161,19 @@ fn nav_inner(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult
                     FpResult::Stay
                 }
                 FpNav::Back => {
-                    *screen = FpScreen::Main { cursor: MAIN_ONLINE_INDEX };
+                    *screen = FpScreen::Main {
+                        cursor: MAIN_ONLINE_INDEX,
+                    };
                     FpResult::Stay
                 }
                 _ => FpResult::Stay,
             }
         }
-        FpScreen::SessionEnded { replay_path, choice, .. } => match input {
+        FpScreen::SessionEnded {
+            replay_path,
+            choice,
+            ..
+        } => match input {
             FpNav::Left | FpNav::Right if replay_path.is_some() => {
                 *choice = 1 - *choice;
                 FpResult::Stay
@@ -1083,7 +1193,11 @@ fn nav_inner(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult
             }
             _ => FpResult::Stay,
         },
-        FpScreen::ClaimUsername { value, status, checking } => match input {
+        FpScreen::ClaimUsername {
+            value,
+            status,
+            checking,
+        } => match input {
             FpNav::Confirm if !*checking => FpResult::SubmitUsername(value.clone()),
             // Triangle rolls a fresh Wu-style name into the field — the
             // "regenerate" affordance the generator's `variant` seed was
@@ -1113,10 +1227,16 @@ fn nav_inner(screen: &mut FpScreen, input: FpNav, rom_present: bool) -> FpResult
         },
         FpScreen::LobbyRoom { id, view, .. } => match input {
             FpNav::Confirm => match view {
-                Some(v) if v.ready_check.as_ref().is_some_and(|rc| rc.you_are_challenger) => {
+                Some(v)
+                    if v.ready_check
+                        .as_ref()
+                        .is_some_and(|rc| rc.you_are_challenger) =>
+                {
                     FpResult::ReadyLobby(id.clone())
                 }
-                Some(v) => FpResult::SetLobbyQueue(id.clone(), v.your_queued || v.your_position.is_some()),
+                Some(v) => {
+                    FpResult::SetLobbyQueue(id.clone(), v.your_queued || v.your_position.is_some())
+                }
                 None => FpResult::Stay,
             },
             FpNav::Back => FpResult::LeaveLobby(id.clone()),
@@ -1145,7 +1265,13 @@ fn ghost_section_indices(entries: &[crate::menu::GhostEntry], section: usize) ->
     entries
         .iter()
         .enumerate()
-        .filter(|(_, e)| matches!((section, e), (0, crate::menu::GhostEntry::Local { .. }) | (1, crate::menu::GhostEntry::Remote(_))))
+        .filter(|(_, e)| {
+            matches!(
+                (section, e),
+                (0, crate::menu::GhostEntry::Local { .. })
+                    | (1, crate::menu::GhostEntry::Remote(_))
+            )
+        })
         .map(|(i, _)| i)
         .collect()
 }
@@ -1175,24 +1301,73 @@ pub fn draw(
     canvas.clear();
 
     match screen {
-        FpScreen::Main { cursor } => main_menu::draw(canvas, fonts, &scale, *cursor, username, profile, rom_present)?,
-        FpScreen::Quit { choice, menu_cursor } => {
-            main_menu::draw(canvas, fonts, &scale, *menu_cursor, username, profile, rom_present)?;
+        FpScreen::Main { cursor } => main_menu::draw(
+            canvas,
+            fonts,
+            &scale,
+            *cursor,
+            username,
+            profile,
+            rom_present,
+        )?,
+        FpScreen::Quit {
+            choice,
+            menu_cursor,
+        } => {
+            main_menu::draw(
+                canvas,
+                fonts,
+                &scale,
+                *menu_cursor,
+                username,
+                profile,
+                rom_present,
+            )?;
             quit::draw(canvas, fonts, &scale, *choice)?;
         }
         FpScreen::PlayMenu { cursor } => play_menu::draw(canvas, fonts, &scale, *cursor, username)?,
         FpScreen::LabMenu { cursor } => lab_menu::draw(canvas, fonts, &scale, *cursor, username)?,
-        FpScreen::GhostSelect { cursor, section, entries, status } => {
-            ghost_select::draw(canvas, fonts, &scale, *cursor, *section, entries, status.as_deref(), username)?
-        }
-        FpScreen::ReplaySelect { cursor, entries, status } => {
-            replay_select::draw(canvas, fonts, &scale, *cursor, entries, status.as_deref(), username)?
-        }
+        FpScreen::GhostSelect {
+            cursor,
+            section,
+            entries,
+            status,
+        } => ghost_select::draw(
+            canvas,
+            fonts,
+            &scale,
+            *cursor,
+            *section,
+            entries,
+            status.as_deref(),
+            username,
+        )?,
+        FpScreen::ReplaySelect {
+            cursor,
+            entries,
+            status,
+        } => replay_select::draw(
+            canvas,
+            fonts,
+            &scale,
+            *cursor,
+            entries,
+            status.as_deref(),
+            username,
+        )?,
         FpScreen::Bandwidth => bandwidth::draw(canvas, fonts, &scale, username)?,
         FpScreen::Rankings => rankings::draw(canvas, fonts, &scale, username, leaderboard)?,
         FpScreen::Profile => profile::draw(canvas, fonts, &scale, username, profile)?,
         FpScreen::About => about::draw(canvas, fonts, &scale, username)?,
-        FpScreen::Settings { cat, row, fields, sidebar_focus, controls_player, test_conn_address, test_conn_lines } => settings::draw(
+        FpScreen::Settings {
+            cat,
+            row,
+            fields,
+            sidebar_focus,
+            controls_player,
+            test_conn_address,
+            test_conn_lines,
+        } => settings::draw(
             canvas,
             fonts,
             &scale,
@@ -1237,7 +1412,11 @@ pub fn draw(
             quick_match_status.as_deref(),
             username,
         )?,
-        FpScreen::SessionEnded { lines, replay_path, choice } => session_ended::draw(
+        FpScreen::SessionEnded {
+            lines,
+            replay_path,
+            choice,
+        } => session_ended::draw(
             canvas,
             fonts,
             &scale,
@@ -1246,15 +1425,34 @@ pub fn draw(
             *choice,
             username,
         )?,
-        FpScreen::ClaimUsername { value, status, checking } => {
-            claim_username::draw(canvas, fonts, &scale, value, status, *checking)?
+        FpScreen::ClaimUsername {
+            value,
+            status,
+            checking,
+        } => claim_username::draw(canvas, fonts, &scale, value, status, *checking)?,
+        FpScreen::LobbyRoom {
+            view,
+            status,
+            thumb,
+            ..
+        } => lobby_room::draw(
+            canvas,
+            fonts,
+            &scale,
+            view.as_ref(),
+            status,
+            thumb.as_ref(),
+            username,
+        )?,
+        FpScreen::Matchmaking { status } => {
+            matchmaking::draw(canvas, fonts, &scale, status, username)?
         }
-        FpScreen::LobbyRoom { view, status, thumb, .. } => {
-            lobby_room::draw(canvas, fonts, &scale, view.as_ref(), status, thumb.as_ref(), username)?
+        FpScreen::ConnectionFailed { lines } => {
+            connection_failed::draw(canvas, fonts, &scale, lines, username)?
         }
-        FpScreen::Matchmaking { status } => matchmaking::draw(canvas, fonts, &scale, status, username)?,
-        FpScreen::ConnectionFailed { lines } => connection_failed::draw(canvas, fonts, &scale, lines, username)?,
-        FpScreen::DiscordConnect { status } => discord_connect::draw(canvas, fonts, &scale, status, username)?,
+        FpScreen::DiscordConnect { status } => {
+            discord_connect::draw(canvas, fonts, &scale, status, username)?
+        }
     }
 
     Ok(())
@@ -1280,7 +1478,9 @@ pub fn draw_text_entry_modal(
     shift: bool,
 ) -> Result<(), String> {
     let scale = Scale::compute(win_w, win_h);
-    text_entry::draw_modal(canvas, fonts, &scale, title, label, value, field, cursor, shift)
+    text_entry::draw_modal(
+        canvas, fonts, &scale, title, label, value, field, cursor, shift,
+    )
 }
 
 pub fn draw_rebind_capture_modal(
@@ -1372,7 +1572,10 @@ mod tests {
         ));
 
         let mut screen = claim("Drunken_Ninja", false);
-        assert!(matches!(nav(&mut screen, FpNav::Action, true), FpResult::Stay));
+        assert!(matches!(
+            nav(&mut screen, FpNav::Action, true),
+            FpResult::Stay
+        ));
         match screen {
             FpScreen::ClaimUsername { value, .. } => {
                 assert_ne!(value, "Drunken_Ninja", "Triangle should roll a new name")
@@ -1398,7 +1601,13 @@ mod tests {
 
     fn settings_test_conn(address: &str) -> FpScreen {
         let mut screen = FpScreen::settings_account(&crate::config::Config::default());
-        if let FpScreen::Settings { cat, sidebar_focus, test_conn_address, .. } = &mut screen {
+        if let FpScreen::Settings {
+            cat,
+            sidebar_focus,
+            test_conn_address,
+            ..
+        } = &mut screen
+        {
             *cat = settings::TEST_CONN_CAT_INDEX;
             *sidebar_focus = false;
             *test_conn_address = address.into();
@@ -1514,7 +1723,10 @@ mod tests {
     #[test]
     fn profile_back_still_returns_to_the_main_menu() {
         let mut screen = FpScreen::Profile;
-        assert!(matches!(nav(&mut screen, FpNav::Back, true), FpResult::Stay));
+        assert!(matches!(
+            nav(&mut screen, FpNav::Back, true),
+            FpResult::Stay
+        ));
         assert!(matches!(screen, FpScreen::Main { .. }));
     }
 }

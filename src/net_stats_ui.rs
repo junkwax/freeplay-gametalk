@@ -9,7 +9,7 @@ fn net_stats_detail_rows(
     save_state_micros: u64,
     checksum_micros: u64,
     load_state_micros: u64,
-    kbps_sent: Option<&str>,
+    send_queue: Option<&str>,
     local_frames_behind: Option<&str>,
     remote_frames_behind: Option<&str>,
     ping_ms: Option<i32>,
@@ -42,8 +42,10 @@ fn net_stats_detail_rows(
     if let (Some(local), Some(remote)) = (local_frames_behind, remote_frames_behind) {
         rows.push(format!("BEHIND L{local} R{remote}"));
     }
-    if let Some(kbps) = kbps_sent {
-        rows.push(format!("SEND {kbps} KB/S"));
+    // GGRS 0.13 dropped kbps; packets still awaiting the peer's ack is the
+    // more telling number anyway - it climbs when the link backs up.
+    if let Some(queue) = send_queue {
+        rows.push(format!("QUEUE {queue}"));
     }
     if let Some(perf) = mk2_perf {
         rows.extend(perf.detail_rows());
@@ -57,7 +59,7 @@ pub(crate) struct NetStatsUi {
     mk2_perf_cache: Option<mk2_perf::Mk2PerfSample>,
     mk2_perf_next_sample_frame: u32,
     pub(crate) ping_ms: Option<i32>,
-    pub(crate) kbps_sent: Option<String>,
+    pub(crate) send_queue: Option<String>,
     pub(crate) local_frames_behind: Option<String>,
     pub(crate) remote_frames_behind: Option<String>,
     pub(crate) rollback_frames: u32,
@@ -118,7 +120,7 @@ impl NetStatsUi {
             self.save_state_micros,
             self.checksum_micros,
             self.load_state_micros,
-            self.kbps_sent.as_deref(),
+            self.send_queue.as_deref(),
             self.local_frames_behind.as_deref(),
             self.remote_frames_behind.as_deref(),
             self.ping_ms,
@@ -136,7 +138,7 @@ mod tests {
     fn net_stats_ui_records_step_and_formats_rows() {
         let mut stats = NetStatsUi {
             ping_ms: Some(72),
-            kbps_sent: Some("12.5".into()),
+            send_queue: Some("3".into()),
             local_frames_behind: Some("1".into()),
             remote_frames_behind: Some("2".into()),
             ..NetStatsUi::default()
@@ -163,7 +165,7 @@ mod tests {
                 "LOADS 1",
                 "CPU S40 H9 L17 US",
                 "BEHIND L1 R2",
-                "SEND 12.5 KB/S",
+                "QUEUE 3",
             ]
         );
     }

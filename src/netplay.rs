@@ -12,7 +12,6 @@
 //! player's input independently, so per-player = `u16` wrapped in a Pod
 //! struct (ggrs requires Pod).
 
-use bytemuck::{Pod, Zeroable};
 use ggrs::{
     Config, NonBlockingSocket, P2PSession, PlayerType, SessionBuilder, UdpNonBlockingSocket,
 };
@@ -21,8 +20,8 @@ use std::time::Duration;
 
 /// One player's compact input snapshot, sent over the wire each frame.
 /// 2 bytes. Bit layout matches `input::snapshot_player` / `apply_snapshot`.
-#[repr(C)]
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Pod, Zeroable)]
+/// GGRS 0.11+ serializes inputs with serde/bincode (it used bytemuck before).
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct NetInput {
     pub bits: u16,
 }
@@ -39,6 +38,9 @@ impl Config for GgrsConfig {
     type Input = NetInput;
     type State = std::sync::Arc<Vec<u8>>; // retro_serialize blob
     type Address = SocketAddr;
+    /// A missing remote input is predicted as the last one received (held
+    /// buttons stay held) - what GGRS did before 0.12 made this pluggable.
+    type InputPredictor = ggrs::PredictRepeatLast;
 }
 
 pub type Session = P2PSession<GgrsConfig>;
@@ -77,6 +79,14 @@ pub fn session_input_delay(auto: bool, manual: u32, rtt_ms: Option<u32>) -> u32 
     }
 }
 
+/// How many frames GGRS may run ahead on predicted remote input before it
+/// stalls the local side to wait. GGRS's default is 8; Fightcade's GGPO rolled
+/// back up to 15 frames in a measured two-instance session, so a latency
+/// spike there keeps playing where 8 would freeze. A deeper miss costs a
+/// longer re-simulation (one core run + savestate per frame) and a bigger
+/// visible correction, but only on the spike itself.
+pub const MAX_PREDICTION_WINDOW: usize = 15;
+
 /// Shared session-builder config for both transports. MK2 runs ~54.7 Hz;
 /// ggrs wants the logical tick rate so its timing calculations (timesync,
 /// drift detection) are correct — 55 is the closest integer. Only the
@@ -90,17 +100,17 @@ fn configured_builder<F: FnMut(&str)>(
 ) -> Result<SessionBuilder<GgrsConfig>, ggrs::GgrsError> {
     Ok(SessionBuilder::<GgrsConfig>::new()
         .with_num_players(2)
+        .map_err(|e| {
+            log_fn(&format!("[session] with_num_players err: {e}"));
+            e
+        })?
         .with_fps(55)
         .map_err(|e| {
             log_fn(&format!("[session] with_fps err: {e}"));
             e
         })?
         .with_input_delay(input_delay as usize)
-        .with_max_prediction_window(8)
-        .map_err(|e| {
-            log_fn(&format!("[session] with_max_prediction_window err: {e}"));
-            e
-        })?
+        .with_max_prediction_window(MAX_PREDICTION_WINDOW)
         .with_disconnect_notify_delay(notify_delay)
         .with_disconnect_timeout(disconnect_timeout)
         .with_desync_detection_mode(ggrs::DesyncDetection::On {
@@ -152,7 +162,7 @@ pub fn start_session_verbose<F: FnMut(&str)>(
         &mut log_fn,
     )?;
     log_fn(&format!(
-        "[session] builder configured (fps=55 delay={input_delay} window=8 desync=on, drop=1.5s)"
+        "[session] builder configured (fps=55 delay={input_delay} window={MAX_PREDICTION_WINDOW} desync=on, drop=1.5s)"
     ));
 
     builder = builder

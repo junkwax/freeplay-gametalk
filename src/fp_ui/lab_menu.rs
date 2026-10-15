@@ -39,7 +39,10 @@ const LABEL_GAP: f32 = 26.0;
 /// uses, so the copy stays consistent across both entry points.
 pub const ITEMS: [(&str, &str); 2] = [
     ("START LAB", "Launch training mode with all tools live"),
-    ("LOAD DRONES", "Open ghost browser to practice against recorded opponents"),
+    (
+        "LOAD DRONES",
+        "Open ghost browser to practice against recorded opponents",
+    ),
 ];
 
 /// (key, label, hint) — F-key shortcuts available inside the in-game Lab
@@ -52,7 +55,11 @@ const TOOLS: [(&str, &str, &str); 11] = [
     ("F2", "Hitbox Overlay", "Show collision boxes"),
     ("F3", "Infinite Health", "Both players, toggle on / off"),
     ("F4", "Freeze Timer", "Pause match clock"),
-    ("F5", "Dummy Behavior", "Cycle modes \u{b7} Ctrl records a loop"),
+    (
+        "F5",
+        "Dummy Behavior",
+        "Cycle modes \u{b7} Ctrl records a loop",
+    ),
     ("F6", "Load Reset Slot", "Ctrl+F6 cycles position preset"),
     ("F7", "Save Reset Slot", "Ctrl+F7 cycles slot 1-3"),
     ("F8", "Load Drone", "Play back saved recording"),
@@ -76,9 +83,25 @@ pub fn draw(
     canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
     canvas.fill_rect(Some(scale.rect(SIDE_PAD, TOP + 8.0, 30.0, 3.0)))?;
     let (ex, ey) = scale.point(SIDE_PAD + 44.0, TOP);
-    fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(13.0), "TRAINING MODE", ex, ey, theme::ACCENT)?;
+    fonts.draw(
+        canvas,
+        FpFont::ChakraPetchSemiBold,
+        scale.font_px(13.0),
+        "TRAINING MODE",
+        ex,
+        ey,
+        theme::ACCENT,
+    )?;
     let (tx, ty) = scale.point(SIDE_PAD, TOP + 26.0);
-    fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(58.0), "LAB", tx, ty, theme::TEXT)?;
+    fonts.draw(
+        canvas,
+        FpFont::SairaCondensedBold,
+        scale.font_px(58.0),
+        "LAB",
+        tx,
+        ty,
+        theme::TEXT,
+    )?;
 
     let body_top = TOP + 26.0 + 70.0;
     for (i, (label, sub)) in ITEMS.iter().enumerate() {
@@ -94,7 +117,11 @@ pub fn draw(
         canvas,
         fonts,
         scale,
-        &[chrome::PROMPT_NAVIGATE, chrome::PROMPT_SELECT, chrome::PROMPT_BACK],
+        &[
+            chrome::PROMPT_NAVIGATE,
+            chrome::PROMPT_SELECT,
+            chrome::PROMPT_BACK,
+        ],
         FooterRight::Text("TRAINING MODE \u{b7} ALL TOOLS ACTIVE"),
     )?;
     Ok(())
@@ -116,7 +143,9 @@ fn draw_row(
     if selected {
         let tint = Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 36);
         let clear = Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 0);
-        geometry::fill_horizontal_gradient_rect(canvas, scale, SIDE_PAD, y, LIST_W, ROW_H, tint, clear);
+        geometry::fill_horizontal_gradient_rect(
+            canvas, scale, SIDE_PAD, y, LIST_W, ROW_H, tint, clear,
+        );
     }
 
     let bar_color = if selected {
@@ -124,9 +153,15 @@ fn draw_row(
     } else {
         Color::RGBA(255, 255, 255, 15)
     };
-    geometry::fill_skewed_rect(canvas, scale, SIDE_PAD, y, BAR_W, ROW_H, SKEW_DEG, bar_color);
+    geometry::fill_skewed_rect(
+        canvas, scale, SIDE_PAD, y, BAR_W, ROW_H, SKEW_DEG, bar_color,
+    );
 
-    let num_color = if selected { theme::ACCENT } else { Color::RGB(0x34, 0x34, 0x3a) };
+    let num_color = if selected {
+        theme::ACCENT
+    } else {
+        Color::RGB(0x34, 0x34, 0x3a)
+    };
     let num = format!("{:02}", index + 1);
     let num_px = scale.font_px(16.0);
     // True visible-glyph centering (`visible_span`), not a hand-tuned
@@ -135,11 +170,30 @@ fn draw_row(
     // instead of independently guessed.
     let (num_inset, num_vis_h) = fonts.visible_span(FpFont::ChakraPetchSemiBold, num_px, &num);
     let num_top = y + ROW_H / 2.0 - (num_vis_h as f32 / scale.s) / 2.0;
-    let (nx, ny) = scale.point(SIDE_PAD + BAR_W + LABEL_GAP, num_top - num_inset as f32 / scale.s);
-    fonts.draw(canvas, FpFont::ChakraPetchSemiBold, num_px, &num, nx, ny, num_color)?;
+    let (nx, ny) = scale.point(
+        SIDE_PAD + BAR_W + LABEL_GAP,
+        num_top - num_inset as f32 / scale.s,
+    );
+    fonts.draw(
+        canvas,
+        FpFont::ChakraPetchSemiBold,
+        num_px,
+        &num,
+        nx,
+        ny,
+        num_color,
+    )?;
 
-    let label_color = if selected { theme::TEXT } else { Color::RGB(0x6a, 0x6a, 0x72) };
-    let label_font = if selected { FpFont::SairaCondensedBlack } else { FpFont::SairaCondensedBold };
+    let label_color = if selected {
+        theme::TEXT
+    } else {
+        Color::RGB(0x6a, 0x6a, 0x72)
+    };
+    let label_font = if selected {
+        FpFont::SairaCondensedBlack
+    } else {
+        FpFont::SairaCondensedBold
+    };
     let label_text = label.to_uppercase();
     let label_x = SIDE_PAD + BAR_W + LABEL_GAP + 30.0 + LABEL_GAP;
     let label_px = scale.font_px(46.0);
@@ -154,11 +208,23 @@ fn draw_row(
     let block_top = y + (ROW_H - block_h) / 2.0;
 
     let (lx, ly) = scale.point(label_x, block_top - label_inset as f32 / scale.s);
-    fonts.draw_italic(canvas, label_font, label_px, &label_text, lx, ly, label_color)?;
+    fonts.draw_italic(
+        canvas,
+        label_font,
+        label_px,
+        &label_text,
+        lx,
+        ly,
+        label_color,
+    )?;
 
     let sub_visual_top = block_top + label_vis_h_l + gap;
     let (sx, sy) = scale.point(label_x, sub_visual_top - sub_inset as f32 / scale.s);
-    let sub_color = if selected { Color::RGB(0x8a, 0x8a, 0x92) } else { Color::RGB(0x52, 0x52, 0x5a) };
+    let sub_color = if selected {
+        Color::RGB(0x8a, 0x8a, 0x92)
+    } else {
+        Color::RGB(0x52, 0x52, 0x5a)
+    };
     fonts.draw(canvas, FpFont::SairaMedium, sub_px, sub, sx, sy, sub_color)?;
 
     if selected {
@@ -233,13 +299,37 @@ fn draw_shortcut_panel(
             cx + badge_w / 2.0 - (kw as f32 / scale.s) / 2.0,
             cy + row_h / 2.0 - (kh as f32 / scale.s) / 2.0,
         );
-        fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(12.0), key, kx, ky, Color::RGB(0x8a, 0x8a, 0x92))?;
+        fonts.draw(
+            canvas,
+            FpFont::ChakraPetchSemiBold,
+            scale.font_px(12.0),
+            key,
+            kx,
+            ky,
+            Color::RGB(0x8a, 0x8a, 0x92),
+        )?;
 
         let text_x = cx + badge_w + 14.0;
         let (labx, laby) = scale.point(text_x, cy + row_h / 2.0 - 18.0);
-        fonts.draw(canvas, FpFont::SairaSemiBold, scale.font_px(16.0), label, labx, laby, Color::RGB(0xED, 0xED, 0xE8))?;
+        fonts.draw(
+            canvas,
+            FpFont::SairaSemiBold,
+            scale.font_px(16.0),
+            label,
+            labx,
+            laby,
+            Color::RGB(0xED, 0xED, 0xE8),
+        )?;
         let (hintx, hinty) = scale.point(text_x, cy + row_h / 2.0 + 2.0);
-        fonts.draw(canvas, FpFont::SairaMedium, scale.font_px(12.0), hint, hintx, hinty, Color::RGB(0x52, 0x52, 0x5a))?;
+        fonts.draw(
+            canvas,
+            FpFont::SairaMedium,
+            scale.font_px(12.0),
+            hint,
+            hintx,
+            hinty,
+            Color::RGB(0x52, 0x52, 0x5a),
+        )?;
     }
     Ok(())
 }

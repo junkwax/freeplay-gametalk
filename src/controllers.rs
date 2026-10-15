@@ -46,30 +46,83 @@ pub enum MappingOutcome {
 /// The PS3 hint is the load-bearing one: SDL's HIDAPI DualShock 3 driver is
 /// compiled in but defaults to off on Windows, so without this a DS3 is only
 /// visible at all when a third-party driver happens to be installed.
+///
+/// Button labels off: by default SDL maps Nintendo-style pads (Switch Pro,
+/// Joy-Cons, 8BitDo in Switch mode) by the letter printed on the button, so
+/// their `a` is the *right* face button. Every default binding here is
+/// positional (LowPunch on the bottom button, HighKick on the top), so a
+/// Nintendo pad would come up with punches and kicks mirrored.
+///
+/// Joy-Cons are named explicitly because SDL has shipped them both on and
+/// off by default across 2.x releases; combining makes a held pair one pad.
 pub fn set_joystick_hints() {
     let _ = sdl2::hint::set("SDL_JOYSTICK_HIDAPI", "1");
     let _ = sdl2::hint::set("SDL_JOYSTICK_HIDAPI_PS3", "1");
     let _ = sdl2::hint::set("SDL_JOYSTICK_HIDAPI_PS4", "1");
     let _ = sdl2::hint::set("SDL_JOYSTICK_HIDAPI_PS5", "1");
+    let _ = sdl2::hint::set("SDL_GAMECONTROLLER_USE_BUTTON_LABELS", "0");
+    let _ = sdl2::hint::set("SDL_JOYSTICK_HIDAPI_JOY_CONS", "1");
+    let _ = sdl2::hint::set("SDL_JOYSTICK_HIDAPI_COMBINE_JOY_CONS", "1");
 }
 
-/// Candidate locations for a community `gamecontrollerdb.txt`, in priority
-/// order: alongside the binary first, then the bundled assets folder.
+/// Every `gamecontrollerdb.txt` to load, in load order. The bundled copy
+/// (the community SDL_GameControllerDB, `assets/`) goes first; a file the
+/// user drops next to the exe or in the working directory loads after it, so
+/// its entries replace the bundled ones for the same GUID rather than the
+/// bundled file hiding it.
 fn mapping_db_paths() -> Vec<PathBuf> {
-    let mut paths = vec![
-        PathBuf::from("gamecontrollerdb.txt"),
-        PathBuf::from("assets").join("gamecontrollerdb.txt"),
-    ];
-    if let Some(dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(PathBuf::from)) {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(PathBuf::from));
+    let mut paths = vec![PathBuf::from("assets").join("gamecontrollerdb.txt")];
+    if let Some(dir) = &exe_dir {
+        paths.push(dir.join("assets").join("gamecontrollerdb.txt"));
+    }
+    paths.push(PathBuf::from("gamecontrollerdb.txt"));
+    if let Some(dir) = &exe_dir {
         paths.push(dir.join("gamecontrollerdb.txt"));
     }
+    // The working directory is usually the exe's own, which would load the
+    // same file twice.
+    let mut seen = Vec::new();
+    paths.retain(|p| {
+        let key = std::fs::canonicalize(p).unwrap_or_else(|_| p.clone());
+        let fresh = !seen.contains(&key);
+        seen.push(key);
+        fresh
+    });
     paths
 }
 
-/// Load a community mapping database if the user dropped one in. A real
+/// Event types the shipped SDL2.dll (2.30) can emit that the `sdl2` 0.35
+/// crate's bindings predate. The crate turns a raw event type into its enum
+/// with an unchecked `transmute`, so one of these arriving is undefined
+/// behavior: debug builds panic on it at startup (a PS4 pad's battery
+/// report is 0x607), release builds just get lucky. Bumping the crate
+/// doesn't close this: 0.37's bindings stop at SDL 2.26 and have the same
+/// transmute.
+const EVENTS_UNKNOWN_TO_CRATE: [u32; 5] = [
+    0x305, // SDL_TEXTEDITING_EXT
+    0x607, // SDL_JOYBATTERYUPDATED
+    0x608, // SDL_JOYUPDATECOMPLETE_RESERVED_FOR_SDL3
+    0x65A, // SDL_CONTROLLERUPDATECOMPLETE_RESERVED_FOR_SDL3
+    0x65B, // SDL_CONTROLLERSTEAMHANDLEUPDATED
+];
+
+/// Stop SDL from queueing events the crate can't represent. Ignoring a type
+/// also flushes any already queued, and nothing in the app reads these. Call
+/// once SDL's event loop is up (after `video()`), before any pad is opened.
+pub fn ignore_unknown_event_types() {
+    for ty in EVENTS_UNKNOWN_TO_CRATE {
+        unsafe {
+            sdl2::sys::SDL_EventState(ty, sdl2::sys::SDL_IGNORE as i32);
+        }
+    }
+}
+
+/// Load the controller mapping databases (see `mapping_db_paths`). A real
 /// entry always beats anything `synthesize_mapping` can infer, so this runs
-/// before any device is inspected — it is the supported escape hatch for a
-/// pad whose synthesized layout comes out wrong.
+/// before any device is inspected.
 pub fn load_mapping_db(gc: &GameControllerSubsystem) {
     for path in mapping_db_paths() {
         if !path.exists() {
@@ -79,7 +132,6 @@ pub fn load_mapping_db(gc: &GameControllerSubsystem) {
             Ok(n) => println!("Loaded {n} controller mappings from {}", path.display()),
             Err(e) => println!("Failed to load {}: {e}", path.display()),
         }
-        return;
     }
 }
 
@@ -230,7 +282,12 @@ fn generic_layout(buttons: u32, axes: u32, hats: u32) -> Vec<(&'static str, Stri
     } else {
         // No hat switch: the D-pad is usually the block of buttons right
         // after the stick clicks.
-        for (field, idx) in [("dpup", 10u32), ("dpdown", 11), ("dpleft", 12), ("dpright", 13)] {
+        for (field, idx) in [
+            ("dpup", 10u32),
+            ("dpdown", 11),
+            ("dpleft", 12),
+            ("dpright", 13),
+        ] {
             if idx < buttons {
                 out.push((field, format!("b{idx}")));
             }
@@ -297,7 +354,11 @@ pub fn describe_devices(gc: &GameControllerSubsystem, js: &JoystickSubsystem) ->
         }
         lines.push(format!(
             "    usable as game controller: {}",
-            if gc.is_game_controller(i) { "yes" } else { "no" }
+            if gc.is_game_controller(i) {
+                "yes"
+            } else {
+                "no"
+            }
         ));
     }
     lines
@@ -320,7 +381,11 @@ pub fn assign_pad(pads: &mut Pads, c: GameController) -> bool {
     // SDL announces a device present at startup through both the initial
     // enumeration and a queued ControllerDeviceAdded event. Without this
     // guard the same physical pad lands in P1 *and* P2 and drives both.
-    if pads.iter().flatten().any(|p| p.instance_id() == c.instance_id()) {
+    if pads
+        .iter()
+        .flatten()
+        .any(|p| p.instance_id() == c.instance_id())
+    {
         return false;
     }
     let slot_idx = if pads[0].is_none() {
@@ -369,6 +434,39 @@ pub fn open_initial_controllers(gc: &GameControllerSubsystem, js: &JoystickSubsy
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bundled_mappings_load_before_the_users_own() {
+        let paths = mapping_db_paths();
+        assert_eq!(
+            paths[0],
+            PathBuf::from("assets").join("gamecontrollerdb.txt")
+        );
+        let user = paths
+            .iter()
+            .position(|p| p == &PathBuf::from("gamecontrollerdb.txt"));
+        assert!(user.is_some_and(|i| i > 0), "{paths:?}");
+    }
+
+    #[test]
+    fn the_bundled_mapping_db_is_a_real_sdl_db() {
+        let db = std::fs::read_to_string("assets/gamecontrollerdb.txt").expect("bundled db");
+        let windows = db
+            .lines()
+            .filter(|l| l.contains("platform:Windows,"))
+            .count();
+        assert!(windows > 500, "only {windows} Windows mappings");
+        for line in db.lines().filter(|l| !l.is_empty() && !l.starts_with('#')) {
+            // GUID, name, then fields. SDL takes a 32-hex GUID or the
+            // literal "xinput" (any XInput pad).
+            let guid = line.split(',').next().unwrap_or("");
+            assert!(
+                guid == "xinput"
+                    || (guid.len() == 32 && guid.chars().all(|c| c.is_ascii_hexdigit())),
+                "bad mapping line: {line}"
+            );
+        }
+    }
 
     #[test]
     fn dualshock3_is_detected_by_the_names_its_drivers_report() {

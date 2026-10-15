@@ -97,9 +97,24 @@ pub fn draw(
         } else {
             (Color::RGB(0x62, 0x62, 0x6c), line.as_str())
         };
-        super::geometry::fill_circle(canvas, scale, content_x + 4.0, y + LINE_H / 2.0, 4.0, dot_color);
+        super::geometry::fill_circle(
+            canvas,
+            scale,
+            content_x + 4.0,
+            y + LINE_H / 2.0,
+            4.0,
+            dot_color,
+        );
         let (lx, ly) = scale.point(content_x + 20.0, y + LINE_H / 2.0 - 9.0);
-        fonts.draw(canvas, FpFont::ChakraPetchMedium, scale.font_px(16.0), text, lx, ly, Color::RGB(0xcf, 0xcf, 0xc9))?;
+        fonts.draw(
+            canvas,
+            FpFont::ChakraPetchMedium,
+            scale.font_px(16.0),
+            text,
+            lx,
+            ly,
+            Color::RGB(0xcf, 0xcf, 0xc9),
+        )?;
         y += LINE_H;
     }
     y += 30.0;
@@ -108,9 +123,24 @@ pub fn draw(
     let btn_w = CARD_W - PAD_X * 2.0;
     canvas.set_draw_color(theme::ACCENT);
     canvas.fill_rect(Some(scale.rect(content_x, y, btn_w, BTN_H)))?;
-    let (bw, bh) = fonts.text_size(FpFont::SairaCondensedBold, scale.font_px(21.0), "RETURN TO MENU");
-    let (bx, by) = scale.point(content_x + btn_w / 2.0 - (bw as f32 / scale.s) / 2.0, y + BTN_H / 2.0 - (bh as f32 / scale.s) / 2.0);
-    fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(21.0), "RETURN TO MENU", bx, by, Color::RGB(255, 255, 255))?;
+    let (bw, bh) = fonts.text_size(
+        FpFont::SairaCondensedBold,
+        scale.font_px(21.0),
+        "RETURN TO MENU",
+    );
+    let (bx, by) = scale.point(
+        content_x + btn_w / 2.0 - (bw as f32 / scale.s) / 2.0,
+        y + BTN_H / 2.0 - (bh as f32 / scale.s) / 2.0,
+    );
+    fonts.draw(
+        canvas,
+        FpFont::SairaCondensedBold,
+        scale.font_px(21.0),
+        "RETURN TO MENU",
+        bx,
+        by,
+        Color::RGB(255, 255, 255),
+    )?;
 
     chrome::draw_footer(
         canvas,

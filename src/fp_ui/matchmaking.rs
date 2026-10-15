@@ -63,10 +63,28 @@ pub fn draw(
     let cx = theme::VW / 2.0;
     let cy = theme::VH / 2.0 - 60.0;
     draw_radar(canvas, scale, cx, cy, RADAR_R)?;
-    geometry::fill_circle(canvas, scale, cx, cy, 37.0, Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 230));
+    geometry::fill_circle(
+        canvas,
+        scale,
+        cx,
+        cy,
+        37.0,
+        Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 230),
+    );
     let (vw, vh) = fonts.text_size(FpFont::SairaCondensedBold, scale.font_px(26.0), "VS");
-    let (vx, vy) = scale.point(cx - (vw as f32 / scale.s) / 2.0, cy - (vh as f32 / scale.s) / 2.0);
-    fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(26.0), "VS", vx, vy, Color::RGB(255, 255, 255))?;
+    let (vx, vy) = scale.point(
+        cx - (vw as f32 / scale.s) / 2.0,
+        cy - (vh as f32 / scale.s) / 2.0,
+    );
+    fonts.draw(
+        canvas,
+        FpFont::SairaCondensedBold,
+        scale.font_px(26.0),
+        "VS",
+        vx,
+        vy,
+        Color::RGB(255, 255, 255),
+    )?;
 
     let title_px = scale.font_px(15.0);
     let (tw, _) = fonts.text_size(FpFont::ChakraPetchSemiBold, title_px, "FIND MATCH");
@@ -87,7 +105,15 @@ pub fn draw(
     let (lw, _) = fonts.text_size(FpFont::SairaCondensedBold, status_px, &line);
     let status_y = cy + RADAR_R + 46.0;
     let (lx, ly) = scale.point(cx - (lw as f32 / scale.s) / 2.0, status_y);
-    fonts.draw(canvas, FpFont::SairaCondensedBold, status_px, &line, lx, ly, theme::WARNING)?;
+    fonts.draw(
+        canvas,
+        FpFont::SairaCondensedBold,
+        status_px,
+        &line,
+        lx,
+        ly,
+        theme::WARNING,
+    )?;
 
     let status_lower = status.to_ascii_lowercase();
     let hint = if status_lower.starts_with("checking name") {
@@ -98,7 +124,15 @@ pub fn draw(
     let hint_px = scale.font_px(15.0);
     let (hw, _) = fonts.text_size(FpFont::SairaMedium, hint_px, hint);
     let (hx, hy) = scale.point(cx - (hw as f32 / scale.s) / 2.0, status_y + 40.0);
-    fonts.draw(canvas, FpFont::SairaMedium, hint_px, hint, hx, hy, theme::DIM)?;
+    fonts.draw(
+        canvas,
+        FpFont::SairaMedium,
+        hint_px,
+        hint,
+        hx,
+        hy,
+        theme::DIM,
+    )?;
 
     chrome::draw_footer(
         canvas,
@@ -113,11 +147,33 @@ pub fn draw(
 /// The radar rings + sweep alone, with no center badge — shared by this
 /// screen's own `draw` (above) and `lobby.rs`'s inline Quick Match "searching"
 /// state, each of which draws its own center content on top.
-pub(super) fn draw_radar(canvas: &mut Canvas<Window>, scale: &Scale, cx: f32, cy: f32, radius: f32) -> Result<(), String> {
+pub(super) fn draw_radar(
+    canvas: &mut Canvas<Window>,
+    scale: &Scale,
+    cx: f32,
+    cy: f32,
+    radius: f32,
+) -> Result<(), String> {
     // Two static rings: outer at the full radius, inner at 190/300 of it —
     // matches the CSS's 300px/190px pair.
-    geometry::stroke_circle(canvas, scale, cx, cy, radius, 1.0, Color::RGBA(255, 255, 255, 15));
-    geometry::stroke_circle(canvas, scale, cx, cy, radius * 190.0 / 300.0, 1.0, Color::RGBA(255, 255, 255, 15));
+    geometry::stroke_circle(
+        canvas,
+        scale,
+        cx,
+        cy,
+        radius,
+        1.0,
+        Color::RGBA(255, 255, 255, 15),
+    );
+    geometry::stroke_circle(
+        canvas,
+        scale,
+        cx,
+        cy,
+        radius * 190.0 / 300.0,
+        1.0,
+        Color::RGBA(255, 255, 255, 15),
+    );
 
     // Double pulse ring: each expands from 0.25x to 1.55x the radius while
     // fading from ~65% to 0% opacity over a 2.8s cycle, the second offset by
@@ -146,7 +202,15 @@ pub(super) fn draw_radar(canvas: &mut Canvas<Window>, scale: &Scale, cx: f32, cy
     }
 
     // Outer boundary ring, brighter than the static grid rings.
-    geometry::stroke_circle(canvas, scale, cx, cy, radius, 2.0, Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 90));
+    geometry::stroke_circle(
+        canvas,
+        scale,
+        cx,
+        cy,
+        radius,
+        2.0,
+        Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 90),
+    );
 
     // Rotating ~20deg wedge (conic-gradient's 55deg-75deg visible band in
     // the CSS) — `@keyframes fp-sweep`, one linear revolution per 2.8s.

@@ -64,6 +64,14 @@ if [ ! -d "assets/fonts" ]; then
 fi
 mkdir -p "$OUT_DIR/assets/fonts"
 cp assets/fonts/* "$OUT_DIR/assets/fonts/"
+# Community controller mappings (SDL_GameControllerDB, zlib license, which
+# ships beside it). Without it, arcade sticks and off-brand pads SDL doesn't
+# know fall back to a guessed button layout.
+if [ -f "assets/gamecontrollerdb.txt" ]; then
+  cp assets/gamecontrollerdb.txt assets/gamecontrollerdb.LICENSE.txt "$OUT_DIR/assets/"
+else
+  echo "warning: assets/gamecontrollerdb.txt not found — unknown pads get a guessed layout" >&2
+fi
 if [ -f "assets/logo/wordmark.png" ]; then
   mkdir -p "$OUT_DIR/assets/logo"
   cp "assets/logo/wordmark.png" "$OUT_DIR/assets/logo/wordmark.png"

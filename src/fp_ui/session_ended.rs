@@ -71,7 +71,15 @@ pub fn draw(
     )?;
     y += 30.0;
     let (tx, ty) = scale.point(content_x, y);
-    fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(34.0), "NETPLAY SESSION SUMMARY", tx, ty, theme::TEXT)?;
+    fonts.draw(
+        canvas,
+        FpFont::SairaCondensedBold,
+        scale.font_px(34.0),
+        "NETPLAY SESSION SUMMARY",
+        tx,
+        ty,
+        theme::TEXT,
+    )?;
     y += 44.0;
 
     for line in lines {
@@ -82,32 +90,83 @@ pub fn draw(
         } else {
             (Color::RGB(0x62, 0x62, 0x6c), line.as_str())
         };
-        super::geometry::fill_circle(canvas, scale, content_x + 4.0, y + LINE_H / 2.0, 4.0, dot_color);
+        super::geometry::fill_circle(
+            canvas,
+            scale,
+            content_x + 4.0,
+            y + LINE_H / 2.0,
+            4.0,
+            dot_color,
+        );
         let (lx, ly) = scale.point(content_x + 20.0, y + LINE_H / 2.0 - 9.0);
-        fonts.draw(canvas, FpFont::ChakraPetchMedium, scale.font_px(16.0), text, lx, ly, Color::RGB(0xcf, 0xcf, 0xc9))?;
+        fonts.draw(
+            canvas,
+            FpFont::ChakraPetchMedium,
+            scale.font_px(16.0),
+            text,
+            lx,
+            ly,
+            Color::RGB(0xcf, 0xcf, 0xc9),
+        )?;
         y += LINE_H;
     }
     y += 30.0;
 
     let btn_gap = 14.0;
-    let btn_w = if has_replay { (CARD_W - PAD_X * 2.0 - btn_gap) / 2.0 } else { CARD_W - PAD_X * 2.0 };
+    let btn_w = if has_replay {
+        (CARD_W - PAD_X * 2.0 - btn_gap) / 2.0
+    } else {
+        CARD_W - PAD_X * 2.0
+    };
     let mut bx = content_x;
     if has_replay {
-        draw_button(canvas, fonts, scale, bx, y, btn_w, BTN_H, "WATCH REPLAY", choice == 0, false)?;
+        draw_button(
+            canvas,
+            fonts,
+            scale,
+            bx,
+            y,
+            btn_w,
+            BTN_H,
+            "WATCH REPLAY",
+            choice == 0,
+            false,
+        )?;
         bx += btn_w + btn_gap;
     }
     let return_selected = if has_replay { choice == 1 } else { true };
-    draw_button(canvas, fonts, scale, bx, y, btn_w, BTN_H, "RETURN TO MENU", return_selected, true)?;
+    draw_button(
+        canvas,
+        fonts,
+        scale,
+        bx,
+        y,
+        btn_w,
+        BTN_H,
+        "RETURN TO MENU",
+        return_selected,
+        true,
+    )?;
 
     let prompts: &[chrome::FooterPrompt] = if has_replay {
         &[
-            chrome::FooterPrompt { glyph: "\u{2194}", label: "Choose", color: Color::RGB(0xcf, 0xcf, 0xc9) },
+            chrome::FooterPrompt {
+                glyph: "\u{2194}",
+                label: "Choose",
+                color: Color::RGB(0xcf, 0xcf, 0xc9),
+            },
             chrome::PROMPT_SELECT,
         ]
     } else {
         &[chrome::PROMPT_SELECT]
     };
-    chrome::draw_footer(canvas, fonts, scale, prompts, chrome::FooterRight::Text("MATCH SUMMARY"))?;
+    chrome::draw_footer(
+        canvas,
+        fonts,
+        scale,
+        prompts,
+        chrome::FooterRight::Text("MATCH SUMMARY"),
+    )?;
     Ok(())
 }
 
@@ -127,9 +186,17 @@ fn draw_button(
     let (border, bg, text_color) = if selected && is_primary {
         (theme::ACCENT, theme::ACCENT, Color::RGB(255, 255, 255))
     } else if selected {
-        (Color::RGBA(255, 255, 255, 128), Color::RGBA(255, 255, 255, 20), theme::TEXT)
+        (
+            Color::RGBA(255, 255, 255, 128),
+            Color::RGBA(255, 255, 255, 20),
+            theme::TEXT,
+        )
     } else {
-        (Color::RGBA(255, 255, 255, 31), Color::RGBA(0, 0, 0, 0), Color::RGB(0x8a, 0x8a, 0x92))
+        (
+            Color::RGBA(255, 255, 255, 31),
+            Color::RGBA(0, 0, 0, 0),
+            Color::RGB(0x8a, 0x8a, 0x92),
+        )
     };
     canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
     if bg.a > 0 {
@@ -140,7 +207,18 @@ fn draw_button(
     canvas.draw_rect(scale.rect(x, y, w, h))?;
 
     let (tw, th) = fonts.text_size(FpFont::SairaCondensedBold, scale.font_px(21.0), label);
-    let (tx, ty) = scale.point(x + w / 2.0 - (tw as f32 / scale.s) / 2.0, y + h / 2.0 - (th as f32 / scale.s) / 2.0);
-    fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(21.0), label, tx, ty, text_color)?;
+    let (tx, ty) = scale.point(
+        x + w / 2.0 - (tw as f32 / scale.s) / 2.0,
+        y + h / 2.0 - (th as f32 / scale.s) / 2.0,
+    );
+    fonts.draw(
+        canvas,
+        FpFont::SairaCondensedBold,
+        scale.font_px(21.0),
+        label,
+        tx,
+        ty,
+        text_color,
+    )?;
     Ok(())
 }

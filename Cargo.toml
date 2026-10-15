@@ -15,8 +15,7 @@ libc = "0.2"
 bincode = "1.3"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
-ggrs = "0.10"
-bytemuck = { version = "1", features = ["derive"] }
+ggrs = "0.13"
 native-tls = "0.2"
 open = "5"
 discord-presence = "0.5"
@@ -36,3 +35,4 @@ winreg = "0.52"
 [profile.release]
 lto = "thin"
 codegen-units = 1
+

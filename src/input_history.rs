@@ -70,6 +70,9 @@ pub fn format_bits(bits: u16) -> String {
         (Action::Block, "BL"),
         (Action::Start, "ST"),
         (Action::Coin, "CN"),
+        (Action::Shoot, "SH"),
+        (Action::Pass, "PS"),
+        (Action::Turbo, "TB"),
     ] {
         if pressed(bits, action) {
             parts.push(label);
@@ -116,11 +119,12 @@ fn direction_label(bits: u16) -> &'static str {
 }
 
 fn pressed(bits: u16, action: Action) -> bool {
-    let idx = Action::ALL
+    // Bits are positions in the current game's set; an action the game
+    // doesn't have is simply never pressed.
+    crate::input::actions()
         .iter()
         .position(|candidate| *candidate == action)
-        .unwrap_or(0);
-    bits & (1u16 << idx) != 0
+        .is_some_and(|idx| bits & (1u16 << idx) != 0)
 }
 
 #[cfg(test)]
@@ -128,7 +132,7 @@ mod tests {
     use super::*;
 
     fn bit(action: Action) -> u16 {
-        let idx = Action::ALL
+        let idx = crate::input::actions()
             .iter()
             .position(|candidate| *candidate == action)
             .unwrap();

@@ -27,7 +27,7 @@ use super::layout::Scale;
 use super::theme;
 use crate::config::{AspectMode, AudioBuffer, RenderProfile, ScorebarStyle, VideoFilter};
 use crate::font::{FpFont, FpFontCache};
-use crate::input::{Action, Bindings, Player};
+use crate::input::{Bindings, Player};
 use sdl2::pixels::Color;
 use sdl2::render::Canvas;
 use sdl2::video::Window;
@@ -48,10 +48,19 @@ pub const ACCOUNT_CAT_INDEX: usize = 4;
 /// appended as a 6th rather than displacing it — both are real,
 /// backend-backed functionality worth keeping.
 pub const TEST_CONN_CAT_INDEX: usize = 5;
-pub const CATS: [&str; 6] = ["CONTROLS", "VIDEO", "AUDIO", "NETPLAY", "ACCOUNT", "TEST CONNECTION"];
+pub const CATS: [&str; 6] = [
+    "CONTROLS",
+    "VIDEO",
+    "AUDIO",
+    "NETPLAY",
+    "ACCOUNT",
+    "TEST CONNECTION",
+];
 // Controls: 11 actions + a "CLEAR ALL" row. Account: Username/Stats Email/
 // Discord. Test Connection: just the one address field.
-const ROWS_PER_CAT: [usize; 6] = [Action::ALL.len() + 1, 7, 2, 4, 3, 1];
+/// Rows per category after Controls, whose count is the current game's
+/// action list plus "CLEAR ALL".
+const ROWS_PER_CAT: [usize; 6] = [0, 7, 2, 4, 3, 1];
 
 const SIDE_PAD: f32 = 56.0;
 const CONTENT_TOP: f32 = 142.0;
@@ -62,6 +71,9 @@ const PANEL_GAP: f32 = 44.0;
 const ROW_H: f32 = 72.0;
 
 pub fn rows_in_cat(cat: usize) -> usize {
+    if cat == CONTROLS_CAT_INDEX {
+        return crate::input::actions().len() + 1;
+    }
     ROWS_PER_CAT.get(cat).copied().unwrap_or(1)
 }
 
@@ -123,12 +135,18 @@ impl SettingsFields {
             (1, 3) => ("CRT CORNER BEND", "Rounded glass shading on CRT filters"),
             (1, 4) => ("ASPECT MODE", "How the frame fits the window"),
             (1, 5) => ("SCOREBAR STYLE", "Netplay score overlay layout"),
-            (1, 6) => ("KEEP RUNNING WITH LID CLOSED", "Plugged-in laptops, while Freeplay is open"),
+            (1, 6) => (
+                "KEEP RUNNING WITH LID CLOSED",
+                "Plugged-in laptops, while Freeplay is open",
+            ),
             (2, 0) => ("VOLUME", "Output level"),
             (2, 1) => ("AUDIO BUFFER", "Queue depth vs. latency"),
             (3, 0) => ("INPUT DELAY", "AUTO picks it per match from ping"),
             (3, 1) => ("RUNAHEAD (OFFLINE)", "One-frame speculative local play"),
-            (3, 2) => ("RUNAHEAD (ONLINE)", "Experimental video-only netplay speculation"),
+            (3, 2) => (
+                "RUNAHEAD (ONLINE)",
+                "Experimental video-only netplay speculation",
+            ),
             (3, 3) => ("DISCORD RICH PRESENCE", "Show match status in Discord"),
             _ => ("", ""),
         }
@@ -143,7 +161,10 @@ impl SettingsFields {
             (1, 4) => RowValue::Cycle(self.aspect_mode.label()),
             (1, 5) => RowValue::Cycle(self.scorebar_style.label()),
             (1, 6) => RowValue::Toggle(self.keep_running_lid_closed),
-            (2, 0) => RowValue::Slider { pct: self.volume_percent as f32, text: format!("{}%", self.volume_percent) },
+            (2, 0) => RowValue::Slider {
+                pct: self.volume_percent as f32,
+                text: format!("{}%", self.volume_percent),
+            },
             (2, 1) => RowValue::Cycle(self.audio_buffer.label()),
             (3, 0) if self.input_delay_auto => RowValue::Slider {
                 pct: 0.0,
@@ -172,7 +193,8 @@ impl SettingsFields {
             (1, 5) => self.scorebar_style = self.scorebar_style.cycle(delta),
             (1, 6) => self.keep_running_lid_closed = !self.keep_running_lid_closed,
             (2, 0) => {
-                self.volume_percent = (self.volume_percent as i32 + delta as i32 * 5).clamp(0, 100) as u8
+                self.volume_percent =
+                    (self.volume_percent as i32 + delta as i32 * 5).clamp(0, 100) as u8
             }
             (2, 1) => self.audio_buffer = self.audio_buffer.cycle(delta),
             // AUTO sits one step left of 0f. Leaving it lands on 0f, so the
@@ -185,7 +207,9 @@ impl SettingsFields {
                 }
             }
             (3, 0) if delta < 0 && self.input_delay == 0 => self.input_delay_auto = true,
-            (3, 0) => self.input_delay = (self.input_delay as i32 + delta as i32).clamp(0, 8) as u32,
+            (3, 0) => {
+                self.input_delay = (self.input_delay as i32 + delta as i32).clamp(0, 8) as u32
+            }
             (3, 1) => self.runahead = !self.runahead,
             (3, 2) => self.runahead_online = !self.runahead_online,
             (3, 3) => self.discord_rpc_enabled = !self.discord_rpc_enabled,
@@ -217,9 +241,25 @@ pub fn draw(
     canvas.set_draw_color(theme::ACCENT);
     canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
     canvas.fill_rect(Some(scale.rect(SIDE_PAD, CONTENT_TOP + 8.0, 30.0, 3.0)))?;
-    fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(13.0), "CONFIGURATION", ex, ey, theme::ACCENT)?;
+    fonts.draw(
+        canvas,
+        FpFont::ChakraPetchSemiBold,
+        scale.font_px(13.0),
+        "CONFIGURATION",
+        ex,
+        ey,
+        theme::ACCENT,
+    )?;
     let (tx, ty) = scale.point(SIDE_PAD, CONTENT_TOP + 26.0);
-    fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(58.0), "SETTINGS", tx, ty, theme::TEXT)?;
+    fonts.draw(
+        canvas,
+        FpFont::SairaCondensedBold,
+        scale.font_px(58.0),
+        "SETTINGS",
+        tx,
+        ty,
+        theme::TEXT,
+    )?;
 
     // The mockup's CSS puts a modest 28px margin-bottom under "SETTINGS"
     // (not a big gap like Main Menu's header->row fix needed) — this was
@@ -227,54 +267,156 @@ pub fn draw(
     // under the title; bumped from 70 to 82 to match.
     let list_top = CONTENT_TOP + 26.0 + 82.0;
     for (i, label) in CATS.iter().enumerate() {
-        draw_cat_row(canvas, fonts, scale, i, label, list_top, i == cat, sidebar_focus)?;
+        draw_cat_row(
+            canvas,
+            fonts,
+            scale,
+            i,
+            label,
+            list_top,
+            i == cat,
+            sidebar_focus,
+        )?;
     }
-    draw_cabinet_box(canvas, fonts, scale, list_top + CATS.len() as f32 * (CAT_ROW_H + CAT_ROW_GAP) + 24.0)?;
+    draw_cabinet_box(
+        canvas,
+        fonts,
+        scale,
+        list_top + CATS.len() as f32 * (CAT_ROW_H + CAT_ROW_GAP) + 24.0,
+    )?;
 
     let panel_x = SIDE_PAD + SIDEBAR_W + PANEL_GAP;
     let (cnx, cny) = scale.point(panel_x, list_top);
-    fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(24.0), CATS[cat], cnx, cny, Color::RGB(0x8a, 0x8a, 0x92))?;
+    fonts.draw(
+        canvas,
+        FpFont::SairaCondensedBold,
+        scale.font_px(24.0),
+        CATS[cat],
+        cnx,
+        cny,
+        Color::RGB(0x8a, 0x8a, 0x92),
+    )?;
 
     let rows_top = list_top + 44.0;
     if cat == CONTROLS_CAT_INDEX {
-        draw_controls_rows(canvas, fonts, scale, panel_x, rows_top, row, controls_player, bindings, !sidebar_focus)?;
+        draw_controls_rows(
+            canvas,
+            fonts,
+            scale,
+            panel_x,
+            rows_top,
+            row,
+            controls_player,
+            bindings,
+            !sidebar_focus,
+        )?;
     } else if cat == ACCOUNT_CAT_INDEX {
-        draw_account_rows(canvas, fonts, scale, panel_x, rows_top, row, username, stats_email, discord_connected, !sidebar_focus)?;
+        draw_account_rows(
+            canvas,
+            fonts,
+            scale,
+            panel_x,
+            rows_top,
+            row,
+            username,
+            stats_email,
+            discord_connected,
+            !sidebar_focus,
+        )?;
     } else if cat == TEST_CONN_CAT_INDEX {
-        draw_test_conn(canvas, fonts, scale, panel_x, rows_top, test_conn_address, test_conn_lines)?;
+        draw_test_conn(
+            canvas,
+            fonts,
+            scale,
+            panel_x,
+            rows_top,
+            test_conn_address,
+            test_conn_lines,
+        )?;
     } else {
         for r in 0..rows_in_cat(cat) {
             let (label, hint) = SettingsFields::row_meta(cat, r);
-            draw_row(canvas, fonts, scale, panel_x, rows_top + r as f32 * ROW_H, label, hint, fields.value(cat, r), r == row, !sidebar_focus)?;
+            draw_row(
+                canvas,
+                fonts,
+                scale,
+                panel_x,
+                rows_top + r as f32 * ROW_H,
+                label,
+                hint,
+                fields.value(cat, r),
+                r == row,
+                !sidebar_focus,
+            )?;
         }
     }
 
     let content_prompts: &[chrome::FooterPrompt] = if cat == CONTROLS_CAT_INDEX {
         &[
-            chrome::FooterPrompt { glyph: "\u{2195}", label: "Row", color: Color::RGB(0xcf, 0xcf, 0xc9) },
-            chrome::FooterPrompt { glyph: "L/R", label: "Category", color: Color::RGB(0xcf, 0xcf, 0xc9) },
-            chrome::FooterPrompt { glyph: "\u{2194}", label: "Switch Player", color: Color::RGB(0xcf, 0xcf, 0xc9) },
+            chrome::FooterPrompt {
+                glyph: "\u{2195}",
+                label: "Row",
+                color: Color::RGB(0xcf, 0xcf, 0xc9),
+            },
+            chrome::FooterPrompt {
+                glyph: "L/R",
+                label: "Category",
+                color: Color::RGB(0xcf, 0xcf, 0xc9),
+            },
+            chrome::FooterPrompt {
+                glyph: "\u{2194}",
+                label: "Switch Player",
+                color: Color::RGB(0xcf, 0xcf, 0xc9),
+            },
             chrome::PROMPT_SELECT,
             chrome::PROMPT_BACK,
         ]
     } else if cat == ACCOUNT_CAT_INDEX {
         &[
-            chrome::FooterPrompt { glyph: "\u{2195}", label: "Row", color: Color::RGB(0xcf, 0xcf, 0xc9) },
-            chrome::FooterPrompt { glyph: "L/R", label: "Category", color: Color::RGB(0xcf, 0xcf, 0xc9) },
+            chrome::FooterPrompt {
+                glyph: "\u{2195}",
+                label: "Row",
+                color: Color::RGB(0xcf, 0xcf, 0xc9),
+            },
+            chrome::FooterPrompt {
+                glyph: "L/R",
+                label: "Category",
+                color: Color::RGB(0xcf, 0xcf, 0xc9),
+            },
             chrome::PROMPT_SELECT,
             chrome::PROMPT_BACK,
         ]
     } else if cat == TEST_CONN_CAT_INDEX {
         &[
-            chrome::FooterPrompt { glyph: "L/R", label: "Category", color: Color::RGB(0xcf, 0xcf, 0xc9) },
-            chrome::FooterPrompt { glyph: "X", label: "Run Probe", color: theme::BTN_CROSS },
+            chrome::FooterPrompt {
+                glyph: "L/R",
+                label: "Category",
+                color: Color::RGB(0xcf, 0xcf, 0xc9),
+            },
+            chrome::FooterPrompt {
+                glyph: "X",
+                label: "Run Probe",
+                color: theme::BTN_CROSS,
+            },
             chrome::PROMPT_BACK,
         ]
     } else {
         &[
-            chrome::FooterPrompt { glyph: "\u{2195}", label: "Row", color: Color::RGB(0xcf, 0xcf, 0xc9) },
-            chrome::FooterPrompt { glyph: "L/R", label: "Category", color: Color::RGB(0xcf, 0xcf, 0xc9) },
-            chrome::FooterPrompt { glyph: "\u{2194}", label: "Adjust", color: Color::RGB(0xcf, 0xcf, 0xc9) },
+            chrome::FooterPrompt {
+                glyph: "\u{2195}",
+                label: "Row",
+                color: Color::RGB(0xcf, 0xcf, 0xc9),
+            },
+            chrome::FooterPrompt {
+                glyph: "L/R",
+                label: "Category",
+                color: Color::RGB(0xcf, 0xcf, 0xc9),
+            },
+            chrome::FooterPrompt {
+                glyph: "\u{2194}",
+                label: "Adjust",
+                color: Color::RGB(0xcf, 0xcf, 0xc9),
+            },
             chrome::PROMPT_BACK,
         ]
     };
@@ -309,7 +451,9 @@ fn draw_cat_row(
     if hot {
         let tint = Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 36);
         let clear = Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 0);
-        geometry::fill_horizontal_gradient_rect(canvas, scale, SIDE_PAD, y, SIDEBAR_W, CAT_ROW_H, tint, clear);
+        geometry::fill_horizontal_gradient_rect(
+            canvas, scale, SIDE_PAD, y, SIDEBAR_W, CAT_ROW_H, tint, clear,
+        );
     }
     let bar_color = if hot {
         theme::ACCENT
@@ -338,7 +482,15 @@ fn draw_cat_row(
     let (num_inset, num_vis_h) = fonts.visible_span(FpFont::ChakraPetchSemiBold, num_px, &num_text);
     let num_top = y + CAT_ROW_H / 2.0 - (num_vis_h as f32 / scale.s) / 2.0;
     let (nx, ny) = scale.point(SIDE_PAD + 22.0, num_top - num_inset as f32 / scale.s);
-    fonts.draw(canvas, FpFont::ChakraPetchSemiBold, num_px, &num_text, nx, ny, num_color)?;
+    fonts.draw(
+        canvas,
+        FpFont::ChakraPetchSemiBold,
+        num_px,
+        &num_text,
+        nx,
+        ny,
+        num_color,
+    )?;
 
     let label_color = if hot {
         theme::TEXT
@@ -348,10 +500,22 @@ fn draw_cat_row(
         Color::RGB(0x5a, 0x5a, 0x62)
     };
     let label_px = scale.font_px(26.0);
-    let (label_inset, label_vis_h) = fonts.visible_span(FpFont::SairaCondensedBlack, label_px, label);
+    let (label_inset, label_vis_h) =
+        fonts.visible_span(FpFont::SairaCondensedBlack, label_px, label);
     let label_top = y + CAT_ROW_H / 2.0 - (label_vis_h as f32 / scale.s) / 2.0;
-    let (lx, ly) = scale.point(SIDE_PAD + 22.0 + 30.0, label_top - label_inset as f32 / scale.s);
-    fonts.draw(canvas, FpFont::SairaCondensedBlack, label_px, label, lx, ly, label_color)?;
+    let (lx, ly) = scale.point(
+        SIDE_PAD + 22.0 + 30.0,
+        label_top - label_inset as f32 / scale.s,
+    );
+    fonts.draw(
+        canvas,
+        FpFont::SairaCondensedBlack,
+        label_px,
+        label,
+        lx,
+        ly,
+        label_color,
+    )?;
     Ok(())
 }
 
@@ -360,7 +524,12 @@ fn draw_cat_row(
 /// rather than fabricate one this shows freeplay-gametalk's own real build
 /// version instead (which "FREE PLAY" is also true of — there's no coin
 /// economy in this client, it's always free play).
-fn draw_cabinet_box(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scale: &Scale, y: f32) -> Result<(), String> {
+fn draw_cabinet_box(
+    canvas: &mut Canvas<Window>,
+    fonts: &mut FpFontCache,
+    scale: &Scale,
+    y: f32,
+) -> Result<(), String> {
     let w = SIDEBAR_W;
     let h = 84.0;
     canvas.set_draw_color(Color::RGBA(14, 14, 18, 153));
@@ -369,12 +538,36 @@ fn draw_cabinet_box(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scale:
     canvas.set_draw_color(Color::RGBA(255, 255, 255, 20));
     canvas.draw_rect(scale.rect(SIDE_PAD, y, w, h))?;
     let (lx, ly) = scale.point(SIDE_PAD + 18.0, y + 10.0);
-    fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(11.0), "CABINET", lx, ly, theme::MUTE)?;
+    fonts.draw(
+        canvas,
+        FpFont::ChakraPetchSemiBold,
+        scale.font_px(11.0),
+        "CABINET",
+        lx,
+        ly,
+        theme::MUTE,
+    )?;
     let (nx, ny) = scale.point(SIDE_PAD + 18.0, y + 27.0);
-    fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(20.0), "MORTAL KOMBAT II", nx, ny, Color::RGB(0xcf, 0xcf, 0xc9))?;
+    fonts.draw(
+        canvas,
+        FpFont::SairaCondensedBold,
+        scale.font_px(20.0),
+        crate::game::current().title,
+        nx,
+        ny,
+        Color::RGB(0xcf, 0xcf, 0xc9),
+    )?;
     let build = format!("FREE PLAY \u{b7} v{}", crate::version::VERSION);
     let (fx, fy) = scale.point(SIDE_PAD + 18.0, y + 55.0);
-    fonts.draw(canvas, FpFont::ChakraPetchMedium, scale.font_px(12.0), &build, fx, fy, Color::RGB(0x52, 0x52, 0x5a))?;
+    fonts.draw(
+        canvas,
+        FpFont::ChakraPetchMedium,
+        scale.font_px(12.0),
+        &build,
+        fx,
+        fy,
+        Color::RGB(0x52, 0x52, 0x5a),
+    )?;
     Ok(())
 }
 
@@ -408,7 +601,11 @@ fn draw_controls_rows(
         });
         canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
         canvas.fill_rect(Some(scale.rect(tx, top, tab_w, tab_h)))?;
-        canvas.set_draw_color(if active { theme::ACCENT } else { Color::RGBA(255, 255, 255, 24) });
+        canvas.set_draw_color(if active {
+            theme::ACCENT
+        } else {
+            Color::RGBA(255, 255, 255, 24)
+        });
         canvas.draw_rect(scale.rect(tx, top, tab_w, tab_h))?;
         let label = p.label();
         let (lw, lh) = fonts.text_size(FpFont::ChakraPetchSemiBold, scale.font_px(13.0), label);
@@ -423,14 +620,18 @@ fn draw_controls_rows(
             label,
             ltx,
             lty,
-            if active { theme::TEXT } else { Color::RGB(0x6a, 0x6a, 0x72) },
+            if active {
+                theme::TEXT
+            } else {
+                Color::RGB(0x6a, 0x6a, 0x72)
+            },
         )?;
     }
 
     let rows_top = top + tab_h + 14.0;
     let row_h = 46.0;
     let pb = bindings.get(controls_player);
-    for (i, action) in Action::ALL.iter().enumerate() {
+    for (i, action) in crate::input::actions().iter().enumerate() {
         let y = rows_top + i as f32 * row_h;
         let selected = row == i;
         draw_bind_row(
@@ -448,8 +649,8 @@ fn draw_controls_rows(
         )?;
     }
 
-    let clear_y = rows_top + Action::ALL.len() as f32 * row_h + 10.0;
-    let clear_selected = row == Action::ALL.len();
+    let clear_y = rows_top + crate::input::actions().len() as f32 * row_h + 10.0;
+    let clear_selected = row == crate::input::actions().len();
     canvas.set_draw_color(if clear_selected && focused {
         Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 20)
     } else {
@@ -459,7 +660,11 @@ fn draw_controls_rows(
     let clear_w = 260.0;
     let clear_h = 40.0;
     canvas.fill_rect(Some(scale.rect(x, clear_y, clear_w, clear_h)))?;
-    canvas.set_draw_color(if clear_selected && focused { theme::ACCENT } else { Color::RGBA(255, 255, 255, 24) });
+    canvas.set_draw_color(if clear_selected && focused {
+        theme::ACCENT
+    } else {
+        Color::RGBA(255, 255, 255, 24)
+    });
     canvas.draw_rect(scale.rect(x, clear_y, clear_w, clear_h))?;
     // "X" rather than the Unicode multiplication-X glyph (U+2715) — missing
     // from this font, same tofu-box issue `chrome::PROMPT_SELECT` already
@@ -473,7 +678,11 @@ fn draw_controls_rows(
         &clear_label,
         cx,
         cy,
-        if clear_selected && focused { theme::ACCENT } else { Color::RGB(0x7a, 0x7a, 0x82) },
+        if clear_selected && focused {
+            theme::ACCENT
+        } else {
+            Color::RGB(0x7a, 0x7a, 0x82)
+        },
     )?;
     Ok(())
 }
@@ -501,18 +710,42 @@ fn draw_account_rows(
         ("USERNAME", username.to_string(), "CROSS TO EDIT"),
         (
             "STATS EMAIL",
-            if stats_email.is_empty() { "NOT SET".to_string() } else { stats_email.to_string() },
+            if stats_email.is_empty() {
+                "NOT SET".to_string()
+            } else {
+                stats_email.to_string()
+            },
             "CROSS TO EDIT",
         ),
         (
             "DISCORD",
-            if discord_connected { "CONNECTED".to_string() } else { "NOT CONNECTED".to_string() },
-            if discord_connected { "CROSS TO DISCONNECT" } else { "CROSS TO CONNECT" },
+            if discord_connected {
+                "CONNECTED".to_string()
+            } else {
+                "NOT CONNECTED".to_string()
+            },
+            if discord_connected {
+                "CROSS TO DISCONNECT"
+            } else {
+                "CROSS TO CONNECT"
+            },
         ),
     ];
     for (i, (label, value, hint)) in rows.iter().enumerate() {
         let y = top + i as f32 * row_h;
-        draw_bind_row(canvas, fonts, scale, x, y, row_h, label, value, hint, row == i, focused)?;
+        draw_bind_row(
+            canvas,
+            fonts,
+            scale,
+            x,
+            y,
+            row_h,
+            label,
+            value,
+            hint,
+            row == i,
+            focused,
+        )?;
     }
     Ok(())
 }
@@ -543,7 +776,15 @@ fn draw_test_conn(
     canvas.set_draw_color(theme::ACCENT);
     canvas.draw_rect(scale.rect(x, top, field_w, field_h))?;
     let (vx, vy) = scale.point(x + 14.0, top + field_h / 2.0 - 10.0);
-    let (vw, _) = fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(17.0), address, vx, vy, Color::RGB(0xF4, 0xF4, 0xF0))?;
+    let (vw, _) = fonts.draw(
+        canvas,
+        FpFont::ChakraPetchSemiBold,
+        scale.font_px(17.0),
+        address,
+        vx,
+        vy,
+        Color::RGB(0xF4, 0xF4, 0xF0),
+    )?;
     let caret_x = x + 14.0 + (vw as f32 / scale.s) + 3.0;
     canvas.set_draw_color(theme::ACCENT);
     canvas.fill_rect(Some(scale.rect(caret_x, top + 10.0, 2.0, field_h - 20.0)))?;
@@ -568,13 +809,33 @@ fn draw_test_conn(
     canvas.set_draw_color(Color::RGBA(255, 255, 255, 18));
     canvas.draw_rect(scale.rect(x, log_top, log_w, log_h))?;
     let (plx, ply) = scale.point(x + 16.0, log_top + 12.0);
-    fonts.draw_tracked(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(11.0), "PROBE OUTPUT", plx, ply, Color::RGB(0x3a, 0x3a, 0x42), scale.len(4.0).round() as i32)?;
+    fonts.draw_tracked(
+        canvas,
+        FpFont::ChakraPetchSemiBold,
+        scale.font_px(11.0),
+        "PROBE OUTPUT",
+        plx,
+        ply,
+        Color::RGB(0x3a, 0x3a, 0x42),
+        scale.len(4.0).round() as i32,
+    )?;
 
     if lines.is_empty() {
         let msg = "ENTER AN ADDRESS AND RUN PROBE";
         let (mw, _) = fonts.text_size(FpFont::ChakraPetchMedium, scale.font_px(12.0), msg);
-        let (mx, my) = scale.point(x + (log_w - mw as f32 / scale.s) / 2.0, log_top + log_h / 2.0 - 6.0);
-        fonts.draw(canvas, FpFont::ChakraPetchMedium, scale.font_px(12.0), msg, mx, my, Color::RGB(0x1e, 0x1e, 0x24))?;
+        let (mx, my) = scale.point(
+            x + (log_w - mw as f32 / scale.s) / 2.0,
+            log_top + log_h / 2.0 - 6.0,
+        );
+        fonts.draw(
+            canvas,
+            FpFont::ChakraPetchMedium,
+            scale.font_px(12.0),
+            msg,
+            mx,
+            my,
+            Color::RGB(0x1e, 0x1e, 0x24),
+        )?;
     } else {
         let row_h = 22.0;
         let max_visible = ((log_h - 40.0) / row_h).floor().max(1.0) as usize;
@@ -597,7 +858,15 @@ fn draw_test_conn(
                 (Color::RGB(0xcf, 0xcf, 0xc9), line.as_str())
             };
             let (lx, ly) = scale.point(x + 16.0 + if indented { 14.0 } else { 0.0 }, y);
-            fonts.draw(canvas, FpFont::ChakraPetchMedium, scale.font_px(13.0), text, lx, ly, color)?;
+            fonts.draw(
+                canvas,
+                FpFont::ChakraPetchMedium,
+                scale.font_px(13.0),
+                text,
+                lx,
+                ly,
+                color,
+            )?;
             y += row_h;
         }
     }
@@ -631,7 +900,15 @@ fn draw_bind_row(
     canvas.fill_rect(Some(scale.rect(x, y + row_h - 4.0, 620.0, 1.0)))?;
 
     let (lx, ly) = scale.point(x + 14.0, y + row_h / 2.0 - 11.0);
-    fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(20.0), action_label, lx, ly, Color::RGB(0xed, 0xed, 0xe8))?;
+    fonts.draw(
+        canvas,
+        FpFont::SairaCondensedBold,
+        scale.font_px(20.0),
+        action_label,
+        lx,
+        ly,
+        Color::RGB(0xed, 0xed, 0xe8),
+    )?;
 
     // The rebind prompt sits at the right edge and the current binding to its
     // left, rather than the prompt replacing the binding. Swapping them hid
@@ -648,16 +925,41 @@ fn draw_bind_row(
         let hint_h = (hh as f32 / scale.s) + pad_y * 2.0;
         let hint_x = x + 620.0 - hint_w;
         let hint_y = y + row_h / 2.0 - hint_h / 2.0 - 2.0;
-        canvas.set_draw_color(Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 140));
+        canvas.set_draw_color(Color::RGBA(
+            theme::ACCENT.r,
+            theme::ACCENT.g,
+            theme::ACCENT.b,
+            140,
+        ));
         canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
         canvas.draw_rect(scale.rect(hint_x, hint_y, hint_w, hint_h))?;
         let (htx, hty) = scale.point(hint_x + pad_x, hint_y + pad_y);
-        fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(11.0), hint, htx, hty, theme::ACCENT)?;
+        fonts.draw(
+            canvas,
+            FpFont::ChakraPetchSemiBold,
+            scale.font_px(11.0),
+            hint,
+            htx,
+            hty,
+            theme::ACCENT,
+        )?;
         value_right = hint_x - 14.0;
     }
-    let (bw, _) = fonts.text_size(FpFont::ChakraPetchSemiBold, scale.font_px(14.0), binding_text);
+    let (bw, _) = fonts.text_size(
+        FpFont::ChakraPetchSemiBold,
+        scale.font_px(14.0),
+        binding_text,
+    );
     let (bx, by) = scale.point(value_right - (bw as f32 / scale.s), y + row_h / 2.0 - 9.0);
-    fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(14.0), binding_text, bx, by, Color::RGB(0xcf, 0xcf, 0xc9))?;
+    fonts.draw(
+        canvas,
+        FpFont::ChakraPetchSemiBold,
+        scale.font_px(14.0),
+        binding_text,
+        bx,
+        by,
+        Color::RGB(0xcf, 0xcf, 0xc9),
+    )?;
     Ok(())
 }
 
@@ -690,9 +992,25 @@ fn draw_row(
 
     let text_x = x + 12.0;
     let (lx, ly) = scale.point(text_x, y + 12.0);
-    fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(24.0), label, lx, ly, Color::RGB(0xed, 0xed, 0xe8))?;
+    fonts.draw(
+        canvas,
+        FpFont::SairaCondensedBold,
+        scale.font_px(24.0),
+        label,
+        lx,
+        ly,
+        Color::RGB(0xed, 0xed, 0xe8),
+    )?;
     let (hx, hy) = scale.point(text_x, y + 42.0);
-    fonts.draw(canvas, FpFont::SairaSemiBold, scale.font_px(13.0), hint, hx, hy, theme::MUTE)?;
+    fonts.draw(
+        canvas,
+        FpFont::SairaSemiBold,
+        scale.font_px(13.0),
+        hint,
+        hx,
+        hy,
+        theme::MUTE,
+    )?;
 
     let right_edge = x + 1360.0;
     match value {
@@ -712,7 +1030,11 @@ fn draw_row(
                     Color::RGB(255, 255, 255),
                 )
             } else {
-                (Color::RGBA(255, 255, 255, 36), Color::RGBA(255, 255, 255, 8), Color::RGB(0xcf, 0xcf, 0xc9))
+                (
+                    Color::RGBA(255, 255, 255, 36),
+                    Color::RGBA(255, 255, 255, 8),
+                    Color::RGB(0xcf, 0xcf, 0xc9),
+                )
             };
             canvas.set_draw_color(bg);
             canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
@@ -720,7 +1042,15 @@ fn draw_row(
             canvas.set_draw_color(border);
             canvas.draw_rect(scale.rect(pill_x, pill_y, pill_w, pill_h))?;
             let (ttx, tty) = scale.point(pill_x + pad_x, pill_y + pad_y);
-            fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(15.0), text, ttx, tty, color)?;
+            fonts.draw(
+                canvas,
+                FpFont::ChakraPetchSemiBold,
+                scale.font_px(15.0),
+                text,
+                ttx,
+                tty,
+                color,
+            )?;
         }
         RowValue::Cycle(text) => {
             let (tw, th) = fonts.text_size(FpFont::ChakraPetchSemiBold, scale.font_px(15.0), text);
@@ -736,7 +1066,15 @@ fn draw_row(
             canvas.set_draw_color(Color::RGBA(255, 255, 255, 36));
             canvas.draw_rect(scale.rect(pill_x, pill_y, pill_w, pill_h))?;
             let (ttx, tty) = scale.point(pill_x + pad_x, pill_y + pad_y);
-            fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(15.0), text, ttx, tty, Color::RGB(0xcf, 0xcf, 0xc9))?;
+            fonts.draw(
+                canvas,
+                FpFont::ChakraPetchSemiBold,
+                scale.font_px(15.0),
+                text,
+                ttx,
+                tty,
+                Color::RGB(0xcf, 0xcf, 0xc9),
+            )?;
         }
         RowValue::Slider { pct, text } => {
             let (tw, _) = fonts.text_size(FpFont::ChakraPetchSemiBold, scale.font_px(18.0), &text);
@@ -752,7 +1090,15 @@ fn draw_row(
             canvas.set_draw_color(theme::ACCENT);
             canvas.fill_rect(Some(scale.rect(slider_x, slider_y, fill_w, 7.0)))?;
             let (vx, vy) = scale.point(right_edge - value_w, y + ROW_H / 2.0 - 9.0);
-            fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(18.0), &text, vx, vy, Color::RGB(0xf2, 0xf2, 0xee))?;
+            fonts.draw(
+                canvas,
+                FpFont::ChakraPetchSemiBold,
+                scale.font_px(18.0),
+                &text,
+                vx,
+                vy,
+                Color::RGB(0xf2, 0xf2, 0xee),
+            )?;
         }
     }
     Ok(())

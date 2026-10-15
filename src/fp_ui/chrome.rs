@@ -69,7 +69,10 @@ fn draw_stage_glow(canvas: &mut Canvas<Window>, scale: &Scale) -> Result<(), Str
 /// 78%/18%) — per direct feedback that the glow specifically wasn't
 /// wanted on some screens, while the diagonal red wash, the left-side
 /// skewed light bar, the red hairline, and the vignette all still are.
-pub fn draw_background_accents_no_glow(canvas: &mut Canvas<Window>, scale: &Scale) -> Result<(), String> {
+pub fn draw_background_accents_no_glow(
+    canvas: &mut Canvas<Window>,
+    scale: &Scale,
+) -> Result<(), String> {
     const BG_SKEW_DEG: f32 = -11.0;
 
     // Diagonal accent wash: linear-gradient(115deg, transparent 0%,
@@ -95,7 +98,10 @@ pub fn draw_background_accents_no_glow(canvas: &mut Canvas<Window>, scale: &Scal
         560.0,
         1400.0,
         BG_SKEW_DEG,
-        &[(0.0, Color::RGBA(255, 255, 255, 5)), (1.0, Color::RGBA(255, 255, 255, 0))],
+        &[
+            (0.0, Color::RGBA(255, 255, 255, 5)),
+            (1.0, Color::RGBA(255, 255, 255, 0)),
+        ],
     );
 
     // Skewed red hairline: rect(780,-120, 5x1400) skewX(-11deg),
@@ -112,7 +118,12 @@ pub fn draw_background_accents_no_glow(canvas: &mut Canvas<Window>, scale: &Scal
         5.0,
         1400.0,
         BG_SKEW_DEG,
-        &[(0.0, hair_clear), (0.35, hair_peak), (0.60, hair_peak), (1.0, hair_clear)],
+        &[
+            (0.0, hair_clear),
+            (0.35, hair_peak),
+            (0.60, hair_peak),
+            (1.0, hair_clear),
+        ],
     );
 
     // Vignette: radial-gradient(130% 130% at 50% 45%, transparent 55%,
@@ -124,7 +135,10 @@ pub fn draw_background_accents_no_glow(canvas: &mut Canvas<Window>, scale: &Scal
         theme::VH * 0.45,
         theme::VW * 1.3,
         theme::VH * 1.3,
-        &[(0.55, Color::RGBA(0, 0, 0, 0)), (1.0, Color::RGBA(0, 0, 0, 140))],
+        &[
+            (0.55, Color::RGBA(0, 0, 0, 0)),
+            (1.0, Color::RGBA(0, 0, 0, 140)),
+        ],
     );
 
     // Grain (repeating 1px diagonal lines, overlay blend, toggleable in the
@@ -236,11 +250,22 @@ pub fn draw_header(
         Some(w) => w,
         None => {
             fonts
-                .draw(canvas, FpFont::SairaCondensedBlack, scale.font_px(46.0), "FREEPLAY", x, y, theme::TEXT)?
+                .draw(
+                    canvas,
+                    FpFont::SairaCondensedBlack,
+                    scale.font_px(46.0),
+                    "FREEPLAY",
+                    x,
+                    y,
+                    theme::TEXT,
+                )?
                 .0
         }
     };
-    let (bx, by) = scale.point(SIDE_PAD + (word_w as f32 / scale.s) + 20.0, HEADER_H / 2.0 - 7.0);
+    let (bx, by) = scale.point(
+        SIDE_PAD + (word_w as f32 / scale.s) + 20.0,
+        HEADER_H / 2.0 - 7.0,
+    );
     // `version::footer_string()` — version + build date + short git hash —
     // is what legacy screens show; this used to just be "BUILD {VERSION}",
     // missing the date/hash a dev build actually needs to identify itself.
@@ -272,25 +297,69 @@ pub fn draw_header(
     let chip_w = avatar_d + 10.0 + chip_text_w + 14.0 + 8.0;
     cursor_x -= chip_w;
     canvas.set_draw_color(Color::RGBA(255, 255, 255, 8));
-    canvas.fill_rect(Some(scale.rect(cursor_x, HEADER_H / 2.0 - 16.0, chip_w, 32.0)))?;
-    geometry::fill_circle(canvas, scale, cursor_x + 8.0 + avatar_d / 2.0, HEADER_H / 2.0, avatar_d / 2.0, theme::ACCENT);
-    let initial = username.chars().next().unwrap_or('?').to_uppercase().to_string();
+    canvas.fill_rect(Some(scale.rect(
+        cursor_x,
+        HEADER_H / 2.0 - 16.0,
+        chip_w,
+        32.0,
+    )))?;
+    geometry::fill_circle(
+        canvas,
+        scale,
+        cursor_x + 8.0 + avatar_d / 2.0,
+        HEADER_H / 2.0,
+        avatar_d / 2.0,
+        theme::ACCENT,
+    );
+    let initial = username
+        .chars()
+        .next()
+        .unwrap_or('?')
+        .to_uppercase()
+        .to_string();
     let (iw, ih) = fonts.text_size(FpFont::SairaCondensedBlack, scale.font_px(15.0), &initial);
     let (ix, iy) = scale.point(
         cursor_x + 8.0 + avatar_d / 2.0 - (iw as f32 / scale.s) / 2.0,
         HEADER_H / 2.0 - (ih as f32 / scale.s) / 2.0,
     );
-    fonts.draw(canvas, FpFont::SairaCondensedBlack, scale.font_px(15.0), &initial, ix, iy, Color::RGB(255, 255, 255))?;
+    fonts.draw(
+        canvas,
+        FpFont::SairaCondensedBlack,
+        scale.font_px(15.0),
+        &initial,
+        ix,
+        iy,
+        Color::RGB(255, 255, 255),
+    )?;
     let (nx, ny) = scale.point(cursor_x + 8.0 + avatar_d + 10.0, HEADER_H / 2.0 - 10.0);
-    fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(17.0), username, nx, ny, theme::TEXT)?;
+    fonts.draw(
+        canvas,
+        FpFont::SairaCondensedBold,
+        scale.font_px(17.0),
+        username,
+        nx,
+        ny,
+        theme::TEXT,
+    )?;
 
     // Clock.
     cursor_x -= 24.0; // gap before the chip
     let clock = clock_string();
-    let clock_w = fonts.text_size(FpFont::ChakraPetchMedium, scale.font_px(16.0), &clock).0 as f32 / scale.s;
+    let clock_w = fonts
+        .text_size(FpFont::ChakraPetchMedium, scale.font_px(16.0), &clock)
+        .0 as f32
+        / scale.s;
     cursor_x -= clock_w;
     let (cx, cy) = scale.point(cursor_x, HEADER_H / 2.0 - 8.0);
-    fonts.draw(canvas, FpFont::ChakraPetchMedium, scale.font_px(16.0), &clock, cx, cy, theme::TEXT)?;
+    fonts.draw(
+        canvas,
+        FpFont::ChakraPetchMedium,
+        scale.font_px(16.0),
+        &clock,
+        cx,
+        cy,
+        theme::TEXT,
+    )?;
 
     // Divider.
     cursor_x -= 24.0;
@@ -300,20 +369,48 @@ pub fn draw_header(
     // Status dot + label + ping.
     cursor_x -= 18.0;
     let status_w = fonts
-        .text_size(FpFont::ChakraPetchSemiBold, scale.font_px(14.0), status_label)
+        .text_size(
+            FpFont::ChakraPetchSemiBold,
+            scale.font_px(14.0),
+            status_label,
+        )
         .0 as f32
         / scale.s;
     let ping_w = if ping_label.is_empty() {
         0.0
     } else {
-        fonts.text_size(FpFont::ChakraPetchSemiBold, scale.font_px(14.0), &ping_label).0 as f32 / scale.s + 12.0
+        fonts
+            .text_size(
+                FpFont::ChakraPetchSemiBold,
+                scale.font_px(14.0),
+                &ping_label,
+            )
+            .0 as f32
+            / scale.s
+            + 12.0
     };
     cursor_x -= status_w + ping_w;
     let (sx, sy) = scale.point(cursor_x, HEADER_H / 2.0 - 7.0);
-    fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(14.0), status_label, sx, sy, theme::DIM)?;
+    fonts.draw(
+        canvas,
+        FpFont::ChakraPetchSemiBold,
+        scale.font_px(14.0),
+        status_label,
+        sx,
+        sy,
+        theme::DIM,
+    )?;
     if !ping_label.is_empty() {
         let (px, py) = scale.point(cursor_x + status_w + 12.0, HEADER_H / 2.0 - 7.0);
-        fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(14.0), &ping_label, px, py, theme::MUTE)?;
+        fonts.draw(
+            canvas,
+            FpFont::ChakraPetchSemiBold,
+            scale.font_px(14.0),
+            &ping_label,
+            px,
+            py,
+            theme::MUTE,
+        )?;
     }
     cursor_x -= 9.0;
     geometry::fill_circle(canvas, scale, cursor_x, HEADER_H / 2.0, 4.0, dot_color);
@@ -345,13 +442,29 @@ pub fn draw_prompt_row(
     let mut x = x;
     let chip_d = 34.0;
     for p in prompts {
-        geometry::stroke_circle(canvas, scale, x + chip_d / 2.0, row_cy, chip_d / 2.0, 1.5, p.color);
+        geometry::stroke_circle(
+            canvas,
+            scale,
+            x + chip_d / 2.0,
+            row_cy,
+            chip_d / 2.0,
+            1.5,
+            p.color,
+        );
         let (gw, gh) = fonts.text_size(FpFont::SairaCondensedBold, scale.font_px(15.0), p.glyph);
         let (gx, gy) = scale.point(
             x + chip_d / 2.0 - (gw as f32 / scale.s) / 2.0,
             row_cy - (gh as f32 / scale.s) / 2.0,
         );
-        fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(15.0), p.glyph, gx, gy, p.color)?;
+        fonts.draw(
+            canvas,
+            FpFont::SairaCondensedBold,
+            scale.font_px(15.0),
+            p.glyph,
+            gx,
+            gy,
+            p.color,
+        )?;
         let (lx, ly) = scale.point(x + chip_d + 10.0, row_cy - 8.0);
         let (lw, _) = fonts.draw(
             canvas,
@@ -401,7 +514,15 @@ pub fn draw_footer(
             canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
             canvas.fill_rect(Some(scale.rect(badge_x, badge_y, badge_w, badge_h)))?;
             let (tx, ty) = scale.point(badge_x + pad_x, badge_y + pad_y);
-            fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(14.0), text, tx, ty, Color::RGB(255, 255, 255))?;
+            fonts.draw(
+                canvas,
+                FpFont::SairaCondensedBold,
+                scale.font_px(14.0),
+                text,
+                tx,
+                ty,
+                Color::RGB(255, 255, 255),
+            )?;
 
             // "CREDIT ∞" and the "SELECT · ABOUT" hint sit to the left of the
             // FREE PLAY badge — present in the mockup's footer but dropped
@@ -414,20 +535,44 @@ pub fn draw_footer(
             // `visible_span`-based centering, matching SELECT below — a flat
             // `row_cy - 7.0` offset (the old approach) doesn't land on the
             // same center line as SELECT's true glyph-height centering.
-            let (c_inset, c_vis_h) = fonts.visible_span(FpFont::ChakraPetchSemiBold, credit_px, credit);
+            let (c_inset, c_vis_h) =
+                fonts.visible_span(FpFont::ChakraPetchSemiBold, credit_px, credit);
             let c_vis_h_l = c_vis_h as f32 / scale.s;
-            let (crx, cry) = scale.point(cursor_x, row_cy - c_vis_h_l / 2.0 - c_inset as f32 / scale.s);
-            fonts.draw(canvas, FpFont::ChakraPetchSemiBold, credit_px, credit, crx, cry, theme::DIM)?;
+            let (crx, cry) = scale.point(
+                cursor_x,
+                row_cy - c_vis_h_l / 2.0 - c_inset as f32 / scale.s,
+            );
+            fonts.draw(
+                canvas,
+                FpFont::ChakraPetchSemiBold,
+                credit_px,
+                credit,
+                crx,
+                cry,
+                theme::DIM,
+            )?;
 
             cursor_x -= 28.0;
             let about = "ABOUT";
             let about_px = scale.font_px(13.0);
             let (aw, _) = fonts.text_size(FpFont::SairaCondensedSemiBold, about_px, about);
             cursor_x -= aw as f32 / scale.s;
-            let (a_inset, a_vis_h) = fonts.visible_span(FpFont::SairaCondensedSemiBold, about_px, about);
+            let (a_inset, a_vis_h) =
+                fonts.visible_span(FpFont::SairaCondensedSemiBold, about_px, about);
             let a_vis_h_l = a_vis_h as f32 / scale.s;
-            let (ax, ay) = scale.point(cursor_x, row_cy - a_vis_h_l / 2.0 - a_inset as f32 / scale.s);
-            fonts.draw(canvas, FpFont::SairaCondensedSemiBold, about_px, about, ax, ay, theme::DIM)?;
+            let (ax, ay) = scale.point(
+                cursor_x,
+                row_cy - a_vis_h_l / 2.0 - a_inset as f32 / scale.s,
+            );
+            fonts.draw(
+                canvas,
+                FpFont::SairaCondensedSemiBold,
+                about_px,
+                about,
+                ax,
+                ay,
+                theme::DIM,
+            )?;
 
             cursor_x -= 10.0;
             let select = "SELECT";
@@ -440,7 +585,8 @@ pub fn draw_footer(
             // pushing it visibly lower than "ABOUT"/"CREDIT" alongside it.
             // `visible_span` centers the pill (and the text within it) on
             // the glyphs' real height instead.
-            let (s_inset, s_vis_h) = fonts.visible_span(FpFont::ChakraPetchSemiBold, select_px, select);
+            let (s_inset, s_vis_h) =
+                fonts.visible_span(FpFont::ChakraPetchSemiBold, select_px, select);
             let s_vis_h_l = s_vis_h as f32 / scale.s;
             let pill_pad_x = 10.0;
             let pill_pad_y = 4.0;
@@ -451,13 +597,32 @@ pub fn draw_footer(
             canvas.set_draw_color(Color::RGBA(255, 255, 255, 12));
             canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
             canvas.draw_rect(scale.rect(cursor_x, pill_y, pill_w, pill_h))?;
-            let (slx, sly) = scale.point(cursor_x + pill_pad_x, row_cy - s_vis_h_l / 2.0 - s_inset as f32 / scale.s);
-            fonts.draw(canvas, FpFont::ChakraPetchSemiBold, select_px, select, slx, sly, theme::DIM)?;
+            let (slx, sly) = scale.point(
+                cursor_x + pill_pad_x,
+                row_cy - s_vis_h_l / 2.0 - s_inset as f32 / scale.s,
+            );
+            fonts.draw(
+                canvas,
+                FpFont::ChakraPetchSemiBold,
+                select_px,
+                select,
+                slx,
+                sly,
+                theme::DIM,
+            )?;
         }
         FooterRight::Text(s) => {
             let (tw, _) = fonts.text_size(FpFont::ChakraPetchSemiBold, scale.font_px(13.0), s);
             let (tx, ty) = scale.point(theme::VW - SIDE_PAD - (tw as f32 / scale.s), row_cy - 7.0);
-            fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(13.0), s, tx, ty, theme::MUTE)?;
+            fonts.draw(
+                canvas,
+                FpFont::ChakraPetchSemiBold,
+                scale.font_px(13.0),
+                s,
+                tx,
+                ty,
+                theme::MUTE,
+            )?;
         }
     }
 

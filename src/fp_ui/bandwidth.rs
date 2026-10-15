@@ -72,7 +72,12 @@ const BULLETINS: [Bulletin; 6] = [
     },
 ];
 
-pub fn draw(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scale: &Scale, username: &str) -> Result<(), String> {
+pub fn draw(
+    canvas: &mut Canvas<Window>,
+    fonts: &mut FpFontCache,
+    scale: &Scale,
+    username: &str,
+) -> Result<(), String> {
     chrome::draw_header(canvas, fonts, scale, username, true, None)?;
 
     canvas.set_draw_color(theme::ACCENT);
@@ -89,12 +94,28 @@ pub fn draw(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scale: &Scale,
         theme::ACCENT,
     )?;
     let (tx, ty) = scale.point(SIDE_PAD, TOP + 26.0);
-    fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(58.0), "NETWORK NEWS", tx, ty, theme::TEXT)?;
+    fonts.draw(
+        canvas,
+        FpFont::SairaCondensedBold,
+        scale.font_px(58.0),
+        "NETWORK NEWS",
+        tx,
+        ty,
+        theme::TEXT,
+    )?;
 
     let issue = "ISSUE 214 \u{b7} SAT JUL 04 \u{b7} UPDATED 21:40";
     let (iw, _) = fonts.text_size(FpFont::ChakraPetchSemiBold, scale.font_px(13.0), issue);
     let (ix, iy) = scale.point(theme::VW - SIDE_PAD - (iw as f32 / scale.s), TOP - 8.0);
-    fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(13.0), issue, ix, iy, theme::MUTE)?;
+    fonts.draw(
+        canvas,
+        FpFont::ChakraPetchSemiBold,
+        scale.font_px(13.0),
+        issue,
+        ix,
+        iy,
+        theme::MUTE,
+    )?;
 
     let body_top = TOP + 26.0 + 70.0;
     draw_headline_card(canvas, fonts, scale, body_top)?;
@@ -110,7 +131,12 @@ pub fn draw(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scale: &Scale,
     Ok(())
 }
 
-fn draw_headline_card(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scale: &Scale, top: f32) -> Result<(), String> {
+fn draw_headline_card(
+    canvas: &mut Canvas<Window>,
+    fonts: &mut FpFontCache,
+    scale: &Scale,
+    top: f32,
+) -> Result<(), String> {
     let x = SIDE_PAD;
     let w = 660.0;
     let h = 480.0;
@@ -118,7 +144,12 @@ fn draw_headline_card(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scal
     canvas.set_draw_color(Color::RGBA(8, 8, 11, 140));
     canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
     canvas.fill_rect(Some(scale.rect(x, top, w, h)))?;
-    canvas.set_draw_color(Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 90));
+    canvas.set_draw_color(Color::RGBA(
+        theme::ACCENT.r,
+        theme::ACCENT.g,
+        theme::ACCENT.b,
+        90,
+    ));
     canvas.draw_rect(scale.rect(x, top, w, h))?;
 
     let badge_text = "HEADLINE";
@@ -130,27 +161,76 @@ fn draw_headline_card(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scal
     canvas.set_draw_color(theme::ACCENT);
     canvas.fill_rect(Some(scale.rect(x + 24.0, top + 24.0, badge_w, badge_h)))?;
     let (btx, bty) = scale.point(x + 24.0 + badge_pad_x, top + 24.0 + badge_pad_y);
-    fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(16.0), badge_text, btx, bty, Color::RGB(255, 255, 255))?;
+    fonts.draw(
+        canvas,
+        FpFont::SairaCondensedBold,
+        scale.font_px(16.0),
+        badge_text,
+        btx,
+        bty,
+        Color::RGB(255, 255, 255),
+    )?;
 
     let posted = "POSTED 18:02";
     let (px, py) = scale.point(x + 24.0 + badge_w + 12.0, top + 24.0 + 5.0);
-    fonts.draw(canvas, FpFont::ChakraPetchMedium, scale.font_px(12.0), posted, px, py, theme::MUTE)?;
+    fonts.draw(
+        canvas,
+        FpFont::ChakraPetchMedium,
+        scale.font_px(12.0),
+        posted,
+        px,
+        py,
+        theme::MUTE,
+    )?;
 
     let headline_y = top + 24.0 + badge_h + 20.0;
     let line1 = "WEST REGION FINALS";
     let line2 = "LOCK IN SATURDAY 20:00";
     let (l1x, l1y) = scale.point(x + 24.0, headline_y);
-    let (_, l1h) = fonts.draw(canvas, FpFont::SairaCondensedBlack, scale.font_px(52.0), line1, l1x, l1y, theme::TEXT)?;
+    let (_, l1h) = fonts.draw(
+        canvas,
+        FpFont::SairaCondensedBlack,
+        scale.font_px(52.0),
+        line1,
+        l1x,
+        l1y,
+        theme::TEXT,
+    )?;
     let (l2x, l2y) = scale.point(x + 24.0, headline_y + (l1h as f32 / scale.s) + 4.0);
-    fonts.draw(canvas, FpFont::SairaCondensedBlack, scale.font_px(52.0), line2, l2x, l2y, theme::TEXT)?;
+    fonts.draw(
+        canvas,
+        FpFont::SairaCondensedBlack,
+        scale.font_px(52.0),
+        line2,
+        l2x,
+        l2y,
+        theme::TEXT,
+    )?;
 
     let body_y = headline_y + (l1h as f32 / scale.s) * 2.0 + 40.0;
     let body = "Sixteen challengers survive the qualifier gauntlet. Winner takes the";
-    let body2 = "regional crown, a guaranteed national seed \u{2014} and one month of free line time.";
+    let body2 =
+        "regional crown, a guaranteed national seed \u{2014} and one month of free line time.";
     let (bxp, byp) = scale.point(x + 24.0, body_y);
-    fonts.draw(canvas, FpFont::SairaMedium, scale.font_px(18.0), body, bxp, byp, Color::RGB(0x8a, 0x8a, 0x92))?;
+    fonts.draw(
+        canvas,
+        FpFont::SairaMedium,
+        scale.font_px(18.0),
+        body,
+        bxp,
+        byp,
+        Color::RGB(0x8a, 0x8a, 0x92),
+    )?;
     let (bxp2, byp2) = scale.point(x + 24.0, body_y + 30.0);
-    fonts.draw(canvas, FpFont::SairaMedium, scale.font_px(18.0), body2, bxp2, byp2, Color::RGB(0x8a, 0x8a, 0x92))?;
+    fonts.draw(
+        canvas,
+        FpFont::SairaMedium,
+        scale.font_px(18.0),
+        body2,
+        bxp2,
+        byp2,
+        Color::RGB(0x8a, 0x8a, 0x92),
+    )?;
 
     let footer_y = top + h - 20.0 - 24.0;
     canvas.set_draw_color(Color::RGBA(255, 255, 255, 18));
@@ -169,7 +249,12 @@ fn draw_headline_card(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scal
     Ok(())
 }
 
-fn draw_bulletin_list(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scale: &Scale, top: f32) -> Result<(), String> {
+fn draw_bulletin_list(
+    canvas: &mut Canvas<Window>,
+    fonts: &mut FpFontCache,
+    scale: &Scale,
+    top: f32,
+) -> Result<(), String> {
     let x = SIDE_PAD + 660.0 + 26.0;
     let w = theme::VW - SIDE_PAD - x;
     let h = 480.0;
@@ -184,7 +269,12 @@ fn draw_bulletin_list(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scal
     for (i, b) in BULLETINS.iter().enumerate() {
         let ry = top + i as f32 * row_h;
         if b.highlighted {
-            canvas.set_draw_color(Color::RGBA(theme::ACCENT.r, theme::ACCENT.g, theme::ACCENT.b, 15));
+            canvas.set_draw_color(Color::RGBA(
+                theme::ACCENT.r,
+                theme::ACCENT.g,
+                theme::ACCENT.b,
+                15,
+            ));
             canvas.fill_rect(Some(scale.rect(x, ry, w, row_h)))?;
             canvas.set_draw_color(theme::ACCENT);
             canvas.fill_rect(Some(scale.rect(x, ry, 4.0, row_h)))?;
@@ -193,21 +283,61 @@ fn draw_bulletin_list(canvas: &mut Canvas<Window>, fonts: &mut FpFontCache, scal
             canvas.set_draw_color(Color::RGBA(255, 255, 255, 12));
             canvas.fill_rect(Some(scale.rect(x, ry, w, 1.0)))?;
         }
-        let time_color = if b.highlighted { theme::ACCENT } else { Color::RGB(0x4a, 0x4a, 0x52) };
+        let time_color = if b.highlighted {
+            theme::ACCENT
+        } else {
+            Color::RGB(0x4a, 0x4a, 0x52)
+        };
         let (ttx, tty) = scale.point(x + 24.0, ry + row_h / 2.0 - 8.0);
-        fonts.draw(canvas, FpFont::ChakraPetchSemiBold, scale.font_px(13.0), b.time, ttx, tty, time_color)?;
+        fonts.draw(
+            canvas,
+            FpFont::ChakraPetchSemiBold,
+            scale.font_px(13.0),
+            b.time,
+            ttx,
+            tty,
+            time_color,
+        )?;
 
         let title_x = x + 24.0 + 70.0;
-        let title_color = if b.highlighted { theme::TEXT } else { Color::RGB(0x9a, 0x9a, 0xa2) };
+        let title_color = if b.highlighted {
+            theme::TEXT
+        } else {
+            Color::RGB(0x9a, 0x9a, 0xa2)
+        };
         let title_size = if b.highlighted { 26.0 } else { 24.0 };
         if b.sub.is_empty() {
             let (tx2, ty2) = scale.point(title_x, ry + row_h / 2.0 - 12.0);
-            fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(title_size), b.title, tx2, ty2, title_color)?;
+            fonts.draw(
+                canvas,
+                FpFont::SairaCondensedBold,
+                scale.font_px(title_size),
+                b.title,
+                tx2,
+                ty2,
+                title_color,
+            )?;
         } else {
             let (tx2, ty2) = scale.point(title_x, ry + row_h / 2.0 - 20.0);
-            fonts.draw(canvas, FpFont::SairaCondensedBold, scale.font_px(title_size), b.title, tx2, ty2, title_color)?;
+            fonts.draw(
+                canvas,
+                FpFont::SairaCondensedBold,
+                scale.font_px(title_size),
+                b.title,
+                tx2,
+                ty2,
+                title_color,
+            )?;
             let (sx2, sy2) = scale.point(title_x, ry + row_h / 2.0 + 8.0);
-            fonts.draw(canvas, FpFont::SairaMedium, scale.font_px(15.0), b.sub, sx2, sy2, Color::RGB(0x8a, 0x8a, 0x92))?;
+            fonts.draw(
+                canvas,
+                FpFont::SairaMedium,
+                scale.font_px(15.0),
+                b.sub,
+                sx2,
+                sy2,
+                Color::RGB(0x8a, 0x8a, 0x92),
+            )?;
         }
     }
 

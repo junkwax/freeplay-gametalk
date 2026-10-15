@@ -96,6 +96,11 @@ impl Mk2PerfSample {
 }
 
 pub fn sample(core: &Core) -> Option<Mk2PerfSample> {
+    // Walks MK2's process and object lists; another game's RAM at these
+    // addresses is not a list.
+    if !crate::game::current().mk2_tooling {
+        return None;
+    }
     let ram = core.memory(RETRO_MEMORY_SYSTEM_RAM)?;
     let (active_processes, active_warn) = count_list(ram, mk2_addrs::a().ACTIVE_PROCESS_LIST_ADDR);
     let (free_processes, free_proc_warn) = count_list(ram, mk2_addrs::a().FREE_PROCESS_LIST_ADDR);

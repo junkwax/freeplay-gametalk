@@ -148,7 +148,13 @@ impl AudioPacer {
 
     /// Decide what to queue for this frame's `input`, given the queue's
     /// current size. Returns the samples to queue (possibly empty).
-    pub fn process(&mut self, input: &[i16], queued_bytes: u32, freq: u32, target_ms: u32) -> &[i16] {
+    pub fn process(
+        &mut self,
+        input: &[i16],
+        queued_bytes: u32,
+        freq: u32,
+        target_ms: u32,
+    ) -> &[i16] {
         let per_ms = (freq.max(1) * BYTES_PER_STEREO_FRAME) as f64 / 1000.0;
         let fill_ms = (queued_bytes as f64 / per_ms) as u32;
         self.stats.calls += 1;
@@ -268,12 +274,24 @@ mod tests {
         let (mut s_out, mut l_out) = (0usize, 0usize);
         for _ in 0..1000 {
             let input = tone(877, &mut phase);
-            s_out += short.process(&input, bytes_for_ms(TARGET / 2), FREQ, TARGET).len() / 2;
-            l_out += long.process(&input, bytes_for_ms(TARGET + 60), FREQ, TARGET).len() / 2;
+            s_out += short
+                .process(&input, bytes_for_ms(TARGET / 2), FREQ, TARGET)
+                .len()
+                / 2;
+            l_out += long
+                .process(&input, bytes_for_ms(TARGET + 60), FREQ, TARGET)
+                .len()
+                / 2;
         }
         let base = 877.0 * 1000.0;
-        assert!(s_out as f64 > base && (s_out as f64) < base * 1.005 + 2.0, "{s_out}");
-        assert!((l_out as f64) < base && (l_out as f64) > base * 0.995 - 2.0, "{l_out}");
+        assert!(
+            s_out as f64 > base && (s_out as f64) < base * 1.005 + 2.0,
+            "{s_out}"
+        );
+        assert!(
+            (l_out as f64) < base && (l_out as f64) > base * 0.995 - 2.0,
+            "{l_out}"
+        );
     }
 
     #[test]
@@ -319,7 +337,14 @@ mod tests {
         let mut p = AudioPacer::new(true);
         p.primed = true;
         let input = vec![1i16; 877 * 2];
-        let n = p.process(&input, bytes_for_ms(TARGET + OVERFLOW_HEADROOM_MS), FREQ, TARGET).len();
+        let n = p
+            .process(
+                &input,
+                bytes_for_ms(TARGET + OVERFLOW_HEADROOM_MS),
+                FREQ,
+                TARGET,
+            )
+            .len();
         assert_eq!(n, 0);
         assert_eq!(p.stats.drops, 1);
     }
@@ -338,7 +363,13 @@ mod tests {
     /// MK2 frame of audio every 18.281 ms (with timer jitter, rare scheduler
     /// hiccups and spread-out GGRS wait skips), and a device whose clock is
     /// off by `drift` pulls `device_frames` at a time from the SDL queue.
-    fn simulate(target_ms: u32, device_frames: u32, drift: f64, minutes: f64, seed: u64) -> SimResult {
+    fn simulate(
+        target_ms: u32,
+        device_frames: u32,
+        drift: f64,
+        minutes: f64,
+        seed: u64,
+    ) -> SimResult {
         simulate_with(target_ms, device_frames, drift, minutes, seed, true, true)
     }
 
@@ -402,7 +433,15 @@ mod tests {
             let n = acc as usize;
             acc -= n as f64;
             let input = tone(n, &mut phase);
-            let out = p.process(&input, (queue as u32) * BYTES_PER_STEREO_FRAME, FREQ, target_ms).len() / 2;
+            let out = p
+                .process(
+                    &input,
+                    (queue as u32) * BYTES_PER_STEREO_FRAME,
+                    FREQ,
+                    target_ms,
+                )
+                .len()
+                / 2;
             queue += out as f64;
 
             if now > warmup {
@@ -467,7 +506,11 @@ mod tests {
                     let r = simulate(target, dev, *drift, 20.0, 0x9e37 + i as u64);
                     line += &format!(
                         " {:+.1}%: starved={:4} drops={} mean={:4.0}ms max={:4.0}ms |",
-                        drift * 100.0, r.starved, r.drops, r.mean_fill_ms, r.max_fill_ms
+                        drift * 100.0,
+                        r.starved,
+                        r.drops,
+                        r.mean_fill_ms,
+                        r.max_fill_ms
                     );
                 }
                 println!("{line}");

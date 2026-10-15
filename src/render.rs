@@ -11,9 +11,7 @@ use crate::config::RenderProfile;
 use crate::font::Font;
 use crate::input;
 use crate::netplay;
-use crate::retro::{
-    self, RETRO_PIXEL_FORMAT_RGB565, RETRO_PIXEL_FORMAT_XRGB8888,
-};
+use crate::retro::{self, RETRO_PIXEL_FORMAT_RGB565, RETRO_PIXEL_FORMAT_XRGB8888};
 use crate::version;
 
 use sdl2::audio::{AudioQueue, AudioSpecDesired};
@@ -464,27 +462,29 @@ pub fn draw_emu_frame<'a>(
     // then do all SDL drawing outside it. Never hold the lock across canvas
     // work — nothing here re-enters the core, but keeping the critical
     // section to "read the buffer" is both faster and future-proof.
-    let uploaded = retro::with_frame(|frame| -> Result<Option<(u32, u32)>, Box<dyn std::error::Error>> {
-        if frame.width == 0 || frame.height == 0 || frame.buf.is_empty() {
-            return Ok(None);
-        }
-        let sdl_format = match frame.pixel_format {
-            RETRO_PIXEL_FORMAT_XRGB8888 => PixelFormatEnum::ARGB8888,
-            RETRO_PIXEL_FORMAT_RGB565 => PixelFormatEnum::RGB565,
-            _ => PixelFormatEnum::ARGB1555,
-        };
-        let q = texture.query();
-        if q.width != frame.width || q.height != frame.height || q.format != sdl_format {
-            *texture = tc.create_texture_streaming(sdl_format, frame.width, frame.height)?;
-        }
-        let size = (frame.height as usize) * frame.pitch;
-        if frame.buf.len() >= size {
-            texture.update(None, &frame.buf[..size], frame.pitch)?;
-            Ok(Some((frame.width, frame.height)))
-        } else {
-            Ok(None)
-        }
-    })?;
+    let uploaded = retro::with_frame(
+        |frame| -> Result<Option<(u32, u32)>, Box<dyn std::error::Error>> {
+            if frame.width == 0 || frame.height == 0 || frame.buf.is_empty() {
+                return Ok(None);
+            }
+            let sdl_format = match frame.pixel_format {
+                RETRO_PIXEL_FORMAT_XRGB8888 => PixelFormatEnum::ARGB8888,
+                RETRO_PIXEL_FORMAT_RGB565 => PixelFormatEnum::RGB565,
+                _ => PixelFormatEnum::ARGB1555,
+            };
+            let q = texture.query();
+            if q.width != frame.width || q.height != frame.height || q.format != sdl_format {
+                *texture = tc.create_texture_streaming(sdl_format, frame.width, frame.height)?;
+            }
+            let size = (frame.height as usize) * frame.pitch;
+            if frame.buf.len() >= size {
+                texture.update(None, &frame.buf[..size], frame.pitch)?;
+                Ok(Some((frame.width, frame.height)))
+            } else {
+                Ok(None)
+            }
+        },
+    )?;
     let Some((frame_w, frame_h)) = uploaded else {
         return Ok(());
     };
@@ -1928,7 +1928,16 @@ fn draw_scoreplate(
     let main_w = w - tab_w - gap;
     let tab_x = if mirror { x + w - tab_w } else { x };
 
-    draw_slanted_rect(canvas, main_x, y + px(3), main_w, h - px(3), slant, mirror, accent)?;
+    draw_slanted_rect(
+        canvas,
+        main_x,
+        y + px(3),
+        main_w,
+        h - px(3),
+        slant,
+        mirror,
+        accent,
+    )?;
     draw_slanted_rect(
         canvas,
         main_x + if mirror { px(2) } else { px(4) },
@@ -1939,7 +1948,16 @@ fn draw_scoreplate(
         mirror,
         fill,
     )?;
-    draw_slanted_rect(canvas, tab_x, y + px(3), tab_w, h - px(3), slant, mirror, accent)?;
+    draw_slanted_rect(
+        canvas,
+        tab_x,
+        y + px(3),
+        tab_w,
+        h - px(3),
+        slant,
+        mirror,
+        accent,
+    )?;
     draw_slanted_rect(
         canvas,
         tab_x + if mirror { px(4) } else { px(2) },
@@ -2143,10 +2161,24 @@ pub fn draw_takeover_overlay(
         let _ = canvas.fill_rect(Rect::new(0, 0, w as u32, h as u32));
         let label = format!("TAKING OVER {side}");
         let lw = font.text_width_exact(&label, mid);
-        font.draw(canvas, &label, (w - lw) / 2, h / 2 - 60, mid, Color::RGB(255, 210, 90))?;
+        font.draw(
+            canvas,
+            &label,
+            (w - lw) / 2,
+            h / 2 - 60,
+            mid,
+            Color::RGB(255, 210, 90),
+        )?;
         let num = n.to_string();
         let nw = font.text_width_exact(&num, big);
-        font.draw(canvas, &num, (w - nw) / 2, h / 2 - 10, big, Color::RGB(255, 255, 255))?;
+        font.draw(
+            canvas,
+            &num,
+            (w - nw) / 2,
+            h / 2 - 10,
+            big,
+            Color::RGB(255, 255, 255),
+        )?;
         return Ok(());
     }
 
@@ -2155,10 +2187,24 @@ pub fn draw_takeover_overlay(
         let _ = canvas.fill_rect(Rect::new(0, 0, w as u32, h as u32));
         let msg = "TIME!";
         let mw = font.text_width_exact(msg, big);
-        font.draw(canvas, msg, (w - mw) / 2, h / 2 - 30, big, Color::RGB(255, 230, 120))?;
+        font.draw(
+            canvas,
+            msg,
+            (w - mw) / 2,
+            h / 2 - 30,
+            big,
+            Color::RGB(255, 230, 120),
+        )?;
         let hint = "R Retry     ESC Back to replay";
         let hw = font.text_width_exact(hint, small);
-        font.draw(canvas, hint, (w - hw) / 2, h / 2 + 30, small, Color::RGB(220, 225, 240))?;
+        font.draw(
+            canvas,
+            hint,
+            (w - hw) / 2,
+            h / 2 + 30,
+            small,
+            Color::RGB(220, 225, 240),
+        )?;
         return Ok(());
     }
 
@@ -2168,10 +2214,22 @@ pub fn draw_takeover_overlay(
     let bw = font.text_width_exact(&banner, mid);
     let bx = (w - bw) / 2;
     canvas.set_draw_color(Color::RGBA(10, 12, 20, 200));
-    let _ = canvas.fill_rect(Rect::new(bx - 12, 8, (bw + 24) as u32, (20 * mid as i32 + 8) as u32));
+    let _ = canvas.fill_rect(Rect::new(
+        bx - 12,
+        8,
+        (bw + 24) as u32,
+        (20 * mid as i32 + 8) as u32,
+    ));
     font.draw(canvas, &banner, bx, 12, mid, Color::RGB(255, 210, 90))?;
     let hint = "R Retry     ESC Back to replay";
     let hw = font.text_width_exact(hint, small);
-    font.draw(canvas, hint, (w - hw) / 2, h - 30, small, Color::RGB(190, 196, 216))?;
+    font.draw(
+        canvas,
+        hint,
+        (w - hw) / 2,
+        h - 30,
+        small,
+        Color::RGB(190, 196, 216),
+    )?;
     Ok(())
 }

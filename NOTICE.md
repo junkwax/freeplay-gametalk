@@ -28,3 +28,9 @@ not distributed with this project.
 https://www.mortalkombatwarehouse.com/site/fonts/mortalkombat2.ttf
 
 Other local test fonts are ignored by git.
+
+## Controller mappings
+
+`assets/gamecontrollerdb.txt` is the community SDL_GameControllerDB
+(https://github.com/mdqinc/SDL_GameControllerDB, commit `c1d5289`), under the
+zlib license in `assets/gamecontrollerdb.LICENSE.txt`.

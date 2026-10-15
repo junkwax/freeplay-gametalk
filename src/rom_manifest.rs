@@ -75,7 +75,11 @@ static STATE: Mutex<State> = Mutex::new(State {
 /// The loaded ROM's build stamp, e.g. "REV 4.0 - PLAYTEST (A71B5*)". None
 /// for a ROM without a manifest. No I/O: whatever the last `refresh()` read.
 pub fn build_stamp() -> Option<String> {
-    STATE.lock().unwrap_or_else(|e| e.into_inner()).stamp.clone()
+    STATE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .stamp
+        .clone()
 }
 
 /// The loaded set is MK2 built for the Wolf unit. No I/O.
@@ -137,7 +141,10 @@ pub fn refresh() -> (Source, bool) {
     };
     println!("[addr] {line}");
     if let Some(st) = &stamp {
-        println!("[addr] ROM build: {st}{}", if wolf { " (Wolf unit)" } else { "" });
+        println!(
+            "[addr] ROM build: {st}{}",
+            if wolf { " (Wolf unit)" } else { "" }
+        );
     }
     state.key = key;
     state.source = source.clone();
@@ -165,7 +172,11 @@ fn select(zip: &[u8]) -> (Addrs, Source, Option<String>) {
     if found.eq_ignore_ascii_case(expected) {
         (mk2_addrs::COMPILED, Source::CompiledByHash, None)
     } else {
-        (mk2_addrs::COMPILED, Source::CompiledMismatch { found }, None)
+        (
+            mk2_addrs::COMPILED,
+            Source::CompiledMismatch { found },
+            None,
+        )
     }
 }
 
@@ -181,7 +192,13 @@ fn rom_string(rom: &[u8], m: &HashMap<u32, u32>, name: &str) -> Option<String> {
         return None;
     }
     let at = (bit / 8) as usize;
-    let bytes: Vec<u8> = rom.get(at..)?.iter().take(64).take_while(|b| **b != 0).copied().collect();
+    let bytes: Vec<u8> = rom
+        .get(at..)?
+        .iter()
+        .take(64)
+        .take_while(|b| **b != 0)
+        .copied()
+        .collect();
     let s = String::from_utf8(bytes).ok()?;
     (!s.is_empty() && s.chars().all(|c| c.is_ascii_graphic() || c == ' ')).then_some(s)
 }
@@ -234,15 +251,17 @@ fn parse_manifest(rom: &[u8]) -> Option<HashMap<u32, u32>> {
     let at = (0..rom.len().saturating_sub(magic.len()))
         .step_by(2)
         .find(|&i| rom[i..i + magic.len()] == magic[..])?;
-    let word = |i: usize| -> Option<u16> {
-        Some(u16::from_le_bytes([*rom.get(i)?, *rom.get(i + 1)?]))
-    };
-    let long = |i: usize| -> Option<u32> {
-        Some(u32::from(word(i)?) | (u32::from(word(i + 2)?) << 16))
-    };
+    let word =
+        |i: usize| -> Option<u16> { Some(u16::from_le_bytes([*rom.get(i)?, *rom.get(i + 1)?])) };
+    let long =
+        |i: usize| -> Option<u32> { Some(u32::from(word(i)?) | (u32::from(word(i + 2)?) << 16)) };
     let mut p = at + magic.len();
     if word(p)? != mk2_addrs::MANIFEST_VERSION {
-        println!("[addr] ROM manifest is layout {}, client reads {}", word(p)?, mk2_addrs::MANIFEST_VERSION);
+        println!(
+            "[addr] ROM manifest is layout {}, client reads {}",
+            word(p)?,
+            mk2_addrs::MANIFEST_VERSION
+        );
         return None;
     }
     let count = usize::from(word(p + 2)?);
@@ -258,7 +277,10 @@ fn parse_manifest(rom: &[u8]) -> Option<HashMap<u32, u32>> {
 /// Stored and deflated entries only - all a ROM zip ever uses.
 fn zip_entry(zip: &[u8], want: impl Fn(&str) -> bool) -> Option<Vec<u8>> {
     let u16_at = |i: usize| -> Option<usize> {
-        Some(usize::from(u16::from_le_bytes([*zip.get(i)?, *zip.get(i + 1)?])))
+        Some(usize::from(u16::from_le_bytes([
+            *zip.get(i)?,
+            *zip.get(i + 1)?,
+        ])))
     };
     let u32_at = |i: usize| -> Option<usize> {
         let b = zip.get(i..i + 4)?;
@@ -295,7 +317,9 @@ fn zip_entry(zip: &[u8], want: impl Fn(&str) -> bool) -> Option<Vec<u8>> {
             0 => Some(raw.to_vec()),
             8 => {
                 let mut out = Vec::with_capacity(usize_);
-                flate2::read::DeflateDecoder::new(raw).read_to_end(&mut out).ok()?;
+                flate2::read::DeflateDecoder::new(raw)
+                    .read_to_end(&mut out)
+                    .ok()?;
                 Some(out)
             }
             _ => None,

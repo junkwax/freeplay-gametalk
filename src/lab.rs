@@ -127,7 +127,10 @@ pub enum LabPhase {
     /// select screen or a live fight.
     PreFight,
     /// Character select. Each flag = that side has locked a character in.
-    Select { p1_picked: bool, p2_picked: bool },
+    Select {
+        p1_picked: bool,
+        p2_picked: bool,
+    },
     Fight,
 }
 
@@ -706,7 +709,7 @@ fn steer_mask() -> u16 {
 }
 
 fn set_action(bits: &mut u16, action: Action) {
-    if let Some(index) = Action::ALL
+    if let Some(index) = Action::MK2
         .iter()
         .position(|candidate| *candidate == action)
     {
@@ -722,7 +725,7 @@ fn is_attack(bits: u16) -> bool {
 }
 
 fn has_action(bits: u16, action: Action) -> bool {
-    Action::ALL
+    Action::MK2
         .iter()
         .position(|candidate| *candidate == action)
         .map(|index| bits & (1u16 << index) != 0)
@@ -734,7 +737,7 @@ mod tests {
     use super::*;
 
     fn has(bits: u16, action: Action) -> bool {
-        let index = Action::ALL
+        let index = Action::MK2
             .iter()
             .position(|candidate| *candidate == action)
             .unwrap();
@@ -974,7 +977,9 @@ mod tests {
         assert!(has(bits, Action::Left));
         assert!(has(bits, Action::LowPunch));
         // Start never mirrors (select-screen palette cheat).
-        let bits = dummy.next_bits(mirror, true, bit(Action::Start), 0).unwrap();
+        let bits = dummy
+            .next_bits(mirror, true, bit(Action::Start), 0)
+            .unwrap();
         assert!(!has(bits, Action::Start));
     }
 
@@ -985,7 +990,10 @@ mod tests {
             p1_picked: true,
             p2_picked: true,
         };
-        assert_eq!(dummy.next_bits(done, true, bit(Action::LowPunch), 0), Some(0));
+        assert_eq!(
+            dummy.next_bits(done, true, bit(Action::LowPunch), 0),
+            Some(0)
+        );
     }
 
     #[test]
@@ -1018,7 +1026,7 @@ mod tests {
         trainer.toggle();
         trainer.arm(161);
         let attack = 1u16
-            << Action::ALL
+            << Action::MK2
                 .iter()
                 .position(|candidate| *candidate == Action::HighPunch)
                 .unwrap();
