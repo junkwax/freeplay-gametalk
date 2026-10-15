@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.10.0 - 2026-10-15
+
+**0.10.0 does not match 0.9.x players.** The netcode library moved from GGRS
+0.10 to 0.13, whose network format is different, so matchmaking only pairs
+0.10.0 with 0.10.0. Update both sides.
+
+### Fixed
+
+- Online matches no longer end with "desync detected" when nothing desynced.
+  GGRS 0.10 could send a frame's sync checksum in the same step that queued a
+  rollback through that frame, so the checksum came from the mispredicted
+  state. The other side then reported a desync and the match was torn down.
+  It got likelier the higher the ping, and a lot of the uploaded desync
+  incidents were probably this. GGRS 0.11 fixed it upstream.
+- A session can no longer get stuck on "synchronizing" forever when the first
+  sync packets are lost (GGRS 0.12 gave sync retries their own timer).
+- The emulator core never loads saved NVRAM/CMOS from disk any more, so a
+  player's cabinet settings can never leak into an online match's start state.
+
+### Changed
+
+- Lower netplay and audio latency:
+  - Time-sync waits are spent one frame at a time, and only while your input
+    is idle, instead of as frozen ticks that could land mid-combo.
+  - Input delay is picked per match from the ping measured right after
+    connecting. AUTO is the new default; relay and direct-IP play keep the
+    manual value, and a delay you picked by hand is kept.
+  - Audio latency is down from about 360 ms to about 75 ms at the default
+    buffer setting.
+  - The process runs at high priority on Windows.
+- Online run-ahead (one extra predicted frame on screen) is on by default.
+- Rollback can now look up to 15 frames ahead (was 8), so a lag spike keeps
+  the game moving instead of freezing it.
+- The network overlay (F11) shows the send queue instead of KB/s.
+
+### Added
+
+- Both sides check that they start a match from the same machine state, and
+  the session log says whether they did.
+- `freeplay --net-probe`: a two-player netplay test on one machine. Two
+  hidden copies of the app play each other over a simulated connection
+  (`--latency`, `--jitter`, `--loss`) and every confirmed frame is compared.
+  It prints PASS or FAIL.
+- Groundwork for more games: NBA Jam and NBA Hangtime ROMs in `roms/` can be
+  picked with LB/RB on the new UI's main menu (the new UI is still off by
+  default). Each game keeps its own matchmaking pool and ratings.
+
 ## 0.9.1 - 2026-10-10
 
 No core or gameplay changes: 0.9.1 matches 0.9.0, 0.8.9 and 0.8.8 players.
