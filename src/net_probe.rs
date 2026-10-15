@@ -15,6 +15,7 @@
 //!                        [--sabotage TICK]   (negative control: must FAIL;
 //!                         poke mid-fight - fight start rewrites health)
 //!                        [--keep-going]      (don't stop at GGRS's first desync)
+//!                        [--race-start]      (no pre-start hello: sync-starvation check)
 //!
 //! spawns `--net-probe-peer 0|1` twice, waits, and compares the logs each peer
 //! writes (`net_probe_p1.txt` / `net_probe_p2.txt`: one `frame hash` line per
@@ -94,8 +95,10 @@ fn opts_args(o: &Opts) -> Vec<String> {
         o.delay.to_string(),
     ];
     v.push(if o.runahead { "--runahead" } else { "--no-runahead" }.into());
-    if std::env::args().any(|a| a == "--keep-going") {
-        v.push("--keep-going".into());
+    for flag in ["--keep-going", "--race-start"] {
+        if std::env::args().any(|a| a == flag) {
+            v.push(flag.into());
+        }
     }
     if let Some(t) = o.sabotage {
         v.push("--sabotage".into());
@@ -278,7 +281,13 @@ pub fn run_peer(handle: usize) -> Result<(), Box<dyn std::error::Error>> {
     // Synchronizing forever. The app's hole punch has the same effect as
     // this hello: both sockets are live before GGRS sends anything.
     let inner = UdpNonBlockingSocket::bind_to_port(PORTS[handle])?;
-    meet_peer(handle)?;
+    // `--race-start` skips the hello: whichever peer boots first sends its
+    // sync requests into a port nobody has bound yet. ggrs 0.10 could hang
+    // the first side in Synchronizing forever on that; 0.12+ retries sync
+    // on its own timer. Kept as a regression check for that.
+    if !args.iter().any(|a| a == "--race-start") {
+        meet_peer(handle)?;
+    }
     let socket = LagSocket {
         inner,
         queue: VecDeque::new(),
